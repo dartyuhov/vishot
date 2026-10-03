@@ -48,6 +48,8 @@ final class OverlayPanel: NSPanel {
     /// Points are in CoreGraphics global space.
     var onMouseMoved: ((CGPoint) -> Void)?
     var onMouseDown: ((CGPoint) -> Void)?
+    var onMouseDragged: ((CGPoint) -> Void)?
+    var onMouseUp: ((CGPoint) -> Void)?
 
     private let border = CALayer()
     private let labelBackground = CALayer()
@@ -60,8 +62,10 @@ final class OverlayPanel: NSPanel {
     private let hintLabels = CALayer()
     /// Hint outlines and labels, grown on first use and reused after.
     private var hintLayers: [(outline: CALayer, background: CALayer, text: CATextLayer)] = []
+    private let editor: EditorLayer
 
     init(screen: NSScreen) {
+        editor = EditorLayer(size: screen.frame.size, scale: screen.backingScaleFactor)
         super.init(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         setFrame(screen.frame, display: false)
         isOpaque = false
@@ -77,6 +81,8 @@ final class OverlayPanel: NSPanel {
         view.wantsLayer = true
         view.onMouseMoved = { [weak self] in self?.onMouseMoved?($0) }
         view.onMouseDown = { [weak self] in self?.onMouseDown?($0) }
+        view.onMouseDragged = { [weak self] in self?.onMouseDragged?($0) }
+        view.onMouseUp = { [weak self] in self?.onMouseUp?($0) }
         contentView = view
 
         border.borderWidth = Style.borderWidth
@@ -103,6 +109,7 @@ final class OverlayPanel: NSPanel {
         view.layer?.addSublayer(hintOutlines)
         view.layer?.addSublayer(hintLabels)
         view.layer?.addSublayer(hud)
+        view.layer?.addSublayer(editor.root)
     }
 
     override var canBecomeKey: Bool { true }
@@ -162,6 +169,33 @@ final class OverlayPanel: NSPanel {
         hudStatus.isHidden = status.isEmpty
         hudStatus.frame = CGRect(x: Style.hudPadding.width, y: Style.hudPadding.height, width: width, height: statusSize.height)
         hudStatus.string = status
+    }
+
+    /// Replaces the picker's border, hints and HUD with the editor. The toolbar shows on one screen.
+    func showEditor(_ scene: EditorScene, showsToolbar: Bool) {
+        border.isHidden = true
+        labelBackground.isHidden = true
+        hud.isHidden = true
+        showHints([], typed: 0)
+        editor.show(scene, panelFrame: frame, showsToolbar: showsToolbar)
+    }
+
+    func hideEditor() {
+        editor.hide()
+    }
+
+    /// `point` is in CoreGraphics global space.
+    func toolbarContains(_ point: CGPoint) -> Bool {
+        editor.toolbarContains(localPoint(point))
+    }
+
+    func toolbarItem(at point: CGPoint) -> ToolbarItem? {
+        editor.toolbarItem(at: localPoint(point))
+    }
+
+    private func localPoint(_ point: CGPoint) -> CGPoint {
+        let cocoa = point.flippedBetweenCocoaAndCG
+        return CGPoint(x: cocoa.x - frame.minX, y: cocoa.y - frame.minY)
     }
 
     /// Labels at the top-left corner of each mark. Containers also get an outline in their label's
@@ -233,10 +267,12 @@ final class OverlayPanel: NSPanel {
     }
 }
 
-/// Reports hover and clicks. `.activeAlways` keeps hover working on screens whose panel is not key.
+/// Reports hover, clicks and drags. `.activeAlways` keeps hover working on screens whose panel is not key.
 private final class OverlayView: NSView {
     var onMouseMoved: ((CGPoint) -> Void)?
     var onMouseDown: ((CGPoint) -> Void)?
+    var onMouseDragged: ((CGPoint) -> Void)?
+    var onMouseUp: ((CGPoint) -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -253,6 +289,14 @@ private final class OverlayView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         onMouseDown?(globalLocation(of: event))
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        onMouseDragged?(globalLocation(of: event))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        onMouseUp?(globalLocation(of: event))
     }
 
     private func globalLocation(of event: NSEvent) -> CGPoint {

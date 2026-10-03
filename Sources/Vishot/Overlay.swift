@@ -7,10 +7,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
         var keys: String {
             switch self {
-            case .window: "WINDOW   hjkl move · v elements · f hints · G screen · ↵ copy · esc cancel"
-            case .element: "ELEMENT  hjkl move · i in · o out · f hints · G screen · ↵ copy · esc back"
+            case .window: "WINDOW   hjkl move · v elements · f hints · G screen · ↵ copy · ⇧↵ edit · esc cancel"
+            case .element: "ELEMENT  hjkl move · i in · o out · f hints · G screen · ↵ copy · ⇧↵ edit · esc back"
             case .hint: "HINT     type a label · ⌫ undo · esc back"
-            case .screen: "SCREEN   hjkl move · ↵ copy · esc back"
+            case .screen: "SCREEN   hjkl move · ↵ copy · ⇧↵ edit · esc back"
             }
         }
     }
@@ -51,6 +51,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var typedHint = ""
     private var status = ""
     private var warmUpTimer: Timer?
+    /// Set while a capture for the editor runs, then the editor until it finishes.
+    private var isCapturing = false
+    private var editor: EditorController?
+    /// Increases on every hide, so a capture that finishes after the overlay closed is dropped.
+    private var session = 0
+    /// The save panel hides the overlay, which must not cancel the edit.
+    private var isPresentingSavePanel = false
+    /// The app that was active before the save panel activated Vishot.
+    private var appToReactivate: NSRunningApplication?
 
     override init() {
         super.init()
@@ -85,18 +94,97 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     private func hide() {
         isShowing = false
+        session += 1
+        isCapturing = false
+        editor = nil
         stopWarmUp()
         levels = []
         levelCache = [:]
         hints = []
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        panels.forEach { $0.hideEditor() }
+        CATransaction.commit()
         panels.forEach { $0.orderOut(nil) }
         elements.finish()
+        appToReactivate?.activate()
+        appToReactivate = nil
     }
 
     private func confirm() {
         let target = targets[selected]
         hide()
         capturer.capture(target)
+    }
+
+    // MARK: - Editor
+
+    /// Captures the selection with the overlay up, then edits it in place.
+    private func edit() {
+        guard !isCapturing else { return }
+        let target = targets[selected]
+        let session = session
+        isCapturing = true
+        stopWarmUp()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let capture = await capturer.image(for: target)
+            guard session == self.session else { return }
+            isCapturing = false
+            guard let capture else {
+                NSSound.beep()
+                status = "capture failed"
+                render()
+                return
+            }
+            startEditing(capture)
+        }
+    }
+
+    private func startEditing(_ capture: Capture) {
+        let editor = EditorController(capture: capture)
+        editor.onFinish = { [weak self] in self?.finishEditing($0, export: $1) }
+        self.editor = editor
+        status = ""
+        render()
+    }
+
+    private func finishEditing(_ finish: EditorController.Finish, export: (image: CGImage, scale: CGFloat)?) {
+        guard let (image, scale) = export else {
+            hide()
+            return
+        }
+        if finish == .saveAs {
+            saveAs(image, scale: scale)
+            return
+        }
+        hide()
+        if finish == .copy || finish == .saveAndCopy { capturer.copy(image, scale: scale) }
+        if finish == .save || finish == .saveAndCopy { capturer.save(image, scale: scale, to: Config.newSaveURL()) }
+    }
+
+    /// The save panel can't show above the overlay, so the overlay steps aside, and comes back with
+    /// the edit intact if the panel is cancelled.
+    private func saveAs(_ image: CGImage, scale: CGFloat) {
+        isPresentingSavePanel = true
+        panels.forEach { $0.orderOut(nil) }
+        if !NSApp.isActive { appToReactivate = NSWorkspace.shared.frontmostApplication }
+        NSApp.activate(ignoringOtherApps: true)
+        let savePanel = NSSavePanel()
+        savePanel.allowedContentTypes = [.png]
+        savePanel.directoryURL = Config.saveFolder()
+        savePanel.nameFieldStringValue = Config.fileName(for: Date())
+        let response = savePanel.runModal()
+        isPresentingSavePanel = false
+        if response == .OK, let url = savePanel.url {
+            // The hotkey may have closed the overlay meanwhile, but the save was still asked for.
+            if isShowing { hide() }
+            capturer.save(image, scale: scale, to: url)
+        } else if isShowing {
+            panels.forEach { $0.orderFrontRegardless() }
+            panels.first?.makeKey()
+            render()
+        }
     }
 
     // MARK: - Modes
@@ -354,11 +442,18 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func render() {
+        if let editor {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            editor.render(on: panels)
+            CATransaction.commit()
+            return
+        }
         let target = targets[selected]
         let rect = target.frame.flippedBetweenCocoaAndCG
         let anchor = target.anchor.flippedBetweenCocoaAndCG
         let hudPanel = panels.first { $0.frame.contains(anchor) } ?? panels.first
-        let statusLine = status.isEmpty && warmUpTimer != nil ? "loading page…" : status
+        let statusLine = isCapturing ? "capturing…" : status.isEmpty && warmUpTimer != nil ? "loading page…" : status
         // Containers are numbered among themselves, so nested ones (adjacent in the list) get different colors.
         var containers = 0
         let marks = hints.compactMap { hint -> HintMark? in
@@ -381,9 +476,18 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     /// Key codes, not characters, so the keys keep working with non-Latin keyboard layouts.
     private func handle(_ event: NSEvent) {
+        if let editor {
+            editor.handle(event)
+            if isShowing, self.editor != nil { render() }
+            return
+        }
         status = ""
         let keyCode = Int(event.keyCode)
         let shift = event.modifierFlags.contains(.shift)
+        if isCapturing {
+            if keyCode == kVK_Escape || keyCode == kVK_ANSI_Q { hide() }
+            return
+        }
         if mode == .hint {
             handleHint(keyCode)
             render()
@@ -396,8 +500,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
         case kVK_ANSI_L, kVK_RightArrow: move(.right)
         case kVK_Tab: cycle(by: shift ? -1 : 1)
         case kVK_Return, kVK_ANSI_KeypadEnter, kVK_Space:
-            confirm()
-            return
+            guard shift else {
+                confirm()
+                return
+            }
+            edit()
         case kVK_ANSI_V where mode == .window: enterElementMode()
         case kVK_ANSI_F where mode == .window || mode == .element: startHints()
         case kVK_ANSI_I where mode == .element: goIn()
@@ -414,7 +521,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func mouseMoved(to point: CGPoint) {
-        guard isShowing else { return }
+        guard isShowing, !isCapturing else { return }
+        if let editor {
+            // The cursor stays on the image while the pointer is over the toolbar.
+            guard !panels.contains(where: { $0.toolbarContains(point) }) else { return }
+            editor.mouseMoved(to: point)
+            render()
+            return
+        }
         let before = targets[selected]
         // Even a miss can re-root Element mode on another window, so compare what is drawn rather than indices.
         _ = select(at: point)
@@ -423,8 +537,30 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func mouseDown(at point: CGPoint) {
-        guard isShowing, select(at: point) else { return }
+        guard isShowing, !isCapturing else { return }
+        if let editor {
+            if let panel = panels.first(where: { $0.toolbarContains(point) }) {
+                if let item = panel.toolbarItem(at: point) { editor.select(item) }
+            } else {
+                editor.mouseDown(at: point)
+            }
+            if isShowing, self.editor != nil { render() }
+            return
+        }
+        guard select(at: point) else { return }
         confirm()
+    }
+
+    private func mouseDragged(to point: CGPoint) {
+        guard isShowing, let editor else { return }
+        editor.mouseDragged(to: point)
+        render()
+    }
+
+    private func mouseUp(at point: CGPoint) {
+        guard isShowing, let editor else { return }
+        editor.mouseUp(at: point)
+        if isShowing, self.editor != nil { render() }
     }
 
     @objc private func screensChanged() {
@@ -440,6 +576,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
             panel.onKeyDown = { [weak self] in self?.handle($0) }
             panel.onMouseMoved = { [weak self] in self?.mouseMoved(to: $0) }
             panel.onMouseDown = { [weak self] in self?.mouseDown(at: $0) }
+            panel.onMouseDragged = { [weak self] in self?.mouseDragged(to: $0) }
+            panel.onMouseUp = { [weak self] in self?.mouseUp(at: $0) }
             return panel
         }
     }
@@ -448,7 +586,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// panel moves key focus between our own panels, which is not a cancel.
     func windowDidResignKey(_ notification: Notification) {
         DispatchQueue.main.async { [self] in
-            if isShowing, !panels.contains(where: \.isKeyWindow) { hide() }
+            if isShowing, !isPresentingSavePanel, !panels.contains(where: \.isKeyWindow) { hide() }
         }
     }
 }

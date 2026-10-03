@@ -2,6 +2,14 @@ import AppKit
 import ScreenCaptureKit
 import UniformTypeIdentifiers
 
+/// A captured image and where its content was on screen, in CoreGraphics global space.
+struct Capture {
+    let image: CGImage
+    /// Pixels per point.
+    let scale: CGFloat
+    let frame: CGRect
+}
+
 final class Capturer {
     private var contentTask: Task<SCShareableContent, Error>?
     /// Must stay alive until the clipboard is taken over, so images can be encoded on paste.
@@ -13,43 +21,50 @@ final class Capturer {
         contentTask = Self.loadContent()
     }
 
+    /// Captures `target` and copies it. The ↵ path: runs after the overlay hides.
     func capture(_ target: CaptureTarget) {
-        let task = contentTask ?? Self.loadContent()
-        contentTask = nil
         Task { @MainActor in
-            do {
-                let content = try await task.value
-                switch target.kind {
-                case .window(let windowID), .element(let windowID, _):
-                    guard let window = content.windows.first(where: { $0.windowID == windowID }) else {
-                        NSSound.beep()
-                        return
-                    }
-                    var crop: (element: CGRect, window: CGRect)?
-                    // The window's frame now, in case it moved since the catalog was read.
-                    if case .element(_, let rect) = target.kind { crop = (rect, window.frame) }
-                    try await capture(filter: SCContentFilter(desktopIndependentWindow: window), crop: crop)
-
-                case .display(let displayID):
-                    guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
-                        NSSound.beep()
-                        return
-                    }
-                    let ownPID = ProcessInfo.processInfo.processIdentifier
-                    let own = content.applications.filter { $0.processID == ownPID }
-                    let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
-                    try await capture(filter: filter, crop: nil)
-                }
-            } catch {
-                NSLog("Vishot capture failed: \(error)")
+            guard let capture = await image(for: target) else {
                 NSSound.beep()
+                return
             }
+            copy(capture.image, scale: capture.scale)
         }
     }
 
-    /// `crop` is an element rect and the frame of the window being captured, both in points.
+    /// Captures `target`, or returns nil if it is gone or the capture fails. Vishot's own windows are
+    /// never in the image, so this can run with the overlay up.
     @MainActor
-    private func capture(filter: SCContentFilter, crop: (element: CGRect, window: CGRect)?) async throws {
+    func image(for target: CaptureTarget) async -> Capture? {
+        let task = contentTask ?? Self.loadContent()
+        contentTask = nil
+        do {
+            let content = try await task.value
+            switch target.kind {
+            case .window(let windowID), .element(let windowID, _):
+                guard let window = content.windows.first(where: { $0.windowID == windowID }) else { return nil }
+                var crop: (element: CGRect, window: CGRect)?
+                // The window's frame now, in case it moved since the catalog was read.
+                if case .element(_, let rect) = target.kind { crop = (rect, window.frame) }
+                return try await capture(filter: SCContentFilter(desktopIndependentWindow: window), frame: window.frame, crop: crop)
+
+            case .display(let displayID):
+                guard let display = content.displays.first(where: { $0.displayID == displayID }) else { return nil }
+                let ownPID = ProcessInfo.processInfo.processIdentifier
+                let own = content.applications.filter { $0.processID == ownPID }
+                let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
+                return try await capture(filter: filter, frame: display.frame, crop: nil)
+            }
+        } catch {
+            NSLog("Vishot capture failed: \(error)")
+            return nil
+        }
+    }
+
+    /// `frame` is where the captured content is, in CoreGraphics global space. `crop` is an element rect
+    /// and the frame of the window being captured, both in points.
+    @MainActor
+    private func capture(filter: SCContentFilter, frame: CGRect, crop: (element: CGRect, window: CGRect)?) async throws -> Capture? {
         let scale = CGFloat(filter.pointPixelScale)
         let config = SCStreamConfiguration()
         config.width = Int(filter.contentRect.width * scale)
@@ -57,21 +72,23 @@ final class Capturer {
         config.captureResolution = .best
         config.showsCursor = false
         config.ignoreShadowsSingleWindow = true
-        var image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-        if let crop {
-            let size = CGSize(width: image.width, height: image.height)
-            guard let rect = Self.cropRect(for: crop.element, in: crop.window, scale: scale, imageSize: size),
-                  let cropped = image.cropping(to: rect)
-            else {
-                NSSound.beep()
-                return
-            }
-            image = cropped
-        }
-        copyToPasteboard(image, scale: scale)
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        guard let crop else { return Capture(image: image, scale: scale, frame: frame) }
+        let size = CGSize(width: image.width, height: image.height)
+        guard let rect = Self.cropRect(for: crop.element, in: crop.window, scale: scale, imageSize: size),
+              let cropped = image.cropping(to: rect)
+        else { return nil }
+        let croppedFrame = CGRect(
+            x: crop.window.minX + rect.minX / scale,
+            y: crop.window.minY + rect.minY / scale,
+            width: rect.width / scale,
+            height: rect.height / scale
+        )
+        return Capture(image: cropped, scale: scale, frame: croppedFrame)
     }
 
-    private func copyToPasteboard(_ image: CGImage, scale: CGFloat) {
+    /// Puts the image on the clipboard. Encoding waits until something pastes.
+    func copy(_ image: CGImage, scale: CGFloat) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         let provider = ImageProvider(image: image, scale: scale)
@@ -79,6 +96,24 @@ final class Capturer {
         item.setDataProvider(provider, forTypes: [.png, .tiff])
         pasteboard.writeObjects([item])
         self.provider = provider
+    }
+
+    /// Writes a PNG in the background. If that fails the image goes to the clipboard, so it isn't lost.
+    func save(_ image: CGImage, scale: CGFloat, to url: URL) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                guard let data = ImageEncoding.data(image, scale: scale, type: .png) else {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                try data.write(to: url, options: .atomic)
+            } catch {
+                NSLog("Vishot save to \(url.path) failed: \(error)")
+                DispatchQueue.main.async {
+                    NSSound.beep()
+                    self.copy(image, scale: scale)
+                }
+            }
+        }
     }
 
     /// Pixel rect of `element` inside a capture of the window at `windowFrame`. Both are in points,
@@ -112,14 +147,21 @@ private final class ImageProvider: NSObject, NSPasteboardItemDataProvider {
     }
 
     func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
-        let utType: UTType = type == .png ? .png : .tiff
+        guard let data = ImageEncoding.data(image, scale: scale, type: type == .png ? .png : .tiff) else { return }
+        item.setData(data, forType: type)
+    }
+}
+
+enum ImageEncoding {
+    /// Encodes `image`, tagged with its DPI so Retina captures open and paste at their on-screen size
+    /// instead of 2x.
+    static func data(_ image: CGImage, scale: CGFloat, type: UTType) -> Data? {
         let data = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(data, utType.identifier as CFString, 1, nil) else { return }
-        // Tag the DPI so Retina captures paste at their on-screen size instead of 2x.
+        guard let destination = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else { return nil }
         let dpi = 72 * scale
         let properties = [kCGImagePropertyDPIWidth: dpi, kCGImagePropertyDPIHeight: dpi] as CFDictionary
         CGImageDestinationAddImage(destination, image, properties)
-        guard CGImageDestinationFinalize(destination) else { return }
-        item.setData(data as Data, forType: type)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return data as Data
     }
 }
