@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 
 /// Geometry here is in image space: points from the image's top-left, y down. Screen positions are
 /// never stored, so the document is the same on every screen and in the export.
@@ -111,7 +112,7 @@ struct EditCursor {
         var distance: CGFloat {
             switch self {
             case .slow: 8
-            case .normal: 10.4
+            case .normal: 20
             case .fast: 64
             }
         }
@@ -135,7 +136,11 @@ struct EditCursor {
 
     mutating func move(_ direction: Direction, speed: Speed) {
         let v = direction.vector
-        move(to: CGPoint(x: position.x + v.dx * speed.distance, y: position.y + v.dy * speed.distance))
+        move(by: CGVector(dx: v.dx * speed.distance, dy: v.dy * speed.distance))
+    }
+
+    mutating func move(by offset: CGVector) {
+        move(to: CGPoint(x: position.x + offset.dx, y: position.y + offset.dy))
     }
 
     mutating func jump(_ jump: Jump) {
@@ -146,6 +151,36 @@ struct EditCursor {
         case .bottom: position.y = size.height
         case .center: position = CGPoint(x: size.width / 2, y: size.height / 2)
         }
+    }
+}
+
+/// Holding direction keys glides the cursor, and keys held together move it diagonally. macOS only
+/// repeats the last key pressed, so the editor tracks held keys and moves on a timer instead.
+enum CursorGlide {
+    /// A press shorter than this is a single step.
+    static let delay: TimeInterval = 0.15
+    /// The plain glide speeds up from 700 to 2400 pt/s over this long.
+    private static let rampDuration: TimeInterval = 0.7
+
+    /// Points per second after holding for `heldFor` seconds.
+    static func speed(_ speed: EditCursor.Speed, heldFor held: TimeInterval) -> CGFloat {
+        guard held >= delay else { return 0 }
+        switch speed {
+        case .slow: return 160
+        case .fast: return 3200
+        case .normal:
+            let progress = min((held - delay) / rampDuration, 1)
+            return 700 + 1700 * CGFloat(progress)
+        }
+    }
+
+    /// One unit per axis for the held directions. Opposite directions cancel.
+    static func vector(_ directions: [Direction]) -> CGVector {
+        let unique = Set(directions)
+        return CGVector(
+            dx: unique.reduce(0) { $0 + $1.vector.dx },
+            dy: unique.reduce(0) { $0 + $1.vector.dy }
+        )
     }
 }
 

@@ -2,7 +2,6 @@ import AppKit
 
 private enum Style {
     static let borderWidth: CGFloat = 4
-    static let cornerRadius: CGFloat = 12
     static let color = NSColor.controlAccentColor
     static let labelFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
     static let labelPadding = CGSize(width: 8, height: 4)
@@ -45,6 +44,7 @@ struct HintMark {
 /// overlay costs only an order-front plus a layer move.
 final class OverlayPanel: NSPanel {
     var onKeyDown: ((NSEvent) -> Void)?
+    var onKeyUp: ((NSEvent) -> Void)?
     /// Points are in CoreGraphics global space.
     var onMouseMoved: ((CGPoint) -> Void)?
     var onMouseDown: ((CGPoint) -> Void)?
@@ -87,7 +87,7 @@ final class OverlayPanel: NSPanel {
 
         border.borderWidth = Style.borderWidth
         border.borderColor = Style.color.cgColor
-        border.cornerRadius = Style.cornerRadius
+        border.cornerCurve = .continuous
 
         labelBackground.backgroundColor = Style.color.cgColor
         labelBackground.cornerRadius = 6
@@ -118,8 +118,13 @@ final class OverlayPanel: NSPanel {
         onKeyDown?(event)
     }
 
+    override func keyUp(with event: NSEvent) {
+        onKeyUp?(event)
+    }
+
     /// `rect` is in Cocoa global space. Parts outside this screen are clipped by the panel.
-    func highlight(_ rect: CGRect, label: String) {
+    /// `cornerRadius` is the target's own.
+    func highlight(_ rect: CGRect, label: String, cornerRadius: CGFloat) {
         let local = rect.offsetBy(dx: -frame.minX, dy: -frame.minY)
         let bounds = CGRect(origin: .zero, size: frame.size)
         let visible = local.intersects(bounds)
@@ -130,7 +135,10 @@ final class OverlayPanel: NSPanel {
         // A target that touches the screen edge (always true for displays) draws its border inside,
         // where it stays visible.
         let outset = local.insetBy(dx: -Style.borderWidth, dy: -Style.borderWidth)
-        border.frame = bounds.contains(local) && !bounds.contains(outset) ? local : outset
+        let isInset = bounds.contains(local) && !bounds.contains(outset)
+        border.frame = isInset ? local : outset
+        // Outside the target, the border's radius grows by its width so it runs parallel to the corner.
+        border.cornerRadius = isInset ? cornerRadius : cornerRadius + Style.borderWidth
 
         let textSize = (label as NSString).size(withAttributes: [.font: Style.labelFont])
         let maxWidth = max(0, local.width - 2 * Style.labelInset - 2 * Style.labelPadding.width)

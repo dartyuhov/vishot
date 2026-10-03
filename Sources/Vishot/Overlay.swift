@@ -144,6 +144,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func startEditing(_ capture: Capture) {
         let editor = EditorController(capture: capture)
         editor.onFinish = { [weak self] in self?.finishEditing($0, export: $1) }
+        editor.onChange = { [weak self] in self?.render() }
         self.editor = editor
         status = ""
         render()
@@ -465,7 +466,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for panel in panels {
-            panel.highlight(rect, label: target.label)
+            panel.highlight(rect, label: target.label, cornerRadius: target.cornerRadius)
             panel.showHints(marks, typed: typedHint.count)
             panel.showHUD(keys: mode.keys, status: statusLine, visible: panel === hudPanel)
         }
@@ -574,6 +575,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             let panel = OverlayPanel(screen: screen)
             panel.delegate = self
             panel.onKeyDown = { [weak self] in self?.handle($0) }
+            panel.onKeyUp = { [weak self] in self?.editor?.keyUp($0) }
             panel.onMouseMoved = { [weak self] in self?.mouseMoved(to: $0) }
             panel.onMouseDown = { [weak self] in self?.mouseDown(at: $0) }
             panel.onMouseDragged = { [weak self] in self?.mouseDragged(to: $0) }

@@ -27,7 +27,7 @@ Keyboard-first screenshots for macOS. Press a hotkey, pick a window, a UI elemen
 
 | Key | Action |
 |---|---|
-| `h` `j` `k` `l` / arrows | move the cursor 10.4 pt (`⇧` 64 pt, `⌥` 8 pt) |
+| `h` `j` `k` `l` / arrows | a tap moves the cursor 20 pt (`⇧` 64 pt, `⌥` 8 pt); holding glides and speeds up, and two keys held (`k` + `l`) move diagonally |
 | `0` / `$`, `g` / `G`, `M` | left / right edge, top / bottom edge, center |
 | `a` / `r` / `c` | start an arrow / rectangle / crop at the cursor; move, then `Return` or the same key to finish |
 | `t` | type a one-line label at the cursor; `Return` or `Esc` places it, `⌘Z` cancels |

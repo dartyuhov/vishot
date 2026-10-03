@@ -14,6 +14,16 @@ struct CaptureTarget {
     /// Point that navigation measures from.
     let anchor: CGPoint
     let label: String
+
+    /// The target's own corner radius, with a continuous curve, so the selection border follows it.
+    var cornerRadius: CGFloat {
+        switch kind {
+        // macOS 26 windows, measured from the transparent corners of window captures.
+        case .window: 16
+        case .element: 8
+        case .display: 12
+        }
+    }
 }
 
 enum DisplayCatalog {
