@@ -13,15 +13,18 @@ Keyboard-first screenshots for macOS. Press a hotkey, pick a window, a UI elemen
 | `Return` / `Space` | copy the window | copy the element | copy the display |
 | `v` | elements of the selected window | | |
 | `i` / `o` | | into the element / out to its parent | |
+| `f` | label elements (enters Element mode) | label elements | |
 | `G` (`⇧g`) | Screen mode | Screen mode | |
 | `Esc` | cancel | back to Window | back to Window |
 | `q` | cancel | cancel | cancel |
 
-`Esc Esc` always quits. The mouse works too: hover selects, click copies.
+`Esc Esc` always quits (one more `Esc` if hint labels are showing). The mouse works too: hover selects, click copies. In Element mode, hover selects the deepest element under the cursor; press `o` to widen to its parent.
+
+**Hints**: `f` puts a short label on every element up to three levels below the current one (messages, buttons, fields, panes). Type a label to select its element, then `↵` to copy it. `⌫` undoes a letter, `Esc` hides the labels.
 
 The picker starts on the focused app's window. Hidden windows (fully covered, or parked off-screen by AeroSpace) are skipped.
 
-Element mode needs the Accessibility permission. Vishot asks for it the first time you press `v`, never at launch. Wrapper groups with a single child are skipped automatically, so the main regions of a window (sidebar, toolbar, content) are usually one level down. In Chromium browsers and Electron apps, Vishot turns on their accessibility trees the first time you browse them; the HUD shows `loading page…` for up to 3 s while they build.
+Element mode needs the Accessibility permission. Vishot asks for it the first time you press `v`, never at launch. Wrapper groups are skipped automatically: an element that is alone in its level, or covers most of it, is replaced by its children. So the main regions of a window (sidebar, toolbar, content) are the first level, and one `i` reaches items such as individual messages. In Chromium browsers and Electron apps, Vishot turns on their accessibility trees the first time you browse them; the HUD shows `loading page…` for up to 3 s while they build.
 
 ## Build
 

@@ -14,6 +14,7 @@ final class AXNode: ElementNode {
 
     let element: AXUIElement
     let frame: CGRect?
+    let role: String?
     let subrole: String?
     let roleDescription: String
     /// Title, or description when there is no title. `AXValue` is never read: it can be a whole document.
@@ -31,9 +32,9 @@ final class AXNode: ElementNode {
         } else {
             frame = nil
         }
-        let role = values[kAXRoleAttribute] as? String ?? ""
+        role = values[kAXRoleAttribute] as? String
         subrole = values[kAXSubroleAttribute] as? String
-        roleDescription = (values[kAXRoleDescriptionAttribute] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? role
+        roleDescription = (values[kAXRoleDescriptionAttribute] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? role ?? ""
         let title = values[kAXTitleAttribute] as? String ?? ""
         self.title = title.isEmpty ? values[kAXDescriptionAttribute] as? String ?? "" : title
     }
@@ -155,7 +156,7 @@ final class ElementCatalog {
         nodes.map { target(for: $0, in: window) }
     }
 
-    private func target(for node: AXNode, in window: WindowInfo) -> CaptureTarget {
+    func target(for node: AXNode, in window: WindowInfo) -> CaptureTarget {
         let rect = (node.frame ?? window.frame).intersection(window.frame)
         return CaptureTarget(
             kind: .element(windowID: window.id, rect: rect),

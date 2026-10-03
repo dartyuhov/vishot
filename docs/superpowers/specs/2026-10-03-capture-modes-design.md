@@ -231,3 +231,24 @@ Errors beep and log, as today.
 - Setting the flag back to false removes the web tree immediately. Re-enabling costs ~2.1 s again.
 - Electron and Chromium expose many wrapper groups. Auto-descend skipped 2–4 levels per step in practice.
 - Auto-descend into a single leaf produced an empty level, which is the reason for the leaf rule above.
+
+## Revision: faster element navigation (2026-10-03, after first manual test)
+
+Reaching a single Slack message took `v` plus 3–4 `i` presses, and in Slack's channel view it was impossible:
+the message list (`AXList`, class `sr-only`) reports a 1×1 frame, so the size filter dropped it with every
+message inside. Changes, chosen in chat:
+
+- **Hoisting.** A tiny or frameless node with children passes its filtered children up into the level (up to 3
+  nested hoists) instead of being dropped.
+- **Empty groups.** Untitled, childless `AXGroup` nodes are dropped (e.g. Slack's 409×1089 empty banner group).
+- **Dominance.** Besides the single-child rule, a node covering ≥ 80% of the level's root is replaced in place by
+  its children. A lone child with the root's own frame is not a level (`i` on it reports `nothing inside`).
+  Slack's first level becomes: toolbars, tabs, message area, composer; `i` on the message area lists the messages.
+- **Hover goes deep.** In Element mode, hover selects the deepest element under the cursor and builds the whole
+  level stack, so `o` widens and `hjkl` moves among its siblings. Levels are cached per window for hover.
+- **Hint labels.** `f` (Window or Element mode) labels every element up to 3 levels below the current root,
+  skipping containers ≥ 40% of it, capped at 300. Labels are home-row-first letters, all the same length; typing a
+  full label selects that element. `⌫` undoes a letter, `Esc` leaves hint mode. Measured: Slack 96 labels in
+  17 ms, Helium (Gmail) 69 labels in 84 ms.
+
+The separate "lists open to their items" rule was dropped: hoisting plus dominance covered the tested apps.
