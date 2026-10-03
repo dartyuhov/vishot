@@ -18,8 +18,27 @@ private enum Style {
     static let panelBackground = NSColor(white: 0, alpha: 0.01)
 
     static let hintFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)
+    /// Leaves: yellow labels, no outline.
     static let hintBackground = NSColor(red: 1, green: 0.84, blue: 0.3, alpha: 1)
+    /// Containers: outline and label share one of these. No yellow, so it stays the mark of a leaf.
+    static let hintPalette = [
+        NSColor(red: 0.35, green: 0.85, blue: 1, alpha: 1),
+        NSColor(red: 1, green: 0.5, blue: 0.8, alpha: 1),
+        NSColor(red: 0.6, green: 0.95, blue: 0.4, alpha: 1),
+        NSColor(red: 1, green: 0.6, blue: 0.3, alpha: 1),
+        NSColor(red: 0.75, green: 0.6, blue: 1, alpha: 1),
+        NSColor(red: 0.4, green: 1, blue: 0.8, alpha: 1),
+        NSColor(red: 1, green: 0.55, blue: 0.55, alpha: 1),
+        NSColor(red: 0.55, green: 0.7, blue: 1, alpha: 1),
+    ]
     static let hintPadding = CGSize(width: 4, height: 1)
+}
+
+/// A hint label. `rect` is in Cocoa global space. Containers have a `colorIndex` and get an outline.
+struct HintMark {
+    let rect: CGRect
+    let label: String
+    let colorIndex: Int?
 }
 
 /// One transparent panel per screen. Panels are created once and reused, so showing the
@@ -36,8 +55,11 @@ final class OverlayPanel: NSPanel {
     private let hud = CALayer()
     private let hudKeys = CATextLayer()
     private let hudStatus = CATextLayer()
-    /// Hint labels, grown on first use and reused after.
-    private var hintLayers: [(background: CALayer, text: CATextLayer)] = []
+    /// All outlines sit below all labels, so no outline crosses a label.
+    private let hintOutlines = CALayer()
+    private let hintLabels = CALayer()
+    /// Hint outlines and labels, grown on first use and reused after.
+    private var hintLayers: [(outline: CALayer, background: CALayer, text: CATextLayer)] = []
 
     init(screen: NSScreen) {
         super.init(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -76,6 +98,10 @@ final class OverlayPanel: NSPanel {
 
         view.layer?.addSublayer(border)
         view.layer?.addSublayer(labelBackground)
+        hintOutlines.frame = view.bounds
+        hintLabels.frame = view.bounds
+        view.layer?.addSublayer(hintOutlines)
+        view.layer?.addSublayer(hintLabels)
         view.layer?.addSublayer(hud)
     }
 
@@ -138,46 +164,59 @@ final class OverlayPanel: NSPanel {
         hudStatus.string = status
     }
 
-    /// Labels at the top-left corner of each rect, which is in Cocoa global space. The first `typed`
-    /// letters of each label are dimmed.
-    func showHints(_ hints: [(rect: CGRect, label: String)], typed: Int) {
+    /// Labels at the top-left corner of each mark. Containers also get an outline in their label's
+    /// color, so a label can be matched to the area it stands for. The first `typed` letters of each
+    /// label are dimmed.
+    func showHints(_ marks: [HintMark], typed: Int) {
         let bounds = CGRect(origin: .zero, size: frame.size)
         var used = 0
-        for hint in hints {
-            let local = hint.rect.offsetBy(dx: -frame.minX, dy: -frame.minY)
+        for mark in marks {
+            let local = mark.rect.offsetBy(dx: -frame.minX, dy: -frame.minY)
             guard local.intersects(bounds) else { continue }
             if used == hintLayers.count { hintLayers.append(makeHintLayer()) }
-            let (background, text) = hintLayers[used]
+            let (outline, background, text) = hintLayers[used]
             used += 1
 
-            let size = textSize(hint.label, font: Style.hintFont)
+            let color = mark.colorIndex.map { Style.hintPalette[$0 % Style.hintPalette.count] } ?? Style.hintBackground
+            outline.isHidden = mark.colorIndex == nil
+            outline.frame = local.insetBy(dx: 1, dy: 1)
+            outline.borderColor = color.cgColor
+
+            let size = textSize(mark.label, font: Style.hintFont)
             let labelSize = CGSize(width: size.width + 2 * Style.hintPadding.width, height: size.height + 2 * Style.hintPadding.height)
             let origin = CGPoint(
                 x: min(max(local.minX, 0), bounds.width - labelSize.width),
                 y: min(max(local.maxY - labelSize.height, 0), bounds.height - labelSize.height)
             )
             background.frame = CGRect(origin: origin, size: labelSize)
-            text.frame = CGRect(x: Style.hintPadding.width, y: Style.hintPadding.height, width: size.width, height: size.height)
-            let string = NSMutableAttributedString(string: hint.label, attributes: [.font: Style.hintFont, .foregroundColor: NSColor.black])
-            string.addAttribute(.foregroundColor, value: NSColor(white: 0, alpha: 0.35), range: NSRange(location: 0, length: min(typed, hint.label.utf16.count)))
-            text.string = string
+            background.backgroundColor = color.cgColor
             background.isHidden = false
+            text.frame = CGRect(x: Style.hintPadding.width, y: Style.hintPadding.height, width: size.width, height: size.height)
+            let string = NSMutableAttributedString(string: mark.label, attributes: [.font: Style.hintFont, .foregroundColor: NSColor.black])
+            string.addAttribute(.foregroundColor, value: NSColor(white: 0, alpha: 0.35), range: NSRange(location: 0, length: min(typed, mark.label.utf16.count)))
+            text.string = string
         }
-        for unused in hintLayers[used...] { unused.background.isHidden = true }
+        for unused in hintLayers[used...] {
+            unused.outline.isHidden = true
+            unused.background.isHidden = true
+        }
     }
 
-    private func makeHintLayer() -> (background: CALayer, text: CATextLayer) {
+    private func makeHintLayer() -> (outline: CALayer, background: CALayer, text: CATextLayer) {
+        let outline = CALayer()
+        outline.borderWidth = 2
+        outline.cornerRadius = 4
+        hintOutlines.addSublayer(outline)
+
         let background = CALayer()
-        background.backgroundColor = Style.hintBackground.cgColor
         background.cornerRadius = 3
         background.borderColor = NSColor(white: 0, alpha: 0.4).cgColor
         background.borderWidth = 0.5
         let text = CATextLayer()
         text.contentsScale = backingScaleFactor
         background.addSublayer(text)
-        // Below the HUD, above the selection.
-        contentView?.layer?.insertSublayer(background, below: hud)
-        return (background, text)
+        hintLabels.addSublayer(background)
+        return (outline, background, text)
     }
 
     private func configure(_ layer: CATextLayer, font: NSFont, color: NSColor, scale: CGFloat) {

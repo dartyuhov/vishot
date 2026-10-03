@@ -252,3 +252,6 @@ message inside. Changes, chosen in chat:
   17 ms, Helium (Gmail) 69 labels in 84 ms.
 
 The separate "lists open to their items" rule was dropped: hoisting plus dominance covered the tested apps.
+- **Hint colors.** Labels alone didn't show what area they stood for. Containers (elements with children) get an
+  outline whose color matches their label, cycling through a palette without yellow; leaves keep plain yellow
+  labels. All outlines are drawn below all labels.

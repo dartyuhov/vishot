@@ -20,7 +20,7 @@ Keyboard-first screenshots for macOS. Press a hotkey, pick a window, a UI elemen
 
 `Esc Esc` always quits (one more `Esc` if hint labels are showing). The mouse works too: hover selects, click copies. In Element mode, hover selects the deepest element under the cursor; press `o` to widen to its parent.
 
-**Hints**: `f` puts a short label on every element up to three levels below the current one (messages, buttons, fields, panes). Type a label to select its element, then `↵` to copy it. `⌫` undoes a letter, `Esc` hides the labels.
+**Hints**: `f` puts a short label on every element up to three levels below the current one (messages, buttons, fields, panes). Elements that contain others get an outline in the same color as their label; single elements (buttons, text) have plain yellow labels. Type a label to select its element, then `↵` to copy it. `⌫` undoes a letter, `Esc` hides the labels.
 
 The picker starts on the focused app's window. Hidden windows (fully covered, or parked off-screen by AeroSpace) are skipped.
 

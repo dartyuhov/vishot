@@ -20,6 +20,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let label: String
         let path: [ElementLevel<AXNode>]
         let target: CaptureTarget
+        /// Containers are outlined, so it is clear which area a label stands for.
+        let isContainer: Bool
     }
 
     /// How many levels below the current one get hint labels.
@@ -229,7 +231,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         hints = zip(HintLabels.make(count: paths.count), paths).map { label, path in
             let level = path[path.count - 1]
-            return Hint(label: label, path: parents + path, target: elements.target(for: level.nodes[level.selected], in: window))
+            let node = level.nodes[level.selected]
+            return Hint(label: label, path: parents + path, target: elements.target(for: node, in: window), isContainer: node.hasChildren)
         }
         typedHint = ""
         mode = .hint
@@ -356,14 +359,19 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let anchor = target.anchor.flippedBetweenCocoaAndCG
         let hudPanel = panels.first { $0.frame.contains(anchor) } ?? panels.first
         let statusLine = status.isEmpty && warmUpTimer != nil ? "loading page…" : status
-        let shownHints = hints
-            .filter { $0.label.hasPrefix(typedHint) }
-            .map { (rect: $0.target.frame.flippedBetweenCocoaAndCG, label: $0.label) }
+        // Containers are numbered among themselves, so nested ones (adjacent in the list) get different colors.
+        var containers = 0
+        let marks = hints.compactMap { hint -> HintMark? in
+            let colorIndex = hint.isContainer ? containers : nil
+            if hint.isContainer { containers += 1 }
+            guard hint.label.hasPrefix(typedHint) else { return nil }
+            return HintMark(rect: hint.target.frame.flippedBetweenCocoaAndCG, label: hint.label, colorIndex: colorIndex)
+        }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for panel in panels {
             panel.highlight(rect, label: target.label)
-            panel.showHints(shownHints, typed: typedHint.count)
+            panel.showHints(marks, typed: typedHint.count)
             panel.showHUD(keys: mode.keys, status: statusLine, visible: panel === hudPanel)
         }
         CATransaction.commit()
