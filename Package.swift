@@ -8,6 +8,11 @@ let package = Package(
         .executableTarget(
             name: "Vishot",
             swiftSettings: [.swiftLanguageMode(.v5)]
-        )
+        ),
+        .testTarget(
+            name: "VishotTests",
+            dependencies: ["Vishot"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )

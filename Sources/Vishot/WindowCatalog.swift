@@ -13,6 +13,10 @@ struct WindowInfo {
     let anchor: CGPoint
 
     var label: String { title.isEmpty ? appName : "\(appName) — \(title)" }
+
+    var target: CaptureTarget {
+        CaptureTarget(kind: .window(id), frame: frame, anchor: anchor, label: label)
+    }
 }
 
 enum WindowCatalog {
@@ -103,5 +107,13 @@ extension CGRect {
     var flippedBetweenCocoaAndCG: CGRect {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         return CGRect(x: minX, y: primaryHeight - maxY, width: width, height: height)
+    }
+}
+
+extension CGPoint {
+    /// Same conversion as `CGRect.flippedBetweenCocoaAndCG`, for a point.
+    var flippedBetweenCocoaAndCG: CGPoint {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        return CGPoint(x: x, y: primaryHeight - y)
     }
 }
