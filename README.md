@@ -27,11 +27,11 @@ Keyboard-first screenshots for macOS. Press a hotkey, pick a window, a UI elemen
 
 | Key | Action |
 |---|---|
-| `h` `j` `k` `l` / arrows | move the cursor 8 pt (`⇧` 64 pt, `⌥` 1 pt) |
+| `h` `j` `k` `l` / arrows | move the cursor 10.4 pt (`⇧` 64 pt, `⌥` 8 pt) |
 | `0` / `$`, `g` / `G`, `M` | left / right edge, top / bottom edge, center |
 | `a` / `r` / `c` | start an arrow / rectangle / crop at the cursor; move, then `Return` or the same key to finish |
-| `t` | type a one-line label at the cursor; `Return` places it, `Esc` cancels |
-| `Tab` / `⇧Tab` | next / previous color (red, yellow, green, blue, white, black) |
+| `t` | type a one-line label at the cursor; `Return` or `Esc` places it, `⌘Z` cancels |
+| `1`…`6`, `Tab` / `⇧Tab` | pick a color (red, yellow, green, blue, white, black; the numbers are on the toolbar swatches), next / previous color |
 | `u` or `⌘Z` / `⌃R` or `⇧⌘Z` | undo / redo |
 | `y` | copy and close |
 | `s` / `S` | save / save and copy, then close |

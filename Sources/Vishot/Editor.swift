@@ -134,6 +134,7 @@ final class EditorController {
         case kVK_ANSI_T: startTyping(at: cursor.position)
         case kVK_Return, kVK_ANSI_KeypadEnter: finishAnchored()
         case kVK_Tab: color = color.cycled(by: shift ? -1 : 1)
+        case _ where Self.colorKeys.contains(keyCode): color = AnnotationColor.allCases[Self.colorKeys.firstIndex(of: keyCode)!]
         case kVK_ANSI_U: undo()
         case kVK_ANSI_Y: finish(.copy)
         case kVK_ANSI_S: finish(shift ? .saveAndCopy : .save)
@@ -143,7 +144,7 @@ final class EditorController {
     }
 
     private func step(_ direction: Direction, flags: NSEvent.ModifierFlags) {
-        let speed: EditCursor.Speed = flags.contains(.option) ? .fine : flags.contains(.shift) ? .fast : .normal
+        let speed: EditCursor.Speed = flags.contains(.option) ? .slow : flags.contains(.shift) ? .fast : .normal
         cursor.move(direction, speed: speed)
         NSCursor.setHiddenUntilMouseMoves(true)
     }
@@ -152,6 +153,9 @@ final class EditorController {
         cursor.jump(jump)
         NSCursor.setHiddenUntilMouseMoves(true)
     }
+
+    /// `1`…`6` pick the colors in toolbar order.
+    private static let colorKeys = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6]
 
     /// Anchors the tool at the cursor, or finishes it if it is already anchored.
     private func toolKey(_ newTool: Tool) {
@@ -174,8 +178,8 @@ final class EditorController {
             return
         }
         switch keyCode {
-        case kVK_Escape: action = .idle
-        case kVK_Return, kVK_ANSI_KeypadEnter: placeText()
+        // Esc keeps the label too; ⌘z or ⌫ drop it.
+        case kVK_Escape, kVK_Return, kVK_ANSI_KeypadEnter: placeText()
         case kVK_Delete: action = .typing(String(text.dropLast()), at: point)
         case kVK_Tab: color = color.cycled(by: flags.contains(.shift) ? -1 : 1)
         default:
@@ -434,13 +438,13 @@ final class EditorController {
         if !message.isEmpty { return message }
         switch action {
         case .idle:
-            return "\(color.name) · hjkl move (⇧ far, ⌥ fine) · 0 $ g G M jump · tab color"
+            return "\(color.name) · 1–6 or tab color · hjkl move (⇧ far, ⌥ slow) · 0 $ g G M jump"
         case .anchored:
             return "\(color.name) \(tool.name) · move, then ↵ or \(tool.key) to finish · esc cancel"
         case .dragging:
             return "\(color.name) \(tool.name) · release to finish · esc cancel"
         case .typing:
-            return "\(color.name) text · type a label · ↵ place · esc cancel"
+            return "\(color.name) text · type a label · ↵ or esc place · ⌘z cancel"
         }
     }
 }

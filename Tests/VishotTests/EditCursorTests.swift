@@ -8,16 +8,21 @@ final class EditCursorTests: XCTestCase {
         XCTAssertEqual(EditCursor(size: size).position, CGPoint(x: 100, y: 50))
     }
 
-    func testStepsAreOneEightAndSixtyFourPoints() {
+    func testStepsAreEightTenPointFourAndSixtyFourPoints() {
         var cursor = EditCursor(size: size)
         cursor.move(.right, speed: .normal)
-        XCTAssertEqual(cursor.position, CGPoint(x: 108, y: 50))
+        assertPosition(cursor, 110.4, 50)
         cursor.move(.left, speed: .fast)
-        XCTAssertEqual(cursor.position, CGPoint(x: 44, y: 50))
-        cursor.move(.down, speed: .fine)
-        XCTAssertEqual(cursor.position, CGPoint(x: 44, y: 51))
+        assertPosition(cursor, 46.4, 50)
+        cursor.move(.down, speed: .slow)
+        assertPosition(cursor, 46.4, 58)
         cursor.move(.up, speed: .normal)
-        XCTAssertEqual(cursor.position, CGPoint(x: 44, y: 43))
+        assertPosition(cursor, 46.4, 47.6)
+    }
+
+    private func assertPosition(_ cursor: EditCursor, _ x: CGFloat, _ y: CGFloat, line: UInt = #line) {
+        XCTAssertEqual(cursor.position.x, x, accuracy: 0.001, line: line)
+        XCTAssertEqual(cursor.position.y, y, accuracy: 0.001, line: line)
     }
 
     func testStepsStopAtTheImageEdges() {

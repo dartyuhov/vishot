@@ -21,6 +21,7 @@ private enum Style {
     static let lineGap: CGFloat = 6
     static let titleFont = NSFont.systemFont(ofSize: 12, weight: .medium)
     static let keyFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    static let swatchKeyFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .bold)
     static let statusFont = NSFont.systemFont(ofSize: 12)
 }
 
@@ -204,7 +205,7 @@ private final class EditorToolbar {
 
     private static let groups: [[(item: ToolbarItem, title: String, key: String)]] = [
         EditorController.Tool.allCases.map { (.tool($0), $0.name, $0.key) },
-        AnnotationColor.allCases.map { (.color($0), "", "") },
+        AnnotationColor.allCases.enumerated().map { (.color($1), "", "\($0 + 1)") },
         [(.undo, "undo", "u"), (.redo, "redo", "⌃r")],
         [
             (.finish(.copy), "copy", "y"),
@@ -226,7 +227,7 @@ private final class EditorToolbar {
             for (item, title, key) in group {
                 let button: CALayer
                 if case .color(let color) = item {
-                    button = Self.makeSwatch(color)
+                    button = Self.makeSwatch(color, key: key, scale: scale)
                 } else {
                     button = Self.makeButton(title: title, key: key, scale: scale)
                 }
@@ -234,6 +235,13 @@ private final class EditorToolbar {
                 root.addSublayer(button)
                 buttons.append((item, button))
                 x += button.frame.width + Style.buttonGap
+            }
+            // The swatches' numbers pick a color; tab cycles through them.
+            if case .color = group[0].item {
+                let hint = Self.makeText(" tab", font: Style.keyFont, color: NSColor(white: 1, alpha: 0.5), scale: scale)
+                hint.frame.origin = CGPoint(x: x - Style.buttonGap, y: buttonY + ((Style.buttonHeight - hint.frame.height) / 2).rounded())
+                root.addSublayer(hint)
+                x += hint.frame.width
             }
             x += Style.groupGap - Style.buttonGap
         }
@@ -270,7 +278,17 @@ private final class EditorToolbar {
         return button
     }
 
-    private static func makeSwatch(_ color: AnnotationColor) -> CALayer {
+    private static func makeText(_ string: String, font: NSFont, color: NSColor, scale: CGFloat) -> CATextLayer {
+        let attributed = NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color])
+        let size = attributed.size()
+        let text = CATextLayer()
+        text.string = attributed
+        text.contentsScale = scale
+        text.frame.size = CGSize(width: ceil(size.width), height: ceil(size.height))
+        return text
+    }
+
+    private static func makeSwatch(_ color: AnnotationColor, key: String, scale: CGFloat) -> CALayer {
         let dot = CALayer()
         dot.backgroundColor = color.cgColor
         dot.cornerRadius = Style.swatchSize / 2
@@ -283,6 +301,13 @@ private final class EditorToolbar {
         button.borderColor = NSColor.white.cgColor
         button.frame.size = CGSize(width: Style.buttonHeight, height: Style.buttonHeight)
         button.addSublayer(dot)
+        let isLight = [.yellow, .green, .white].contains(color)
+        let digit = makeText(key, font: Style.swatchKeyFont, color: isLight ? .black : .white, scale: scale)
+        digit.frame.origin = CGPoint(
+            x: ((Style.swatchSize - digit.frame.width) / 2).rounded(),
+            y: ((Style.swatchSize - digit.frame.height) / 2).rounded()
+        )
+        dot.addSublayer(digit)
         return button
     }
 

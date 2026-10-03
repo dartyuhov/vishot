@@ -106,12 +106,12 @@ struct EditHistory {
 /// crop can grow back.
 struct EditCursor {
     enum Speed {
-        case fine, normal, fast
+        case slow, normal, fast
 
         var distance: CGFloat {
             switch self {
-            case .fine: 1
-            case .normal: 8
+            case .slow: 8
+            case .normal: 10.4
             case .fast: 64
             }
         }
