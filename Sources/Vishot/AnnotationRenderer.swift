@@ -135,6 +135,17 @@ enum AnnotationRenderer {
             return image.cropping(to: cropRect)
         }
 
+        guard let context = imageSpaceContext(drawing: image, scale: document.scale) else { return nil }
+        draw(document.annotations, in: context)
+
+        guard let drawn = context.makeImage() else { return nil }
+        guard let cropRect else { return drawn }
+        return drawn.cropping(to: cropRect)
+    }
+
+    /// A bitmap the size of `image`, in its color space, with `image` drawn in and user space set to
+    /// image space (points from the top-left, y down), ready to draw over it.
+    static func imageSpaceContext(drawing image: CGImage, scale: CGFloat) -> CGContext? {
         let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
         let space = image.colorSpace.flatMap { $0.supportsOutput ? $0 : nil } ?? sRGB
         let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
@@ -143,14 +154,10 @@ enum AnnotationRenderer {
             space: space, bitmapInfo: bitmapInfo
         ) else { return nil }
         context.interpolationQuality = .none
-        context.draw(image, in: CGRect(origin: .zero, size: pixelSize))
-        context.translateBy(x: 0, y: pixelSize.height)
-        context.scaleBy(x: document.scale, y: -document.scale)
-        draw(document.annotations, in: context)
-
-        guard let drawn = context.makeImage() else { return nil }
-        guard let cropRect else { return drawn }
-        return drawn.cropping(to: cropRect)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        context.translateBy(x: 0, y: CGFloat(image.height))
+        context.scaleBy(x: scale, y: -scale)
+        return context
     }
 
     /// The pixels of `crop` (in points), with each edge rounded to the nearest pixel and clamped to

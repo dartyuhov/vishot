@@ -104,7 +104,8 @@ final class Capturer {
     func save(_ image: CGImage, scale: CGFloat, to url: URL) {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                guard let data = ImageEncoding.data(image, scale: scale, type: .png) else {
+                let marked = Watermark.apply(to: image, scale: scale)
+                guard let data = ImageEncoding.data(marked, scale: scale, type: .png) else {
                     throw CocoaError(.fileWriteUnknown)
                 }
                 try data.write(to: url, options: .atomic)
@@ -138,10 +139,12 @@ final class Capturer {
 }
 
 /// Encodes the image only when another app asks for it. Encoding a Retina screenshot to PNG or TIFF
-/// takes ~100 ms, so the copy itself returns immediately.
+/// takes ~100 ms, so the copy itself returns immediately. The watermark is drawn then too, once for
+/// both types.
 private final class ImageProvider: NSObject, NSPasteboardItemDataProvider {
     private let image: CGImage
     private let scale: CGFloat
+    private lazy var marked = Watermark.apply(to: image, scale: scale)
 
     init(image: CGImage, scale: CGFloat) {
         self.image = image
@@ -149,7 +152,7 @@ private final class ImageProvider: NSObject, NSPasteboardItemDataProvider {
     }
 
     func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
-        guard let data = ImageEncoding.data(image, scale: scale, type: type == .png ? .png : .tiff) else { return }
+        guard let data = ImageEncoding.data(marked, scale: scale, type: type == .png ? .png : .tiff) else { return }
         item.setData(data, forType: type)
     }
 }
