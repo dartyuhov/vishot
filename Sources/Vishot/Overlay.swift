@@ -28,6 +28,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var isShowing = false
     private let capturer = Capturer()
     private let elements = ElementCatalog()
+    private let raiser = WindowRaiser()
 
     private var mode = Mode.window
     private var windows: [WindowInfo] = []
@@ -55,6 +56,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     override init() {
         super.init()
+        raiser.onKey = { [weak self] in $0.type == .keyDown ? self?.handle($0) : self?.keyUp($0) }
+        raiser.onActivated = { [weak self] in
+            guard let self, isShowing else { return }
+            (panels.first(where: \.isKeyWindow) ?? panels.first)?.makeKey()
+        }
         rebuildPanels()
         NotificationCenter.default.addObserver(
             self, selector: #selector(screensChanged),
@@ -73,6 +79,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             return
         }
         capturer.prefetch()
+        raiser.begin(windows)
         let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         currentWindow = windows.firstIndex { $0.pid == frontPID } ?? 0
         status = ""
@@ -97,6 +104,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         CATransaction.commit()
         panels.forEach { $0.orderOut(nil) }
         elements.finish()
+        raiser.restore()
         appToReactivate?.activate()
         appToReactivate = nil
     }
@@ -330,10 +338,17 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func move(_ direction: Direction) {
         guard let next = Navigator.neighbor(of: selected, in: targets, toward: direction) else { return }
         selected = next
+        raiseSelectedWindow()
     }
 
     private func cycle(by step: Int) {
         selected = (selected + step + targets.count) % targets.count
+        raiseSelectedWindow()
+    }
+
+    /// Shows a covered window while it is browsed. Indices in Window mode are those of `windows`.
+    private func raiseSelectedWindow() {
+        if mode == .window { raiser.raise(index: selected) }
     }
 
     /// Selects what is under the cursor. Returns false over empty space, keeping the selection.
@@ -545,7 +560,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// panel moves key focus between our own panels, which is not a cancel.
     func windowDidResignKey(_ notification: Notification) {
         DispatchQueue.main.async { [self] in
-            if isShowing, !isPresentingSavePanel, !panels.contains(where: \.isKeyWindow) { hide() }
+            if isShowing, !isPresentingSavePanel, !raiser.isSwitchingApps, !panels.contains(where: \.isKeyWindow) { hide() }
         }
     }
 }

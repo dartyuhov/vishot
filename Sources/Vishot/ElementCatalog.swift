@@ -3,7 +3,7 @@ import ApplicationServices
 
 /// Private but long-stable: maps an Accessibility window to its CGWindowID.
 @_silgen_name("_AXUIElementGetWindow")
-private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
+func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
 
 /// An Accessibility element, with the attributes that filtering and labels need read in one call.
 final class AXNode: ElementNode {
