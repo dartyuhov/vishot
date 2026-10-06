@@ -3,8 +3,8 @@ import Carbon.HIToolbox
 import ServiceManagement
 
 enum Config {
-    /// ⇧⌘2 — next to the system ⇧⌘3/4/5 shortcuts and unused by macOS.
-    static let hotKeyCode = kVK_ANSI_2
+    /// ⇧⌘S. A global hotkey, so apps no longer get it (it is Save As in many).
+    static let hotKeyCode = kVK_ANSI_S
     static let hotKeyModifiers = cmdKey | shiftKey
 
     /// Where macOS saves screenshots (set in the Screenshot app's options), or the Desktop.
@@ -71,7 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Vishot")
 
         let menu = NSMenu()
-        let capture = NSMenuItem(title: "Capture Window", action: #selector(captureFromMenu), keyEquivalent: "2")
+        let capture = NSMenuItem(title: "Capture Window", action: #selector(captureFromMenu), keyEquivalent: "s")
         capture.keyEquivalentModifierMask = [.command, .shift]
         capture.target = self
         menu.addItem(capture)

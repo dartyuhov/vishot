@@ -4,7 +4,7 @@ Keyboard-first screenshots for macOS. Press a hotkey, pick a window, a UI elemen
 
 ## Usage
 
-`⇧⌘2` opens the picker in Window mode (press it again to cancel). A HUD at the bottom of the screen shows the current mode and its keys.
+`⇧⌘S` opens the picker in Window mode (press it again to cancel). A HUD at the bottom of the screen shows the current mode and its keys.
 
 | Key | Window (default) | Element | Screen |
 |---|---|---|---|
