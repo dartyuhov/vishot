@@ -2,14 +2,14 @@ import AppKit
 
 private enum Style {
     static let borderWidth: CGFloat = 4
-    static let color = NSColor.controlAccentColor
+    static let color = Palette.accent
     static let labelFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
     static let labelPadding = CGSize(width: 8, height: 4)
     static let labelInset: CGFloat = 10
 
     static let hudKeysFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
     static let hudStatusFont = NSFont.systemFont(ofSize: 12)
-    static let hudBackground = NSColor(white: 0.1, alpha: 0.85)
+    static let hudBackground = Palette.chrome
     static let hudPadding = CGSize(width: 14, height: 8)
     static let hudLineGap: CGFloat = 4
     static let hudBottomInset: CGFloat = 24
@@ -18,18 +18,9 @@ private enum Style {
 
     static let hintFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)
     /// Leaves: yellow labels, no outline.
-    static let hintBackground = NSColor(red: 1, green: 0.84, blue: 0.3, alpha: 1)
+    static let hintBackground = Palette.hintLeaf
     /// Containers: outline and label share one of these. No yellow, so it stays the mark of a leaf.
-    static let hintPalette = [
-        NSColor(red: 0.35, green: 0.85, blue: 1, alpha: 1),
-        NSColor(red: 1, green: 0.5, blue: 0.8, alpha: 1),
-        NSColor(red: 0.6, green: 0.95, blue: 0.4, alpha: 1),
-        NSColor(red: 1, green: 0.6, blue: 0.3, alpha: 1),
-        NSColor(red: 0.75, green: 0.6, blue: 1, alpha: 1),
-        NSColor(red: 0.4, green: 1, blue: 0.8, alpha: 1),
-        NSColor(red: 1, green: 0.55, blue: 0.55, alpha: 1),
-        NSColor(red: 0.55, green: 0.7, blue: 1, alpha: 1),
-    ]
+    static let hintPalette = Palette.hintContainers
     static let hintPadding = CGSize(width: 4, height: 1)
 }
 
@@ -62,6 +53,9 @@ final class OverlayPanel: NSPanel {
     private let hintLabels = CALayer()
     /// Hint outlines and labels, grown on first use and reused after.
     private var hintLayers: [(outline: CALayer, background: CALayer, text: CATextLayer)] = []
+    /// Region mode: the dimming around the region, and the cursor.
+    private let regionDim = SelectionStyle.makeDim()
+    private let crosshair = SelectionStyle.makeCrosshair()
     private let editor: EditorLayer
 
     init(screen: NSScreen) {
@@ -98,16 +92,22 @@ final class OverlayPanel: NSPanel {
         hud.cornerRadius = 10
         hud.isHidden = true
         configure(hudKeys, font: Style.hudKeysFont, color: .white, scale: screen.backingScaleFactor)
-        configure(hudStatus, font: Style.hudStatusFont, color: NSColor(white: 1, alpha: 0.7), scale: screen.backingScaleFactor)
+        configure(hudStatus, font: Style.hudStatusFont, color: Palette.textSecondary, scale: screen.backingScaleFactor)
         hud.addSublayer(hudKeys)
         hud.addSublayer(hudStatus)
 
+        regionDim.frame = view.bounds
+        regionDim.isHidden = true
+        crosshair.isHidden = true
+
+        view.layer?.addSublayer(regionDim)
         view.layer?.addSublayer(border)
         view.layer?.addSublayer(labelBackground)
         hintOutlines.frame = view.bounds
         hintLabels.frame = view.bounds
         view.layer?.addSublayer(hintOutlines)
         view.layer?.addSublayer(hintLabels)
+        view.layer?.addSublayer(crosshair)
         view.layer?.addSublayer(hud)
         view.layer?.addSublayer(editor.root)
     }
@@ -122,15 +122,15 @@ final class OverlayPanel: NSPanel {
         onKeyUp?(event)
     }
 
-    /// `rect` is in Cocoa global space. Parts outside this screen are clipped by the panel.
-    /// `cornerRadius` is the target's own.
-    func highlight(_ rect: CGRect, label: String, cornerRadius: CGFloat) {
-        let local = rect.offsetBy(dx: -frame.minX, dy: -frame.minY)
+    /// `rect` is in Cocoa global space. Parts outside this screen are clipped by the panel. Nil, as in
+    /// region mode before anything is drawn, hides the highlight. `cornerRadius` is the target's own.
+    func highlight(_ rect: CGRect?, label: String, cornerRadius: CGFloat) {
+        let local = rect?.offsetBy(dx: -frame.minX, dy: -frame.minY)
         let bounds = CGRect(origin: .zero, size: frame.size)
-        let visible = local.intersects(bounds)
+        let visible = local?.intersects(bounds) ?? false
         border.isHidden = !visible
         labelBackground.isHidden = !visible
-        guard visible else { return }
+        guard visible, let local else { return }
 
         // A target that touches the screen edge (always true for displays) draws its border inside,
         // where it stays visible.
@@ -179,12 +179,28 @@ final class OverlayPanel: NSPanel {
         hudStatus.string = status
     }
 
-    /// Replaces the picker's border, hints and HUD with the editor. The toolbar shows on one screen.
+    /// Region mode: dims everything around `rect` and shows the cursor, both in Cocoa global space.
+    /// Nil hides each.
+    func showRegion(_ rect: CGRect?, cursor: CGPoint?) {
+        regionDim.isHidden = rect == nil
+        if let rect {
+            let path = CGMutablePath()
+            path.addRect(regionDim.bounds)
+            path.addRect(rect.offsetBy(dx: -frame.minX, dy: -frame.minY))
+            regionDim.path = path
+        }
+        // Off this screen, the crosshair is simply outside the panel.
+        crosshair.isHidden = cursor == nil
+        if let cursor { crosshair.position = CGPoint(x: cursor.x - frame.minX, y: cursor.y - frame.minY) }
+    }
+
+    /// Replaces the picker's border, hints, region and HUD with the editor. The toolbar shows on one screen.
     func showEditor(_ scene: EditorScene, showsToolbar: Bool) {
         border.isHidden = true
         labelBackground.isHidden = true
         hud.isHidden = true
         showHints([], typed: 0)
+        showRegion(nil, cursor: nil)
         editor.show(scene, panelFrame: frame, showsToolbar: showsToolbar)
     }
 

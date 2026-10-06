@@ -7,6 +7,8 @@ struct CaptureTarget {
         /// `rect` is the element's frame clipped to its window.
         case element(windowID: CGWindowID, rect: CGRect)
         case display(CGDirectDisplayID)
+        /// `rect` is a region drawn on the display, inside its frame.
+        case region(displayID: CGDirectDisplayID, rect: CGRect)
     }
 
     let kind: Kind
@@ -22,6 +24,7 @@ struct CaptureTarget {
         case .window: 16
         case .element: 8
         case .display: 12
+        case .region: 0
         }
     }
 }

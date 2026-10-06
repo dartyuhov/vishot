@@ -186,49 +186,47 @@ final class ElementFilterTests: XCTestCase {
         ])
     }
 
-    private func pathNames(to point: CGPoint) -> [String] {
-        ElementFilter.path(to: point, below: page) { ElementFilter.level(below: $0, clippedTo: self.window) }
-            .map { $0.nodes[$0.selected].name }
+    private func hintNames(below root: FakeNode) -> [String] {
+        ElementFilter.hints(below: root, clippedTo: window).map(\.name)
     }
 
-    func testPathReachesTheDeepestElementUnderAPoint() {
-        XCTAssertEqual(pathNames(to: CGPoint(x: 500, y: 600)), ["main", "comments", "comment-2"])
+    func testHintsReachEveryDepthOutermostFirst() {
+        XCTAssertEqual(hintNames(below: page), ["toolbar", "sidebar", "main", "article", "comments", "comment-1", "comment-2"])
     }
 
-    func testPathStopsAtTheDeepestContainerWhenThePointIsInAGap() {
-        XCTAssertEqual(pathNames(to: CGPoint(x: 500, y: 570)), ["main", "comments"])
-    }
-
-    func testPathIsEmptyWhenNothingIsUnderThePoint() {
+    func testHintsSkipElementsTooSmallForAScreenshot() {
         let root = FakeNode("window", window, children: [
-            FakeNode("left", CGRect(x: 0, y: 0, width: 400, height: 800)),
-            FakeNode("right", CGRect(x: 600, y: 0, width: 400, height: 800)),
+            FakeNode("message", CGRect(x: 0, y: 0, width: 1000, height: 200), children: [
+                // 40×35: an icon button, under 1% of the window.
+                FakeNode("button", CGRect(x: 10, y: 10, width: 40, height: 35)),
+                // Wide, but shorter than 24 pt.
+                FakeNode("timestamp", CGRect(x: 60, y: 10, width: 900, height: 20)),
+                FakeNode("text", CGRect(x: 60, y: 40, width: 600, height: 100)),
+            ]),
+            // Too small, so nothing inside it is reached either.
+            FakeNode("badge", CGRect(x: 0, y: 300, width: 30, height: 30), children: [
+                FakeNode("inner", CGRect(x: 0, y: 300, width: 30, height: 30)),
+            ]),
+            FakeNode("footer", CGRect(x: 0, y: 700, width: 1000, height: 100)),
         ])
-        let path = ElementFilter.path(to: CGPoint(x: 500, y: 400), below: root) {
-            ElementFilter.level(below: $0, clippedTo: self.window)
-        }
-        XCTAssertTrue(path.isEmpty)
+        XCTAssertEqual(hintNames(below: root), ["message", "text", "footer"])
     }
 
-    private func hintNames(maxDepth: Int) -> [String] {
-        ElementFilter.hintPaths(below: page, maxDepth: maxDepth) { ElementFilter.level(below: $0, clippedTo: self.window) }
-            .map { path in path.last.map { $0.nodes[$0.selected].name } ?? "" }
-    }
-
-    func testHintsSkipContainersCoveringMuchOfTheRoot() {
-        // main is 75% and article 40% of the window: reachable with `v` and `o` instead.
-        XCTAssertEqual(hintNames(maxDepth: 3), ["toolbar", "sidebar", "comments", "comment-1", "comment-2"])
-    }
-
-    func testHintsStopAtMaxDepth() {
-        XCTAssertEqual(hintNames(maxDepth: 2), ["toolbar", "sidebar", "comments"])
-    }
-
-    func testHintPathsLeadToTheirElement() {
-        let paths = ElementFilter.hintPaths(below: page, maxDepth: 3) { ElementFilter.level(below: $0, clippedTo: self.window) }
-        let comment2 = paths.first { $0.last.map { $0.nodes[$0.selected].name } == "comment-2" }
-        XCTAssertEqual(comment2?.map { $0.nodes[$0.selected].name }, ["main", "comments", "comment-2"])
-        XCTAssertEqual(comment2?.map(\.root.name), ["window", "main", "comments"])
+    func testALeafNearlyFillingItsParentSharesItsLabel() {
+        // Containers that big are flattened by `level`; leaves stay, like Slack's message text.
+        let root = FakeNode("window", window, children: [
+            FakeNode("message", CGRect(x: 0, y: 0, width: 600, height: 200), children: [
+                // 90% of the message: the same screenshot.
+                FakeNode("text", CGRect(x: 0, y: 0, width: 600, height: 180)),
+                FakeNode("actions", CGRect(x: 0, y: 180, width: 600, height: 20)),
+            ]),
+            FakeNode("note", CGRect(x: 0, y: 300, width: 600, height: 200), children: [
+                // 80%: different enough to get its own label.
+                FakeNode("body", CGRect(x: 0, y: 300, width: 600, height: 160)),
+                FakeNode("links", CGRect(x: 0, y: 460, width: 600, height: 40)),
+            ]),
+        ])
+        XCTAssertEqual(hintNames(below: root), ["message", "note", "body", "links"])
     }
 
     func testALoneChildFillingTheRootIsNotALevel() {

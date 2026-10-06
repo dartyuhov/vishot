@@ -61,12 +61,12 @@ final class AXNode: ElementNode {
     }
 }
 
-/// Finds UI elements inside a window over Accessibility. Only used after `v`, never on the hotkey path.
+/// Finds UI elements inside a window over Accessibility. Only used after `f`, never on the hotkey path.
 final class ElementCatalog {
     /// Chrome drops its web tree as soon as `AXEnhancedUserInterface` goes back to false, and rebuilding it
     /// takes ~2 s every time. Leaving it on may slow down window-manager moves of that browser.
     static let restoresEnhancedUserInterface = false
-    /// How long an app may take to build its tree after a flag is set. Levels reload meanwhile.
+    /// How long an app may take to build its tree after a flag is set. Hint labels reload meanwhile.
     static let warmUpDuration: TimeInterval = 3
 
     private static let messagingTimeout: Float = 0.25
@@ -147,13 +147,9 @@ final class ElementCatalog {
         enhancedApps = [:]
     }
 
-    /// Selectable elements one level below `root`.
-    func level(below root: AXNode, in window: WindowInfo) -> [AXNode] {
-        ElementFilter.level(below: root, clippedTo: window.frame)
-    }
-
-    func targets(for nodes: [AXNode], in window: WindowInfo) -> [CaptureTarget] {
-        nodes.map { target(for: $0, in: window) }
+    /// The elements of a window that get hint labels.
+    func hints(below root: AXNode, in window: WindowInfo) -> [AXNode] {
+        ElementFilter.hints(below: root, clippedTo: window.frame)
     }
 
     func target(for node: AXNode, in window: WindowInfo) -> CaptureTarget {

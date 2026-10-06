@@ -73,7 +73,7 @@ final class EditorController {
 
     private var document: EditDocument
     private var history = EditHistory()
-    private var cursor: EditCursor
+    private let cursor: KeyboardCursor
     private var tool = Tool.arrow
     private var color = AnnotationColor.red
     /// The image's top-left, in CoreGraphics global space.
@@ -85,20 +85,12 @@ final class EditorController {
     private var pressedAt: CGPoint?
     /// Shown instead of the key help until the next input.
     private var message = ""
-    /// Direction keys held down, by key code, so h and ← count once.
-    private var heldKeys: [Int: Direction] = [:]
-    private var glideTimer: Timer?
-    private var glideStart: TimeInterval = 0
-    private var lastGlide: TimeInterval = 0
 
     init(capture: Capture) {
         document = EditDocument(image: capture.image, scale: capture.scale)
-        cursor = EditCursor(size: document.size)
+        cursor = KeyboardCursor(EditCursor(size: document.size))
         imageOrigin = capture.frame.origin
-    }
-
-    deinit {
-        glideTimer?.invalidate()
+        cursor.onChange = { [weak self] in self?.onChange?() }
     }
 
     // MARK: - Keys
@@ -130,19 +122,8 @@ final class EditorController {
             if keyCode == kVK_ANSI_R { redo() }
             return
         }
-        if let direction = Self.directionKeys[keyCode] {
-            // Holding is the glide's job, so repeats are ignored.
-            guard !event.isARepeat else { return }
-            heldKeys[keyCode] = direction
-            step(direction, flags: flags)
-            startGlide()
-            return
-        }
+        if cursor.handle(event) { return }
         switch keyCode {
-        case kVK_ANSI_0: jump(.left)
-        case kVK_ANSI_4 where shift: jump(.right)
-        case kVK_ANSI_G: jump(shift ? .bottom : .top)
-        case kVK_ANSI_M where shift: jump(.center)
         case kVK_ANSI_A: toolKey(.arrow)
         case kVK_ANSI_R: toolKey(.rect)
         case kVK_ANSI_C: toolKey(.crop)
@@ -158,64 +139,8 @@ final class EditorController {
         }
     }
 
-    private static let directionKeys: [Int: Direction] = [
-        kVK_ANSI_H: .left, kVK_LeftArrow: .left,
-        kVK_ANSI_J: .down, kVK_DownArrow: .down,
-        kVK_ANSI_K: .up, kVK_UpArrow: .up,
-        kVK_ANSI_L: .right, kVK_RightArrow: .right,
-    ]
-
     func keyUp(_ event: NSEvent) {
-        heldKeys[Int(event.keyCode)] = nil
-        if heldKeys.isEmpty { stopGlide() }
-    }
-
-    private static func speed(for flags: NSEvent.ModifierFlags) -> EditCursor.Speed {
-        flags.contains(.option) ? .slow : flags.contains(.shift) ? .fast : .normal
-    }
-
-    /// A press moves one step right away. Holding then glides.
-    private func step(_ direction: Direction, flags: NSEvent.ModifierFlags) {
-        cursor.move(direction, speed: Self.speed(for: flags))
-        NSCursor.setHiddenUntilMouseMoves(true)
-    }
-
-    private func startGlide() {
-        guard glideTimer == nil else { return }
-        glideStart = CACurrentMediaTime()
-        lastGlide = glideStart
-        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in self?.glide() }
-        RunLoop.main.add(timer, forMode: .common)
-        glideTimer = timer
-    }
-
-    private func glide() {
-        // A key-up can go missing when key focus moves, so ask which keys are still down.
-        heldKeys = heldKeys.filter { CGEventSource.keyState(.combinedSessionState, key: CGKeyCode($0.key)) }
-        guard !heldKeys.isEmpty else {
-            stopGlide()
-            return
-        }
-        let now = CACurrentMediaTime()
-        let elapsed = now - lastGlide
-        lastGlide = now
-        let speed = CursorGlide.speed(Self.speed(for: NSEvent.modifierFlags), heldFor: now - glideStart)
-        let vector = CursorGlide.vector(Array(heldKeys.values))
-        guard speed > 0, vector != CGVector.zero else { return }
-        cursor.move(by: CGVector(dx: vector.dx * speed * elapsed, dy: vector.dy * speed * elapsed))
-        NSCursor.setHiddenUntilMouseMoves(true)
-        onChange?()
-    }
-
-    private func stopGlide() {
-        glideTimer?.invalidate()
-        glideTimer = nil
-        heldKeys = [:]
-    }
-
-    private func jump(_ jump: EditCursor.Jump) {
-        cursor.jump(jump)
-        NSCursor.setHiddenUntilMouseMoves(true)
+        cursor.keyUp(event)
     }
 
     /// `1`…`6` pick the colors in toolbar order.
@@ -260,14 +185,21 @@ final class EditorController {
         }
     }
 
+    /// Like a label, a shape in progress is kept. Only ⌘z or u drop it.
     private func escape(confirmed: Bool) {
-        if action != .idle {
-            cancelAction()
-        } else if document.snapshot != EditSnapshot(annotations: [], crop: nil), !confirmed {
-            confirmsDiscard = true
-            message = "esc again to discard"
-        } else {
-            onFinish?(.discard, nil)
+        switch action {
+        case .anchored(let start), .dragging(let start):
+            pressedAt = nil
+            commit(from: start, to: cursor.position, beepsWhenEmpty: false)
+        case .typing:
+            placeText()
+        case .idle:
+            if document.snapshot != EditSnapshot(annotations: [], crop: nil), !confirmed {
+                confirmsDiscard = true
+                message = "esc again to discard"
+            } else {
+                onFinish?(.discard, nil)
+            }
         }
     }
 
@@ -382,7 +314,7 @@ final class EditorController {
 
     private func startTyping(at point: CGPoint) {
         cancelAction()
-        stopGlide()
+        cursor.stop()
         tool = .text
         action = .typing("", at: point)
     }

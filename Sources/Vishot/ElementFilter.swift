@@ -12,23 +12,20 @@ protocol ElementNode {
     func children() -> [Self]
 }
 
-/// One level of the element tree: the elements below `root`, and which one is selected.
-struct ElementLevel<Node> {
-    let root: Node
-    var nodes: [Node]
-    var selected = 0
-}
-
 enum ElementFilter {
     static let minSide: CGFloat = 8
-    /// Bounds the auto-descent, in case an app reports a cyclic or absurdly deep tree.
+    /// Bounds the auto-descent and the hint walk, in case an app reports a cyclic or absurdly deep tree.
     static let maxDescent = 30
     /// A child covering this share of its level's root is flattened into its children: selecting it
     /// separately would capture almost the same image as the root.
     static let dominantShare: CGFloat = 0.8
-    /// Containers this big relative to the hint root get no hint label.
-    static let bigShare: CGFloat = 0.4
-    /// Keeps hint labels readable, and the tree walk short.
+    /// Hinted elements are at least this tall and wide, and cover at least `minHintShare` of the window.
+    /// Smaller ones (icon buttons, emoji, timestamps, mentions) are rarely worth a screenshot alone.
+    static let minHintSide: CGFloat = 24
+    static let minHintShare: CGFloat = 0.01
+    /// An element covering this share of its hinted ancestor shares that ancestor's label.
+    static let duplicateShare: CGFloat = 0.85
+    /// Keeps the tree walk short.
     static let maxHints = 300
     /// How many nested tiny or frameless containers can pass their children up.
     private static let maxHoists = 3
@@ -66,41 +63,28 @@ enum ElementFilter {
         return nodes
     }
 
-    /// The levels from `root` down to the deepest element under `point`, each selecting the smallest
-    /// element that contains it. Empty when nothing below `root` is under the point.
-    /// `level` loads the elements below a node, so callers can cache it.
-    static func path<Node: ElementNode>(to point: CGPoint, below root: Node, level: (Node) -> [Node]) -> [ElementLevel<Node>] {
-        var path: [ElementLevel<Node>] = []
-        var parent = root
-        while path.count < maxDescent {
-            let nodes = level(parent)
-            let hits = nodes.indices.filter { nodes[$0].frame?.contains(point) == true }
-            guard let hit = hits.min(by: { area(nodes[$0].frame!) < area(nodes[$1].frame!) }) else { break }
-            path.append(ElementLevel(root: parent, nodes: nodes, selected: hit))
-            parent = nodes[hit]
-        }
-        return path
-    }
+    /// The elements that get hint labels, at any depth below `root`, each before the elements inside it.
+    /// The walk doesn't go below elements too small for a hint, since what is inside them is smaller still.
+    static func hints<Node: ElementNode>(below root: Node, clippedTo window: CGRect) -> [Node] {
+        let minArea = minHintShare * area(window)
+        var hints: [Node] = []
 
-    /// Paths to the elements that get hint labels: everything up to `maxDepth` levels below `root`,
-    /// except containers covering `bigShare` of it or more, which `v` and `o` already reach.
-    static func hintPaths<Node: ElementNode>(below root: Node, maxDepth: Int, level: (Node) -> [Node]) -> [[ElementLevel<Node>]] {
-        let rootArea = area(root.frame ?? .zero)
-        var paths: [[ElementLevel<Node>]] = []
-
-        func walk(_ parent: Node, prefix: [ElementLevel<Node>]) {
-            guard prefix.count < maxDepth, paths.count < maxHints else { return }
-            let nodes = level(parent)
-            for index in nodes.indices {
-                let path = prefix + [ElementLevel(root: parent, nodes: nodes, selected: index)]
-                if area(nodes[index].frame ?? .zero) < bigShare * rootArea {
-                    paths.append(path)
+        func walk(_ parent: Node, hintedArea: CGFloat, depth: Int) {
+            guard depth < maxDescent else { return }
+            for node in level(below: parent, clippedTo: window) {
+                guard hints.count < maxHints else { return }
+                let visible = (node.frame ?? .zero).intersection(window)
+                guard !visible.isNull, min(visible.width, visible.height) >= minHintSide, area(visible) >= minArea else {
+                    continue
                 }
-                walk(nodes[index], prefix: path)
+                let isDuplicate = area(visible) >= duplicateShare * hintedArea
+                if !isDuplicate { hints.append(node) }
+                walk(node, hintedArea: isDuplicate ? hintedArea : area(visible), depth: depth + 1)
             }
         }
-        walk(root, prefix: [])
-        return Array(paths.prefix(maxHints))
+        // The window itself is Window mode's target, so nothing filling it gets a label.
+        walk(root, hintedArea: area(window), depth: 0)
+        return hints
     }
 
     private static func area(_ rect: CGRect) -> CGFloat {

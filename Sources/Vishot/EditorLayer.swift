@@ -1,14 +1,11 @@
 import AppKit
 
 private enum Style {
-    static let outsideDim = NSColor(white: 0, alpha: 0.45)
     static let cropDim = NSColor(white: 0, alpha: 0.7)
     static let cropOutline = NSColor(white: 1, alpha: 0.6)
-    static let accent = NSColor.controlAccentColor
-    static let crosshairArm: CGFloat = 12
-    static let crosshairGap: CGFloat = 3
+    static let accent = Palette.accent
 
-    static let background = NSColor(white: 0.1, alpha: 0.85)
+    static let background = Palette.chrome
     static let padding: CGFloat = 8
     /// Between the image and the toolbar, and between the toolbar and the screen edge.
     static let margin: CGFloat = 12
@@ -31,10 +28,10 @@ final class EditorLayer: NSObject, CALayerDelegate {
     let root = CALayer()
     private let image = CALayer()
     private let annotations = CALayer()
-    private let cropDim = CAShapeLayer()
+    private let cropDim = SelectionStyle.makeDim(Style.cropDim)
     private let cropOutline = CALayer()
-    private let outsideDim = CAShapeLayer()
-    private let crosshair = CALayer()
+    private let outsideDim = SelectionStyle.makeDim()
+    private let crosshair = SelectionStyle.makeCrosshair()
     private let caret = CALayer()
     private let toolbar: EditorToolbar
 
@@ -53,22 +50,9 @@ final class EditorLayer: NSObject, CALayerDelegate {
         annotations.contentsScale = scale
         annotations.needsDisplayOnBoundsChange = true
 
-        for (dim, color) in [(cropDim, Style.cropDim), (outsideDim, Style.outsideDim)] {
-            dim.frame = root.bounds
-            dim.fillRule = .evenOdd
-            dim.fillColor = color.cgColor
-        }
+        cropDim.frame = root.bounds
+        outsideDim.frame = root.bounds
         cropOutline.borderWidth = 1
-
-        // White on a darker outline, so it shows on any content.
-        for (color, width) in [(NSColor(white: 0, alpha: 0.75), CGFloat(4)), (.white, 2)] {
-            let arms = CAShapeLayer()
-            arms.path = Self.crosshairPath()
-            arms.strokeColor = color.cgColor
-            arms.lineWidth = width
-            arms.lineCap = .round
-            crosshair.addSublayer(arms)
-        }
         caret.cornerRadius = 1
         caret.borderColor = NSColor(white: 1, alpha: 0.8).cgColor
         caret.borderWidth = 0.5
@@ -76,16 +60,6 @@ final class EditorLayer: NSObject, CALayerDelegate {
         for layer in [image, annotations, cropDim, cropOutline, outsideDim, crosshair, caret, toolbar.root] {
             root.addSublayer(layer)
         }
-    }
-
-    private static func crosshairPath() -> CGPath {
-        let path = CGMutablePath()
-        let (gap, end) = (Style.crosshairGap, Style.crosshairGap + Style.crosshairArm)
-        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] as [(CGFloat, CGFloat)] {
-            path.move(to: CGPoint(x: dx * gap, y: dy * gap))
-            path.addLine(to: CGPoint(x: dx * end, y: dy * end))
-        }
-        return path
     }
 
     /// `panelFrame` is the panel's frame in Cocoa global space.
@@ -238,7 +212,7 @@ private final class EditorToolbar {
             }
             // The swatches' numbers pick a color; tab cycles through them.
             if case .color = group[0].item {
-                let hint = Self.makeText(" tab", font: Style.keyFont, color: NSColor(white: 1, alpha: 0.5), scale: scale)
+                let hint = Self.makeText(" tab", font: Style.keyFont, color: Palette.textTertiary, scale: scale)
                 hint.frame.origin = CGPoint(x: x - Style.buttonGap, y: buttonY + ((Style.buttonHeight - hint.frame.height) / 2).rounded())
                 root.addSublayer(hint)
                 x += hint.frame.width
@@ -250,7 +224,7 @@ private final class EditorToolbar {
 
         status.font = Style.statusFont
         status.fontSize = Style.statusFont.pointSize
-        status.foregroundColor = NSColor(white: 1, alpha: 0.7).cgColor
+        status.foregroundColor = Palette.textSecondary.cgColor
         status.contentsScale = scale
         status.truncationMode = .end
         status.frame = CGRect(x: Style.padding + 4, y: Style.padding, width: width - 2 * Style.padding - 8, height: statusHeight)
@@ -261,7 +235,7 @@ private final class EditorToolbar {
         let string = NSMutableAttributedString(string: title, attributes: [.font: Style.titleFont, .foregroundColor: NSColor.white])
         string.append(NSAttributedString(
             string: " " + key,
-            attributes: [.font: Style.keyFont, .foregroundColor: NSColor(white: 1, alpha: 0.5)]
+            attributes: [.font: Style.keyFont, .foregroundColor: Palette.textTertiary]
         ))
         let size = string.size()
         let text = CATextLayer()

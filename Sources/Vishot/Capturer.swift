@@ -43,17 +43,19 @@ final class Capturer {
             switch target.kind {
             case .window(let windowID), .element(let windowID, _):
                 guard let window = content.windows.first(where: { $0.windowID == windowID }) else { return nil }
-                var crop: (element: CGRect, window: CGRect)?
+                var crop: (rect: CGRect, content: CGRect)?
                 // The window's frame now, in case it moved since the catalog was read.
                 if case .element(_, let rect) = target.kind { crop = (rect, window.frame) }
                 return try await capture(filter: SCContentFilter(desktopIndependentWindow: window), frame: window.frame, crop: crop)
 
-            case .display(let displayID):
+            case .display(let displayID), .region(let displayID, _):
                 guard let display = content.displays.first(where: { $0.displayID == displayID }) else { return nil }
                 let ownPID = ProcessInfo.processInfo.processIdentifier
                 let own = content.applications.filter { $0.processID == ownPID }
                 let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
-                return try await capture(filter: filter, frame: display.frame, crop: nil)
+                var crop: (rect: CGRect, content: CGRect)?
+                if case .region(_, let rect) = target.kind { crop = (rect, display.frame) }
+                return try await capture(filter: filter, frame: display.frame, crop: crop)
             }
         } catch {
             NSLog("Vishot capture failed: \(error)")
@@ -61,10 +63,10 @@ final class Capturer {
         }
     }
 
-    /// `frame` is where the captured content is, in CoreGraphics global space. `crop` is an element rect
-    /// and the frame of the window being captured, both in points.
+    /// `frame` is where the captured content is, in CoreGraphics global space. `crop` is an element or
+    /// region rect and the frame of the window or display being captured, both in points.
     @MainActor
-    private func capture(filter: SCContentFilter, frame: CGRect, crop: (element: CGRect, window: CGRect)?) async throws -> Capture? {
+    private func capture(filter: SCContentFilter, frame: CGRect, crop: (rect: CGRect, content: CGRect)?) async throws -> Capture? {
         let scale = CGFloat(filter.pointPixelScale)
         let config = SCStreamConfiguration()
         config.width = Int(filter.contentRect.width * scale)
@@ -75,12 +77,12 @@ final class Capturer {
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         guard let crop else { return Capture(image: image, scale: scale, frame: frame) }
         let size = CGSize(width: image.width, height: image.height)
-        guard let rect = Self.cropRect(for: crop.element, in: crop.window, scale: scale, imageSize: size),
+        guard let rect = Self.cropRect(for: crop.rect, in: crop.content, scale: scale, imageSize: size),
               let cropped = image.cropping(to: rect)
         else { return nil }
         let croppedFrame = CGRect(
-            x: crop.window.minX + rect.minX / scale,
-            y: crop.window.minY + rect.minY / scale,
+            x: crop.content.minX + rect.minX / scale,
+            y: crop.content.minY + rect.minY / scale,
             width: rect.width / scale,
             height: rect.height / scale
         )
@@ -116,8 +118,8 @@ final class Capturer {
         }
     }
 
-    /// Pixel rect of `element` inside a capture of the window at `windowFrame`. Both are in points,
-    /// in CoreGraphics global space.
+    /// Pixel rect of `element` inside a capture of the window at `windowFrame`, or of a region inside a
+    /// capture of its display. Both are in points, in CoreGraphics global space.
     /// Returns nil when the element is entirely outside the image.
     static func cropRect(for element: CGRect, in windowFrame: CGRect, scale: CGFloat, imageSize: CGSize) -> CGRect? {
         let pixels = CGRect(

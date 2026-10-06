@@ -8,16 +8,16 @@ final class EditCursorTests: XCTestCase {
         XCTAssertEqual(EditCursor(size: size).position, CGPoint(x: 100, y: 50))
     }
 
-    func testTapStepsAreEightTwentyAndSixtyFourPoints() {
+    func testTapStepsAreSixFifteenAndFortyEightPoints() {
         var cursor = EditCursor(size: size)
         cursor.move(.right, speed: .normal)
-        assertPosition(cursor, 120, 50)
+        assertPosition(cursor, 115, 50)
         cursor.move(.left, speed: .fast)
-        assertPosition(cursor, 56, 50)
+        assertPosition(cursor, 67, 50)
         cursor.move(.down, speed: .slow)
-        assertPosition(cursor, 56, 58)
+        assertPosition(cursor, 67, 56)
         cursor.move(.up, speed: .normal)
-        assertPosition(cursor, 56, 38)
+        assertPosition(cursor, 67, 41)
     }
 
     func testMoveByAVectorIsClampedToTheImage() {
@@ -38,17 +38,17 @@ final class EditCursorTests: XCTestCase {
 
     func testGlideStartsAfterAShortHoldAndSpeedsUp() {
         XCTAssertEqual(CursorGlide.speed(.normal, heldFor: 0.1), 0)
-        XCTAssertEqual(CursorGlide.speed(.normal, heldFor: 0.15), 700, accuracy: 0.001)
-        XCTAssertEqual(CursorGlide.speed(.normal, heldFor: 0.5), 1550, accuracy: 0.001)
-        XCTAssertEqual(CursorGlide.speed(.normal, heldFor: 0.85), 2400, accuracy: 0.001)
-        XCTAssertEqual(CursorGlide.speed(.normal, heldFor: 5), 2400, accuracy: 0.001)
+        XCTAssertEqual(CursorGlide.speed(.normal, heldFor: 0.15), 525, accuracy: 0.001)
+        XCTAssertEqual(CursorGlide.speed(.normal, heldFor: 0.5), 1162.5, accuracy: 0.001)
+        XCTAssertEqual(CursorGlide.speed(.normal, heldFor: 0.85), 1800, accuracy: 0.001)
+        XCTAssertEqual(CursorGlide.speed(.normal, heldFor: 5), 1800, accuracy: 0.001)
     }
 
     func testSlowAndFastGlidesKeepOneSpeed() {
         XCTAssertEqual(CursorGlide.speed(.slow, heldFor: 0.1), 0)
-        XCTAssertEqual(CursorGlide.speed(.slow, heldFor: 0.2), 160)
-        XCTAssertEqual(CursorGlide.speed(.slow, heldFor: 3), 160)
-        XCTAssertEqual(CursorGlide.speed(.fast, heldFor: 0.2), 3200)
+        XCTAssertEqual(CursorGlide.speed(.slow, heldFor: 0.2), 120)
+        XCTAssertEqual(CursorGlide.speed(.slow, heldFor: 3), 120)
+        XCTAssertEqual(CursorGlide.speed(.fast, heldFor: 0.2), 2400)
     }
 
     private func assertPosition(_ cursor: EditCursor, _ x: CGFloat, _ y: CGFloat, line: UInt = #line) {
@@ -60,6 +60,9 @@ final class EditCursorTests: XCTestCase {
         var cursor = EditCursor(size: size)
         cursor.move(.left, speed: .fast)
         cursor.move(.left, speed: .fast)
+        cursor.move(.left, speed: .fast)
+        cursor.move(.down, speed: .fast)
+        XCTAssertEqual(cursor.position, CGPoint(x: 0, y: 98))
         cursor.move(.down, speed: .fast)
         XCTAssertEqual(cursor.position, CGPoint(x: 0, y: 100))
     }
@@ -85,5 +88,16 @@ final class EditCursorTests: XCTestCase {
         XCTAssertEqual(cursor.position, CGPoint(x: 200, y: 100))
         cursor.jump(.center)
         XCTAssertEqual(cursor.position, CGPoint(x: 100, y: 50))
+    }
+
+    /// Region mode keeps the cursor on a display, which may not start at the origin.
+    func testBoundsAwayFromTheOriginClampAndJump() {
+        var cursor = EditCursor(bounds: CGRect(x: -1440, y: -200, width: 1440, height: 900))
+        XCTAssertEqual(cursor.position, CGPoint(x: -720, y: 250))
+        cursor.move(to: CGPoint(x: 100, y: -500))
+        XCTAssertEqual(cursor.position, CGPoint(x: 0, y: -200))
+        cursor.jump(.left)
+        cursor.jump(.bottom)
+        XCTAssertEqual(cursor.position, CGPoint(x: -1440, y: 700))
     }
 }
