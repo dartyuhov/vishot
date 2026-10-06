@@ -48,3 +48,17 @@ Flow: `main.swift` → `AppDelegate` registers a `HotKey` and status-bar menu �
 ### Performance
 
 Latency is the main design constraint, and the README's "Speed notes" describe the intended trade-offs. Keep the hotkey-to-overlay path free of ScreenCaptureKit/AX calls, per-show allocations of windows, and eager image encoding. Nothing of the editor runs before ⇧↵; its layers are built with the panels, export happens only on finish, and copy stays lazy. AX runs only after `f`. `DisplayCatalog` runs only on `G` and `v`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in beads (`bd` CLI, database in `.beads/`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), applied as beads labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
