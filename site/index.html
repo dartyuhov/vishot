@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vishot: keyboard-first screenshots for macOS</title>
+  <meta name="description" content="A Vim-inspired screenshot tool for macOS. Pick a window or a single element with the keyboard, mark it up, and copy or save it without touching the mouse.">
+  <meta property="og:title" content="Vishot: screenshots at the speed of hjkl">
+  <meta property="og:description" content="A keyboard-first, Vim-inspired screenshot tool for macOS. Join the waitlist.">
+  <meta property="og:url" content="https://vishot.dev">
+  <meta name="theme-color" content="#12121A">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="fonts/silkscreen-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#waitlist">Skip to the waitlist</a>
+
+  <header class="top">
+    <a class="brand" href="/" aria-label="Vishot home">
+      <img src="favicon.svg" alt="" width="28" height="28">
+      <span>vishot</span>
+    </a>
+    <p class="top-note">macOS 14+ · coming soon</p>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="headline">
+      <h1 id="headline" class="headline">
+        <span class="line">Screenshots at</span>
+        <span class="line">the speed of <span class="keys-word">hjkl</span></span>
+      </h1>
+
+      <div class="hero-row">
+        <p class="lede">
+          Vishot is a keyboard-first, Vim-inspired screenshot tool for macOS.
+          Pick a window, a single button, or a whole display, mark it up, and paste it
+          without reaching for the mouse.
+        </p>
+
+        <form id="waitlist" class="waitlist" action="https://buttondown.com/api/emails/embed-subscribe/vishot" method="post" novalidate>
+          <input type="hidden" name="embed" value="1">
+          <label for="email">Get early access</label>
+          <div class="field">
+            <input id="email" name="email" type="email" inputmode="email" autocomplete="email"
+                   placeholder="you@example.com" required aria-describedby="email-error privacy">
+            <button type="submit">Join waitlist</button>
+          </div>
+          <p id="email-error" class="error" role="alert"></p>
+          <p class="status" role="status" aria-live="polite"></p>
+          <p id="privacy" class="privacy">
+            One email when the beta opens. Your address is stored with Buttondown, used only for
+            Vishot news, and deleted on request. Unsubscribe anytime.
+          </p>
+        </form>
+      </div>
+    </section>
+
+    <section class="demo" aria-labelledby="how">
+      <h2 id="how" class="visually-hidden">How it works</h2>
+
+      <figure class="screen">
+        <div class="monitor">
+          <canvas id="scene" width="192" height="120" role="img"
+                  aria-label="Animated pixel-art demo: the picker opens on a window, moves to another with j and h, labels the elements with f, selects a chart by typing its label, draws an arrow on it, and copies it with y."></canvas>
+        </div>
+        <figcaption class="keycast">
+          <span class="keycast-keys" aria-hidden="true"></span>
+          <span class="keycast-text" aria-hidden="true"></span>
+          <button class="playpause" type="button" aria-label="Pause the demo">
+            <svg class="i-pause" viewBox="0 0 8 8" aria-hidden="true"><path d="M1 1h2v6H1zM5 1h2v6H5z"/></svg>
+            <svg class="i-play" viewBox="0 0 8 8" aria-hidden="true"><path d="M2 1h1v6H2zM3 2h1v4H3zM4 3h1v2H4zM5 3h1v2H5z"/></svg>
+          </button>
+        </figcaption>
+      </figure>
+
+      <ol class="features">
+        <li class="feature" data-seg="0">
+          <button type="button" class="feature-head"><span class="hint">01</span>Keyboard first, Vim inspired</button>
+          <p><kbd>⇧⌘S</kbd> opens the picker. From there it's <kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd>, <kbd>Tab</kbd> and <kbd>↵</kbd>. The mouse can stay where it is.</p>
+          <span class="progress" aria-hidden="true"></span>
+        </li>
+        <li class="feature" data-seg="1">
+          <button type="button" class="feature-head"><span class="hint">02</span>Pick a window with arrows</button>
+          <p><kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd> or the arrow keys jump to the nearest window in that direction, across every screen.</p>
+          <span class="progress" aria-hidden="true"></span>
+        </li>
+        <li class="feature" data-seg="2">
+          <button type="button" class="feature-head"><span class="hint">03</span>Jump straight to an element</button>
+          <p><kbd>f</kbd> puts a label on every button, message and pane. Type the label and it's selected. No dragging a box around it.</p>
+          <span class="progress" aria-hidden="true"></span>
+        </li>
+        <li class="feature" data-seg="3">
+          <button type="button" class="feature-head"><span class="hint">04</span>Mark it up from the keyboard</button>
+          <p><kbd>⇧↵</kbd> freezes the shot in place. <kbd>a</kbd> draws an arrow, <kbd>r</kbd> a box, <kbd>t</kbd> a label, <kbd>c</kbd> crops.</p>
+          <span class="progress" aria-hidden="true"></span>
+        </li>
+        <li class="feature" data-seg="4">
+          <button type="button" class="feature-head"><span class="hint">05</span>Clipboard or disk</button>
+          <p><kbd>y</kbd> copies it, <kbd>s</kbd> saves a PNG to your screenshot folder, <kbd>S</kbd> does both.</p>
+          <span class="progress" aria-hidden="true"></span>
+        </li>
+      </ol>
+      <p class="tip" aria-hidden="true">Try it here: <kbd>j</kbd> <kbd>k</kbd> or <kbd>1</kbd>–<kbd>5</kbd></p>
+    </section>
+  </main>
+
+  <footer class="bottom">
+    <span>© 2026 Vishot</span>
+    <a href="#waitlist">Join the waitlist ↑</a>
+  </footer>
+
+  <script src="main.js" defer></script>
+</body>
+</html>
