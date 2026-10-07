@@ -6,6 +6,7 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -66,6 +67,17 @@ test('keeps server files and the database private', async () => {
   for (const url of ['/server.js', '/server.test.js', '/package.json', '/waitlist.db', '/../server.js', '/node_modules/']) {
     assert.equal((await fetch(base + url)).status, 404, url);
   }
+});
+
+test('redirects www to the bare domain', async () => {
+  const { status, location } = await new Promise((resolve, reject) => {
+    http.get(`${base}/some/page?x=1`, { headers: { Host: 'www.vishot.dev' } }, res => {
+      res.resume();
+      resolve({ status: res.statusCode, location: res.headers.location });
+    }).on('error', reject);
+  });
+  assert.equal(status, 301);
+  assert.equal(location, 'https://vishot.dev/some/page?x=1');
 });
 
 test('subscribes a new address, normalized', async () => {

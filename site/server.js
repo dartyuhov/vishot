@@ -147,6 +147,13 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   res.setHeader('X-Content-Type-Options', 'nosniff');
 
+  // www.vishot.dev points here too; send it to the one canonical address.
+  const host = req.headers.host || '';
+  if (host.startsWith('www.')) {
+    res.writeHead(301, { Location: `https://${host.slice(4)}${url.pathname}${url.search}` });
+    return res.end();
+  }
+
   if (url.pathname === '/api/subscribe') {
     if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST' }); return res.end(); }
     return subscribe(req, res);
