@@ -29,7 +29,7 @@ cd site && npm test            # node:test suite; spawns server.js against a tem
 cd site && npm start           # http://localhost:3000, database at site/waitlist.db (git-ignored)
 ```
 
-- Deploys are Railway's GitHub autodeploy: a push to `main` that touches `site/**` deploys once the `Site` workflow passes ("Wait for CI"). Service settings live in `site/railway.json`, Node's version in `site/.node-version` (CI reads it too).
+- Deploys are Railway's GitHub autodeploy (project `vishot`, service `site`): a push to `main` that touches `site/**` deploys once the `Site` workflow passes ("Wait for CI"). The service is configured in Railway, not in the repo: root directory `site`, start `node server.js`, health check `/healthz`, watch path `/site/**`, a volume at `/data`, and the `EXPORT_TOKEN` variable. Node's version is in `site/.node-version`, which CI reads too.
 - The database is `waitlist.db` on a Railway volume (`RAILWAY_VOLUME_MOUNT_PATH`). A service with a volume is down for a few seconds per deploy, so `main.js` retries a signup that gets no answer or a 502/503.
 - `POST /api/subscribe` takes form fields `email` and `website` (a honeypot; filled means a bot, answered as success and dropped) and is rate limited per IP. `GET /api/export.csv` with `Authorization: Bearer $EXPORT_TOKEN` downloads the list; without the variable it's off.
 - The `App` workflow runs `swift test` on macOS for changes under `Sources/`, `Tests/` or `Package.swift`.
