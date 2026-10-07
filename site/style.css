@@ -78,6 +78,14 @@ a { color: var(--accent-text); }
   white-space: nowrap;
 }
 
+/* Honeypot: off-screen rather than display:none, which some bots skip. */
+.trap {
+  position: absolute;
+  left: -10000px;
+  width: 1px; height: 1px;
+  overflow: hidden;
+}
+
 .skip {
   position: absolute;
   left: 1rem; top: -3rem;

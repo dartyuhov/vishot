@@ -8,3 +8,7 @@ build/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Landing server
+node_modules/
+site/waitlist.db*

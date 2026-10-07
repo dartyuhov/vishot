@@ -1,0 +1,17 @@
+# Builds and tests the macOS app.
+name: App
+
+on:
+  push:
+    branches: [main]
+    paths: ['Sources/**', 'Tests/**', 'Package.swift', '.github/workflows/app.yml']
+  pull_request:
+    paths: ['Sources/**', 'Tests/**', 'Package.swift', '.github/workflows/app.yml']
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - run: swift test

@@ -592,22 +592,49 @@
   input.addEventListener('blur', () => { if (input.value) validate(); });
   input.addEventListener('input', () => { if (input.getAttribute('aria-invalid') === 'true') validate(); });
 
+  // The server has a volume, so a deploy takes it offline for a few seconds. Requests that hit
+  // that gap fail before reaching it (a network error, or Railway's 502/503 page), so retry
+  // those; anything the server itself answered is final.
+  const RETRY_DELAYS = [1000, 2000, 4000, 8000];
+
+  async function post(body) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const res = await fetch(form.action, {
+          method: 'POST',
+          headers: { Accept: 'application/json' },
+          body,
+        });
+        if (res.status < 502) return (await res.json()).status;
+      } catch {}
+      if (attempt === RETRY_DELAYS.length) throw new Error('unreachable');
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
+    }
+  }
+
   form.addEventListener('submit', async e => {
     e.preventDefault();
     if (!validate()) { input.focus(); return; }
     submit.disabled = true;
     status.textContent = 'Joining…';
     try {
-      // Buttondown's embed endpoint doesn't send CORS headers, so the response is opaque:
-      // a network failure throws, anything else counts as subscribed.
-      await fetch(form.action, {
-        method: 'POST',
-        mode: 'no-cors',
-        body: new URLSearchParams(new FormData(form)),
-      });
-      form.classList.add('done');
-      form.querySelector('label').textContent = "You're on the list";
-      status.textContent = "Thanks! Check your inbox to confirm, and we'll write when the beta opens.";
+      const result = await post(new URLSearchParams(new FormData(form)));
+      status.textContent = '';
+      if (result === 'subscribed' || result === 'already') {
+        form.classList.add('done');
+        form.querySelector('label').textContent = "You're on the list";
+        status.textContent = result === 'subscribed'
+          ? "Thanks! We'll write when the beta opens."
+          : "You were already on it. We'll write when the beta opens.";
+      } else if (result === 'invalid') {
+        error.textContent = "That doesn't look like an email address.";
+        input.setAttribute('aria-invalid', 'true');
+        input.focus();
+      } else if (result === 'rate_limited') {
+        error.textContent = 'Too many attempts. Try again in a few minutes.';
+      } else {
+        error.textContent = "That didn't go through. Try again in a moment.";
+      }
     } catch {
       status.textContent = '';
       error.textContent = "That didn't go through. Check your connection and try again.";

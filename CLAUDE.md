@@ -20,6 +20,20 @@ swift test                     # XCTest unit tests (VishotTests)
 - Tests cover pure logic only (`Navigator`, `ElementFilter`, `Hints`, `Capturer.cropRect`, the editor model in `Annotation.swift`, `EditCursor`/`CursorGlide` in `Cursor.swift`, `RegionSelection`, `PixelArt`, `AnnotationRenderer.export`, `Watermark`, `Config.fileName`). AX, ScreenCaptureKit, overlay and editor behavior are checked by hand on the installed app.
 - Hints need the Accessibility permission, which, like Screen Recording, is tied to the stable signature.
 
+## Landing site
+
+`site/` is vishot.dev: a static page (`index.html`, `main.js`, `style.css`) plus `server.js`, a dependency-free Node 24 server that serves only those files and the fonts, and stores waitlist signups in SQLite (`node:sqlite`).
+
+```sh
+cd site && npm test            # node:test suite; spawns server.js against a temp database
+cd site && npm start           # http://localhost:3000, database at site/waitlist.db (git-ignored)
+```
+
+- Deploys are Railway's GitHub autodeploy: a push to `main` that touches `site/**` deploys once the `Site` workflow passes ("Wait for CI"). Service settings live in `site/railway.json`, Node's version in `site/.node-version` (CI reads it too).
+- The database is `waitlist.db` on a Railway volume (`RAILWAY_VOLUME_MOUNT_PATH`). A service with a volume is down for a few seconds per deploy, so `main.js` retries a signup that gets no answer or a 502/503.
+- `POST /api/subscribe` takes form fields `email` and `website` (a honeypot; filled means a bot, answered as success and dropped) and is rate limited per IP. `GET /api/export.csv` with `Authorization: Bearer $EXPORT_TOKEN` downloads the list; without the variable it's off.
+- The `App` workflow runs `swift test` on macOS for changes under `Sources/`, `Tests/` or `Package.swift`.
+
 ## Architecture
 
 Flow: `main.swift` → `AppDelegate` registers a `HotKey` and status-bar menu → `OverlayController.toggle()` → `WindowCatalog.visibleWindows()` lists windows → key presses and mouse events go to `OverlayController`, which navigates `[CaptureTarget]` with `Navigator` → on confirm, `Capturer` grabs the target and puts it on the pasteboard. On ⇧↵ (`edit()`), `Capturer.image(for:)` captures with the overlay still up, an `EditorController` takes over keys and mouse events, and its `onFinish` hides the overlay, then copies or saves the exported image.

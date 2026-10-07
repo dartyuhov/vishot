@@ -1,0 +1,7 @@
+{
+  "name": "vishot-site",
+  "private": true,
+  "description": "vishot.dev landing page and waitlist endpoint",
+  "engines": { "node": ">=24" },
+  "scripts": { "start": "node server.js", "test": "node --test" }
+}

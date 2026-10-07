@@ -38,19 +38,22 @@
           without reaching for the mouse.
         </p>
 
-        <form id="waitlist" class="waitlist" action="https://buttondown.com/api/emails/embed-subscribe/vishot" method="post" novalidate>
-          <input type="hidden" name="embed" value="1">
+        <form id="waitlist" class="waitlist" action="/api/subscribe" method="post" novalidate>
           <label for="email">Get early access</label>
           <div class="field">
             <input id="email" name="email" type="email" inputmode="email" autocomplete="email"
                    placeholder="you@example.com" required aria-describedby="email-error privacy">
             <button type="submit">Join waitlist</button>
           </div>
+          <div class="trap" aria-hidden="true">
+            <label for="website">Leave this empty</label>
+            <input id="website" name="website" type="text" tabindex="-1" autocomplete="off">
+          </div>
           <p id="email-error" class="error" role="alert"></p>
           <p class="status" role="status" aria-live="polite"></p>
           <p id="privacy" class="privacy">
-            One email when the beta opens. Your address is stored with Buttondown, used only for
-            Vishot news, and deleted on request. Unsubscribe anytime.
+            One email when the beta opens. Your address is stored by Vishot, used only for
+            Vishot news, never shared, and deleted on request.
           </p>
         </form>
       </div>
