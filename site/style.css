@@ -280,6 +280,49 @@ kbd {
 .waitlist.done .field { display: none; }
 .waitlist.done label { color: var(--hint); }
 
+/* Joining takes a screenshot of the form, the way Vishot does: the selection ring snaps onto it,
+   the shutter flashes, and the shot shrinks into the corner with its watermark. See shoot() in
+   main.js, which positions and animates these. */
+.shot-ring, .shot-flash, .shot {
+  position: fixed;
+  z-index: 20;
+  pointer-events: none;
+}
+.shot-flash { background: #fff; }
+.shot {
+  /* With the border, 1rem around the form. */
+  padding: calc(1rem - 2px);
+  border: 2px solid var(--line);
+  background: var(--bg);
+  box-shadow: 8px 8px 0 rgb(0 0 0 / 0.45);
+  transform-origin: 0 0;
+}
+.shot .waitlist { margin: 0; }
+/* Like Watermark.swift: the pixel font on a dark plate with a hard amber shadow. */
+.shot-mark {
+  position: absolute;
+  right: .5rem;
+  bottom: .5rem;
+  padding: .15rem .4rem;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  box-shadow: 2px 2px 0 var(--hint);
+  color: var(--text);
+  font: 700 .7rem/1 var(--pixel);
+  text-transform: uppercase;
+}
+.shot-tag {
+  position: fixed;
+  z-index: 21;
+  padding: .3rem .55rem;
+  background: var(--accent);
+  box-shadow: 3px 3px 0 var(--hint);
+  color: #fff;
+  font: 700 .85rem/1 var(--pixel);
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
 /* ---------- Demo ---------- */
 
 .demo {
@@ -372,15 +415,18 @@ kbd {
 /* The active feature gets the demo's selection border: one of its pixels wide (--px, measured
    from the canvas in main.js), corner pixels left out, just outside the card. The card's own edge
    goes, so the ring is the edge, as when the demo selects a window. */
-.feature::after, .faq details::after {
-  content: "";
-  position: absolute;
-  inset: calc(-2px - var(--px, 3px));
+.feature::after, .faq details::after, .shot-ring {
   background:
     linear-gradient(var(--accent), var(--accent)) top / calc(100% - 2 * var(--px, 3px)) var(--px, 3px) no-repeat,
     linear-gradient(var(--accent), var(--accent)) bottom / calc(100% - 2 * var(--px, 3px)) var(--px, 3px) no-repeat,
     linear-gradient(var(--accent), var(--accent)) left / var(--px, 3px) calc(100% - 2 * var(--px, 3px)) no-repeat,
     linear-gradient(var(--accent), var(--accent)) right / var(--px, 3px) calc(100% - 2 * var(--px, 3px)) no-repeat;
+  pointer-events: none;
+}
+.feature::after, .faq details::after {
+  content: "";
+  position: absolute;
+  inset: calc(-2px - var(--px, 3px));
   opacity: 0;
   transition: opacity .12s var(--step);
   pointer-events: none;

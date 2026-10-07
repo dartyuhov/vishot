@@ -693,6 +693,7 @@
               ? "Thanks! We'll write when the beta opens."
               : "You were already on it. We'll write when the beta opens.";
           }
+          if (!reducedMotion) shoot(form);
         } else if (result === 'invalid') {
           error.textContent = "That doesn't look like an email address.";
           input.setAttribute('aria-invalid', 'true');
@@ -709,6 +710,76 @@
         submit.disabled = false;
       }
     });
+  }
+
+  // Joining takes a screenshot of the form that was used, as Vishot would: the selection ring
+  // snaps onto it from the window's edges, the shutter flashes, and the shot shrinks into the
+  // bottom-right corner like macOS's screenshot thumbnail, tagged COPIED!, then slides out.
+  let shooting = false;
+
+  async function shoot(form) {
+    if (shooting) return;
+    shooting = true;
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const place = b => ({ left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` });
+    const add = (className, b) => {
+      const el = document.createElement('div');
+      el.className = className;
+      el.setAttribute('aria-hidden', 'true');
+      if (b) Object.assign(el.style, place(b));
+      document.body.append(el);
+      return el;
+    };
+    const step = n => `steps(${n}, jump-none)`;
+
+    const r = form.getBoundingClientRect();
+    const box = { x: r.left - 16, y: r.top - 16, w: r.width + 32, h: r.height + 32 };
+    const px = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--px')) || 3;
+    const around = { x: box.x - px, y: box.y - px, w: box.w + 2 * px, h: box.h + 2 * px };
+
+    const ring = add('shot-ring', around);
+    await ring.animate([place({ x: 0, y: 0, w: innerWidth, h: innerHeight }), place(around)],
+                       { duration: 240, easing: step(4) }).finished;
+
+    // The shot is a frozen copy of the form, laid exactly over it.
+    const copy = form.cloneNode(true);
+    for (const el of [copy, ...copy.querySelectorAll('[id]')]) el.removeAttribute('id');
+    copy.classList.remove('reveal', 'in');
+    copy.style.width = `${r.width}px`;
+    const shot = add('shot', box);
+    const mark = document.createElement('span');
+    mark.className = 'shot-mark';
+    mark.textContent = 'vishot.dev';
+    shot.append(copy, mark);
+    shot.inert = true;
+
+    const flash = add('shot-flash', box);
+    await flash.animate([{ opacity: 0.9 }, { opacity: 0 }], { duration: 300, easing: step(4), fill: 'forwards' }).finished;
+    flash.remove();
+    ring.remove();
+
+    const scale = Math.min(0.45, 280 / box.w);
+    const margin = 24;
+    const end = { x: innerWidth - margin - box.w * scale, y: innerHeight - margin - box.h * scale };
+    const at = dx => `translate(${end.x - box.x + dx}px, ${end.y - box.y}px) scale(${scale})`;
+    await shot.animate([{ transform: 'none' }, { transform: at(0) }],
+                       { duration: 420, easing: step(8), fill: 'forwards' }).finished;
+
+    const tag = add('shot-tag');
+    tag.textContent = 'Copied!';
+    Object.assign(tag.style, { left: `${end.x}px`, bottom: `${margin + box.h * scale + 10}px` });
+    tag.animate([{ transform: 'translateY(6px)', opacity: 0 }, { transform: 'none', opacity: 1 }],
+                { duration: 160, easing: step(3) });
+
+    await sleep(2400);
+    const out = innerWidth - end.x + 16;
+    tag.animate([{ transform: 'none' }, { transform: `translateX(${out}px)` }],
+                { duration: 320, easing: step(6), fill: 'forwards' });
+    await shot.animate([{ transform: at(0) }, { transform: at(out) }],
+                       { duration: 320, easing: step(6), fill: 'forwards' }).finished;
+    shot.remove();
+    tag.remove();
+    shooting = false;
   }
 
   // The server has a volume, so a deploy takes it offline for a few seconds. Requests that hit
