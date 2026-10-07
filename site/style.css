@@ -103,7 +103,7 @@ kbd {
 
 /* ---------- Header ---------- */
 
-.top, .hero, .demo, .bottom {
+.top, .hero, .demo, .faq, .bottom {
   width: min(1200px, 100% - 2.5rem);
   margin-inline: auto;
 }
@@ -377,6 +377,13 @@ kbd {
   line-height: 1.55;
 }
 
+.feature code {
+  padding: 0 .3em;
+  background: var(--surface-2);
+  color: var(--text);
+  font: 400 .95em/1.5 var(--mono);
+}
+
 .progress {
   position: absolute;
   left: 0; bottom: 0;
@@ -394,6 +401,83 @@ kbd {
   font-size: .75rem;
 }
 .tip kbd { font-size: .7rem; }
+
+/* ---------- FAQ ---------- */
+
+.faq {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 1.5rem 2.5rem;
+  align-items: start;
+  padding-block: 2rem 4rem;
+}
+
+.faq-title {
+  margin: 0;
+  font: 700 clamp(1.6rem, 3vw, 2.25rem)/1 var(--pixel);
+  text-transform: uppercase;
+}
+
+.faq-list {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+}
+
+.faq details {
+  position: relative;
+  background: rgb(27 27 40 / 0.6);
+  transition: background-color .2s;
+}
+.faq details:hover, .faq details[open] { background: var(--surface); }
+
+/* An open answer gets the same selection border as the active feature. */
+.faq details::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border: 3px solid var(--accent);
+  border-radius: 6px;
+  opacity: 0;
+  transition: opacity .12s var(--step);
+  pointer-events: none;
+}
+.faq details[open]::after { opacity: 1; }
+
+.faq summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .85rem 1rem;
+  font: 700 1rem/1.3 var(--pixel);
+  text-transform: uppercase;
+  cursor: pointer;
+  list-style: none;
+}
+.faq summary::-webkit-details-marker { display: none; }
+
+/* A pixel plus that drops its vertical bar when open. */
+.faq summary::after {
+  content: "";
+  flex: none;
+  width: 12px;
+  height: 12px;
+  background:
+    linear-gradient(var(--hint), var(--hint)) center / 12px 4px no-repeat,
+    linear-gradient(var(--hint), var(--hint)) center / 4px 12px no-repeat;
+}
+.faq details[open] summary::after {
+  background: linear-gradient(var(--hint), var(--hint)) center / 12px 4px no-repeat;
+}
+
+.faq details p {
+  margin: 0;
+  padding: 0 1rem 1rem;
+  color: var(--muted);
+  font-size: .875rem;
+  line-height: 1.55;
+}
 
 /* ---------- Reveal on load ---------- */
 
@@ -419,7 +503,7 @@ kbd {
 /* ---------- Responsive ---------- */
 
 @media (max-width: 960px) {
-  .hero-row, .demo { grid-template-columns: 1fr; }
+  .hero-row, .demo, .faq { grid-template-columns: 1fr; }
   .tip { display: none; }
 }
 

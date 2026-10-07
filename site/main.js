@@ -74,16 +74,20 @@
     { at: 5900, keys: ['s'], text: 'type a label…', seg: 2, run: s => { s.typed = 'S'; } },
     { at: 6500, keys: ['d'], text: '…and that element is selected', seg: 2,
       run: (s, at) => { s.typed = 'SD'; s.mode = 'element'; select(s, M1, at); } },
-    { at: 8000, keys: ['⇧↵'], text: 'freezes it in the editor', seg: 3,
+    { at: 8000, keys: [], text: 'Agents can take the shot too.', seg: 3,
+      run: (s, at) => { s.mode = 'cli'; s.cli = { at, ranAt: Infinity }; } },
+    { at: 9200, keys: [], text: 'vishot capture --app Chat', seg: 3, run: (s, at) => { s.cli.ranAt = at; } },
+    { at: 10200, keys: [], text: 'and read the PNG it prints', seg: 3, run: () => {} },
+    { at: 11000, keys: ['⇧↵'], text: 'freezes it in the editor', seg: 4,
       run: (s, at) => { s.mode = 'editor'; glide(s, CENTER, at, 0); } },
-    { at: 9000, keys: ['l'], text: 'moves the cursor', seg: 3, run: (s, at) => glide(s, { x: 95, y: 63 }, at, 200) },
-    { at: 9700, keys: ['a'], text: 'starts an arrow', seg: 3, run: (s, at) => { s.arrow = { start: cursorAt(s, at), end: null }; } },
-    { at: 10300, keys: ['k', 'h'], text: 'held together, glides', seg: 3, run: (s, at) => glide(s, { x: 72, y: 51 }, at, 900) },
-    { at: 11500, keys: ['a'], text: 'finishes it', seg: 3, run: (s, at) => { s.arrow.end = cursorAt(s, at); } },
-    { at: 12600, keys: ['y'], text: 'copies it. s saves a PNG instead.', seg: 4, run: (s, at) => { s.mode = 'copied'; s.copiedAt = at; } },
+    { at: 12000, keys: ['l'], text: 'moves the cursor', seg: 4, run: (s, at) => glide(s, { x: 95, y: 63 }, at, 200) },
+    { at: 12700, keys: ['a'], text: 'starts an arrow', seg: 4, run: (s, at) => { s.arrow = { start: cursorAt(s, at), end: null }; } },
+    { at: 13300, keys: ['k', 'h'], text: 'held together, glides', seg: 4, run: (s, at) => glide(s, { x: 72, y: 51 }, at, 900) },
+    { at: 14500, keys: ['a'], text: 'finishes it', seg: 4, run: (s, at) => { s.arrow.end = cursorAt(s, at); } },
+    { at: 15600, keys: ['y'], text: 'copies it. s saves a PNG instead.', seg: 5, run: (s, at) => { s.mode = 'copied'; s.copiedAt = at; } },
   ];
-  const LOOP = 16000;
-  const SEG_START = [0, 1, 2, 3, 4].map(i => EVENTS.find(e => e.seg === i).at);
+  const LOOP = 19000;
+  const SEG_START = Array.from({ length: EVENTS[EVENTS.length - 1].seg + 1 }, (_, i) => EVENTS.find(e => e.seg === i).at);
   const segEnd = i => (i + 1 < SEG_START.length ? SEG_START[i + 1] : LOOP);
 
   const clamp01 = v => Math.max(0, Math.min(1, v));
@@ -310,6 +314,46 @@
     p.outline({ x: tb.x + 30, y: tb.y + 3, w: 5, h: 5 }, '#fff');
   }
 
+  // The agent's terminal, over the code editor. No overlay: the shot just happens.
+  function drawTerminal(p, s, t) {
+    const x = W2.x, y = W2.y + 6;
+    p.rect(x, y, W2.w, W2.h - 7, C.chrome);
+
+    // The agent says what it'll check, then types the command.
+    const say = (sy, widths) => {
+      p.rect(x + 3, sy, 2, 2, C.pink);
+      widths.forEach((w, i) => p.rect(x + 8, sy + i * 3, w, 1, C.textLo));
+    };
+    say(y + 3, [44, 30]);
+    const py = y + 12;
+    p.px(x + 3, py - 1, C.accent); p.px(x + 4, py, C.accent); p.px(x + 3, py + 1, C.accent);
+    const typed = Math.floor(clamp01((t - s.cli.at - 300) / 800) * 22) * 2;
+    p.rect(x + 8, py, Math.min(typed, 12), 1, C.green);
+    if (typed > 14) p.rect(x + 22, py, typed - 14, 1, C.textHi);
+    if (t < s.cli.ranAt && Math.floor(t / 400) % 2 === 0) p.rect(x + 9 + typed, py - 1, 2, 3, C.textHi);
+
+    const dt = t - s.cli.ranAt;
+    if (dt < 0) return;
+    // The chat window flashes as it's captured.
+    if (dt < 200) {
+      p.ctx.fillStyle = `rgba(255, 255, 255, ${0.6 * (1 - dt / 200)})`;
+      p.ctx.fillRect(W1.x, W1.y, W1.w, W1.h);
+    }
+    if (dt > 250) p.rect(x + 8, py + 4, 48, 1, C.textDim);
+    // A thumbnail of the PNG, which the agent reads back.
+    if (dt > 500) {
+      const th = { x: x + 8, y: py + 8, w: 26, h: 16 };
+      p.rect(th.x, th.y, th.w, th.h, C.window);
+      p.rect(th.x, th.y, th.w, 2, C.titlebar);
+      p.rect(th.x, th.y + 2, 6, th.h - 2, C.sidebar);
+      p.rect(th.x + 8, th.y + 4, 2, 2, C.cyan); p.rect(th.x + 11, th.y + 4, 10, 1, C.textLo);
+      p.rect(th.x + 8, th.y + 8, 2, 2, C.pink); p.rect(th.x + 11, th.y + 8, 12, 5, '#1a1a2a');
+      p.rect(th.x + 16, th.y + 9, 1, 4, C.red);
+      p.outline(grow(th), C.line);
+    }
+    if (dt > 1000) say(py + 28, [38]);
+  }
+
   function drawCopied(p, s, t) {
     const dt = t - s.copiedAt;
     if (dt < 140) {
@@ -353,6 +397,9 @@
           p.outline(grow(s.sel.to), C.accent);
           drawHints(p, s.typed);
           drawHUD(p, 'ELEMENT');
+          break;
+        case 'cli':
+          drawTerminal(p, s, t);
           break;
         case 'editor':
           drawEditor(p, s, t);
@@ -450,7 +497,7 @@
       if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select')) return;
       if (e.key === 'j') seekSegment(shownSeg + 1);
       else if (e.key === 'k') seekSegment(shownSeg - 1);
-      else if (e.key >= '1' && e.key <= '5') seekSegment(Number(e.key) - 1);
+      else if (e.key >= '1' && e.key <= String(SEG_START.length)) seekSegment(Number(e.key) - 1);
       else return;
       e.preventDefault();
     });

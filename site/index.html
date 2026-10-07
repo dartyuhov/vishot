@@ -62,7 +62,7 @@
       <figure class="screen">
         <div class="monitor">
           <canvas id="scene" width="192" height="120" role="img"
-                  aria-label="Animated pixel-art demo: the picker opens on a window, moves to another with j and h, labels the elements with f, selects a chart by typing its label, draws an arrow on it, and copies it with y."></canvas>
+                  aria-label="Animated pixel-art demo: the picker opens on a window, moves to another with j and h, labels the elements with f, selects a chart by typing its label, an agent captures the chat window from a terminal, the chart is frozen in the editor, draws an arrow on it, and copies it with y."></canvas>
         </div>
         <figcaption class="keycast">
           <span class="keycast-keys" aria-hidden="true"></span>
@@ -91,17 +91,65 @@
           <span class="progress" aria-hidden="true"></span>
         </li>
         <li class="feature" data-seg="3">
-          <button type="button" class="feature-head"><span class="hint">04</span>Mark it up from the keyboard</button>
-          <p><kbd>⇧↵</kbd> freezes the shot in place. <kbd>a</kbd> draws an arrow, <kbd>r</kbd> a box, <kbd>t</kbd> a label, <kbd>c</kbd> crops.</p>
+          <button type="button" class="feature-head"><span class="hint">04</span>A CLI for your agent</button>
+          <p><code>vishot capture --app Chat</code> saves a PNG and prints its path, so a coding agent can look at the app it's building. A bundled skill teaches the agent the commands.</p>
           <span class="progress" aria-hidden="true"></span>
         </li>
         <li class="feature" data-seg="4">
-          <button type="button" class="feature-head"><span class="hint">05</span>Clipboard or disk</button>
+          <button type="button" class="feature-head"><span class="hint">05</span>Mark it up from the keyboard</button>
+          <p><kbd>⇧↵</kbd> freezes the shot in place. <kbd>a</kbd> draws an arrow, <kbd>r</kbd> a box, <kbd>t</kbd> a label, <kbd>c</kbd> crops.</p>
+          <span class="progress" aria-hidden="true"></span>
+        </li>
+        <li class="feature" data-seg="5">
+          <button type="button" class="feature-head"><span class="hint">06</span>Clipboard or disk</button>
           <p><kbd>y</kbd> copies it, <kbd>s</kbd> saves a PNG to your screenshot folder, <kbd>S</kbd> does both.</p>
           <span class="progress" aria-hidden="true"></span>
         </li>
       </ol>
-      <p class="tip" aria-hidden="true">Try it here: <kbd>j</kbd> <kbd>k</kbd> or <kbd>1</kbd>–<kbd>5</kbd></p>
+      <p class="tip" aria-hidden="true">Try it here: <kbd>j</kbd> <kbd>k</kbd> or <kbd>1</kbd>–<kbd>6</kbd></p>
+    </section>
+
+    <section class="faq" aria-labelledby="faq-title">
+      <h2 id="faq-title" class="faq-title">FAQ</h2>
+
+      <div class="faq-list">
+        <details>
+          <summary>Is it free?</summary>
+          <p>Yes. Every feature on this page is free: picking, labels, markup, copy and save. There may be optional paid extras later, but nothing here will move behind a paywall.</p>
+        </details>
+        <details>
+          <summary>When can I try it?</summary>
+          <p>No date yet. <a href="#waitlist">Join the waitlist</a> and you'll get one email when the beta opens.</p>
+        </details>
+        <details>
+          <summary>How is it different from the built-in screenshots?</summary>
+          <p>The built-in tool makes you click a window or drag a box around what you want. Vishot picks windows, single buttons and panes, or whole displays from the keyboard, and lets you mark the shot up before it's copied.</p>
+        </details>
+        <details>
+          <summary>Do I need to know Vim?</summary>
+          <p>No. It's Vim-inspired, not Vim-only. The arrow keys, <kbd>Tab</kbd> and <kbd>↵</kbd> do the same as <kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd>, and the bar at the bottom of the screen always shows the keys you can press. The mouse works too: hover selects, click copies.</p>
+        </details>
+        <details>
+          <summary>Can I change the keys?</summary>
+          <p>Yes. By release every key will be remappable in Settings, the <kbd>⇧⌘S</kbd> shortcut included, so you can make it feel like Vim, like Emacs, or like neither.</p>
+        </details>
+        <details>
+          <summary>What permissions does it need?</summary>
+          <p>Screen Recording, to take the screenshot. Accessibility is optional: it powers the <kbd>f</kbd> labels, and Vishot asks for it the first time you press <kbd>f</kbd>, never at launch.</p>
+        </details>
+        <details>
+          <summary>Does it work in Chrome, Slack and Electron apps?</summary>
+          <p>Yes. The first time you press <kbd>f</kbd> in one of them, the labels take a few seconds to appear while the app builds its accessibility tree. After that they're quick.</p>
+        </details>
+        <details>
+          <summary>Where do my screenshots go?</summary>
+          <p>To the clipboard, or as a timestamped PNG in your macOS screenshot folder (the Desktop unless you changed it). <kbd>⌘S</kbd> in the editor lets you pick the place.</p>
+        </details>
+        <details>
+          <summary>Are my screenshots uploaded anywhere?</summary>
+          <p>No. Vishot makes no network requests. Every capture stays on your clipboard or your disk.</p>
+        </details>
+      </div>
     </section>
   </main>
 
