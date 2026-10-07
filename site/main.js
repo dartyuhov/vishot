@@ -66,7 +66,7 @@
   // The script. Each event changes the state at its time; `seg` is the feature it illustrates.
   const EVENTS = [
     { at: 0, keys: [], text: 'Any app, any desktop.', seg: 0, run: s => { s.mode = 'desktop'; } },
-    { at: 1000, keys: ['⇧⌘S'], text: 'opens the picker on the focused window', seg: 0,
+    { at: 1000, keys: ['Shift', '⌘', 'S'], text: 'opens the picker on the focused window', seg: 0,
       run: (s, at) => { s.mode = 'window'; select(s, W2, at, true); } },
     { at: 2400, keys: ['j'], text: 'jumps to the window below', seg: 1, run: (s, at) => select(s, W3, at) },
     { at: 3500, keys: ['h'], text: 'and to the one on the left', seg: 1, run: (s, at) => select(s, W1, at) },
@@ -74,16 +74,16 @@
     { at: 5900, keys: ['s'], text: 'type a label…', seg: 2, run: s => { s.typed = 'S'; } },
     { at: 6500, keys: ['d'], text: '…and that element is selected', seg: 2,
       run: (s, at) => { s.typed = 'SD'; s.mode = 'element'; select(s, M1, at); } },
-    { at: 8000, keys: [], text: 'Agents can take the shot too.', seg: 3,
-      run: (s, at) => { s.mode = 'cli'; s.cli = { at, ranAt: Infinity }; } },
-    { at: 9200, keys: [], text: 'vishot capture --app Chat', seg: 3, run: (s, at) => { s.cli.ranAt = at; } },
-    { at: 10200, keys: [], text: 'and read the PNG it prints', seg: 3, run: () => {} },
-    { at: 11000, keys: ['⇧↵'], text: 'freezes it in the editor', seg: 4,
+    { at: 8000, keys: ['Shift', '↵'], text: 'freezes it in the editor', seg: 3,
       run: (s, at) => { s.mode = 'editor'; glide(s, CENTER, at, 0); } },
-    { at: 12000, keys: ['l'], text: 'moves the cursor', seg: 4, run: (s, at) => glide(s, { x: 95, y: 63 }, at, 200) },
-    { at: 12700, keys: ['a'], text: 'starts an arrow', seg: 4, run: (s, at) => { s.arrow = { start: cursorAt(s, at), end: null }; } },
-    { at: 13300, keys: ['k', 'h'], text: 'held together, glides', seg: 4, run: (s, at) => glide(s, { x: 72, y: 51 }, at, 900) },
-    { at: 14500, keys: ['a'], text: 'finishes it', seg: 4, run: (s, at) => { s.arrow.end = cursorAt(s, at); } },
+    { at: 9000, keys: ['l'], text: 'moves the cursor', seg: 3, run: (s, at) => glide(s, { x: 95, y: 63 }, at, 200) },
+    { at: 9700, keys: ['a'], text: 'starts an arrow', seg: 3, run: (s, at) => { s.arrow = { start: cursorAt(s, at), end: null }; } },
+    { at: 10300, keys: ['k', 'h'], text: 'held together, glides', seg: 3, run: (s, at) => glide(s, { x: 72, y: 51 }, at, 900) },
+    { at: 11500, keys: ['a'], text: 'finishes it', seg: 3, run: (s, at) => { s.arrow.end = cursorAt(s, at); } },
+    { at: 12600, keys: [], text: 'Agents can take the shot too.', seg: 4,
+      run: (s, at) => { s.mode = 'cli'; s.cli = { at, ranAt: Infinity }; } },
+    { at: 13800, keys: [], text: 'vishot capture --app Chat', seg: 4, run: (s, at) => { s.cli.ranAt = at; } },
+    { at: 14800, keys: [], text: 'and read the PNG it prints', seg: 4, run: () => {} },
     { at: 15600, keys: ['y'], text: 'copies it. s saves a PNG instead.', seg: 5, run: (s, at) => { s.mode = 'copied'; s.copiedAt = at; } },
   ];
   const LOOP = 19000;
@@ -422,14 +422,17 @@
   const keycastText = document.querySelector('.keycast-text');
   const playButton = document.querySelector('.playpause');
 
+  // Real milliseconds per script millisecond: slows the whole demo so each step can be read.
+  const SPEED = 1.5;
   let playing = !reducedMotion;
   let origin = performance.now();
   let pausedAt = reducedMotion ? segEnd(0) - 1 : 0;
   let visible = true;
   let shownEvent = null;
   let shownSeg = -1;
+  let hoverIndex = -1;
 
-  const now = () => (playing ? (performance.now() - origin) % LOOP : pausedAt);
+  const now = () => (playing ? ((performance.now() - origin) / SPEED) % LOOP : pausedAt);
 
   function show(t) {
     if (!render) return;
@@ -456,12 +459,16 @@
   }
 
   function frame() {
-    if (playing && visible) show(now());
+    if (playing && visible) {
+      const t = now();
+      if (hoverIndex >= 0 && hoverIndex === shownSeg && t >= segEnd(shownSeg)) seek(SEG_START[shownSeg]);
+      else show(t);
+    }
     requestAnimationFrame(frame);
   }
 
   function seek(t) {
-    origin = performance.now() - t;
+    origin = performance.now() - t * SPEED;
     pausedAt = t;
     show(t);
   }
@@ -480,7 +487,7 @@
 
   function setPlaying(on) {
     if (on === playing) return;
-    if (on) origin = performance.now() - pausedAt;
+    if (on) origin = performance.now() - pausedAt * SPEED;
     else pausedAt = now();
     playing = on;
     syncPlayButton();
@@ -491,6 +498,14 @@
     syncPlayButton();
 
     features.forEach((f, i) => f.querySelector('.feature-head').addEventListener('click', () => seekSegment(i)));
+
+    // While the pointer is over the active feature its step keeps playing but loops, so it can be
+    // read; leaving lets the demo go on to the next one. Moving over another card changes nothing:
+    // cards open and close as the step changes, so jumping on hover would chase the pointer.
+    features.forEach((f, i) => {
+      f.addEventListener('mouseenter', () => { hoverIndex = i; });
+      f.addEventListener('mouseleave', () => { if (hoverIndex === i) hoverIndex = -1; });
+    });
 
     // The page answers to the same keys as the app.
     document.addEventListener('keydown', e => {
@@ -505,6 +520,15 @@
     // Don't spend frames on a demo nobody can see.
     new IntersectionObserver(([entry]) => { visible = entry.isIntersecting; })
       .observe(document.getElementById('scene'));
+
+    // Each time the guide comes back into view, tell the story from the start. A demo the visitor
+    // paused stays where it is.
+    let guideShown = false;
+    new IntersectionObserver(([entry]) => {
+      const shown = entry.isIntersecting;
+      if (shown && !guideShown && playing) seek(0);
+      guideShown = shown;
+    }, { threshold: 0.6 }).observe(document.querySelector('.demo'));
 
     show(now());
     requestAnimationFrame(frame);
@@ -552,11 +576,13 @@
   if (!reducedMotion) {
     dissolve(document.querySelector('.headline'));
 
-    const items = [
-      document.querySelector('.lede'),
-      document.querySelector('.waitlist'),
-      document.querySelector('.screen'),
-      ...features,
+    // Each section's pieces appear one after another when it scrolls into view. The first
+    // waits for the headline to dissolve.
+    const groups = [
+      { items: [document.querySelector('.lede'), document.querySelector('.waitlist')], base: 450 },
+      { items: [document.querySelector('.screen'), ...features], base: 100 },
+      { items: [document.querySelector('.faq-title'), document.querySelector('.faq-list'),
+                document.querySelector('.closing')], base: 100 },
     ];
     const io = new IntersectionObserver(entries => {
       for (const entry of entries) {
@@ -565,42 +591,102 @@
         io.unobserve(entry.target);
       }
     }, { rootMargin: '0px 0px -40px 0px' });
-    items.forEach((el, i) => {
-      el.classList.add('reveal');
-      el.style.animationDelay = `${450 + i * 70}ms`;
-      io.observe(el);
-    });
+    for (const { items, base } of groups) {
+      items.forEach((el, i) => {
+        el.classList.add('reveal');
+        el.style.animationDelay = `${base + i * 70}ms`;
+        io.observe(el);
+      });
+    }
+
+    // The pixel grid drifts at a third of the scroll speed, so the sections slide over it.
+    let scrollQueued = false;
+    addEventListener('scroll', () => {
+      if (scrollQueued) return;
+      scrollQueued = true;
+      requestAnimationFrame(() => {
+        scrollQueued = false;
+        document.body.style.backgroundPositionY = `${-1 - Math.round(scrollY / 3)}px`;
+      });
+    }, { passive: true });
   }
+
+  // The dots mark the section that holds most of the window.
+  const dots = [...document.querySelectorAll('.dots a')];
+  const slides = dots.map(a => document.querySelector(a.getAttribute('href')));
+  const dotObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) dots.forEach((d, i) => d.setAttribute('aria-current', String(slides[i] === entry.target)));
+    }
+  }, { threshold: 0.5 });
+  slides.forEach(el => dotObserver.observe(el));
 
   // ---------- Waitlist ----------
 
-  const form = document.getElementById('waitlist');
-  const input = document.getElementById('email');
-  const error = document.getElementById('email-error');
-  const status = form.querySelector('.status');
-  const submit = form.querySelector('button');
+  const forms = [...document.querySelectorAll('.waitlist')];
 
-  function validate() {
-    let message = '';
-    if (input.validity.valueMissing) message = 'Enter your email address.';
-    else if (!input.validity.valid) message = "That doesn't look like an email address.";
-    error.textContent = message;
-    input.setAttribute('aria-invalid', String(Boolean(message)));
-    return !message;
+  function setUp(form) {
+    const input = form.querySelector('input[name="email"]');
+    const error = form.querySelector('.error');
+    const status = form.querySelector('.status');
+    const submit = form.querySelector('button');
+
+    function validate() {
+      let message = '';
+      if (input.validity.valueMissing) message = 'Enter your email address.';
+      else if (!input.validity.valid) message = "That doesn't look like an email address.";
+      error.textContent = message;
+      input.setAttribute('aria-invalid', String(Boolean(message)));
+      return !message;
+    }
+
+    input.addEventListener('blur', () => { if (input.value) validate(); });
+    input.addEventListener('input', () => { if (input.getAttribute('aria-invalid') === 'true') validate(); });
+
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!validate()) { input.focus(); return; }
+      submit.disabled = true;
+      status.textContent = 'Joining…';
+      try {
+        const result = await post(form.action, new URLSearchParams(new FormData(form)));
+        status.textContent = '';
+        if (result === 'subscribed' || result === 'already') {
+          // Both sign-ups say so, not only the one that was used.
+          for (const f of forms) {
+            f.classList.add('done');
+            f.querySelector('label').textContent = "You're on the list";
+            f.querySelector('.status').textContent = result === 'subscribed'
+              ? "Thanks! We'll write when the beta opens."
+              : "You were already on it. We'll write when the beta opens.";
+          }
+        } else if (result === 'invalid') {
+          error.textContent = "That doesn't look like an email address.";
+          input.setAttribute('aria-invalid', 'true');
+          input.focus();
+        } else if (result === 'rate_limited') {
+          error.textContent = 'Too many attempts. Try again in a few minutes.';
+        } else {
+          error.textContent = "That didn't go through. Try again in a moment.";
+        }
+      } catch {
+        status.textContent = '';
+        error.textContent = "That didn't go through. Check your connection and try again.";
+      } finally {
+        submit.disabled = false;
+      }
+    });
   }
-
-  input.addEventListener('blur', () => { if (input.value) validate(); });
-  input.addEventListener('input', () => { if (input.getAttribute('aria-invalid') === 'true') validate(); });
 
   // The server has a volume, so a deploy takes it offline for a few seconds. Requests that hit
   // that gap fail before reaching it (a network error, or Railway's 502/503 page), so retry
   // those; anything the server itself answered is final.
   const RETRY_DELAYS = [1000, 2000, 4000, 8000];
 
-  async function post(body) {
+  async function post(url, body) {
     for (let attempt = 0; ; attempt++) {
       try {
-        const res = await fetch(form.action, {
+        const res = await fetch(url, {
           method: 'POST',
           headers: { Accept: 'application/json' },
           body,
@@ -612,34 +698,5 @@
     }
   }
 
-  form.addEventListener('submit', async e => {
-    e.preventDefault();
-    if (!validate()) { input.focus(); return; }
-    submit.disabled = true;
-    status.textContent = 'Joining…';
-    try {
-      const result = await post(new URLSearchParams(new FormData(form)));
-      status.textContent = '';
-      if (result === 'subscribed' || result === 'already') {
-        form.classList.add('done');
-        form.querySelector('label').textContent = "You're on the list";
-        status.textContent = result === 'subscribed'
-          ? "Thanks! We'll write when the beta opens."
-          : "You were already on it. We'll write when the beta opens.";
-      } else if (result === 'invalid') {
-        error.textContent = "That doesn't look like an email address.";
-        input.setAttribute('aria-invalid', 'true');
-        input.focus();
-      } else if (result === 'rate_limited') {
-        error.textContent = 'Too many attempts. Try again in a few minutes.';
-      } else {
-        error.textContent = "That didn't go through. Try again in a moment.";
-      }
-    } catch {
-      status.textContent = '';
-      error.textContent = "That didn't go through. Check your connection and try again.";
-    } finally {
-      submit.disabled = false;
-    }
-  });
+  forms.forEach(setUp);
 })();
