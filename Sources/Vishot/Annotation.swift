@@ -5,14 +5,14 @@ import Foundation
 /// never stored, so the document is the same on every screen and in the export.
 
 enum AnnotationColor: CaseIterable {
-    case red, yellow, green, blue, white, black
+    case red, yellow, green, purple, white, black
 
     var name: String {
         switch self {
         case .red: "red"
         case .yellow: "yellow"
         case .green: "green"
-        case .blue: "blue"
+        case .purple: "purple"
         case .white: "white"
         case .black: "black"
         }
@@ -23,7 +23,8 @@ enum AnnotationColor: CaseIterable {
         case .red: CGColor(srgbRed: 1, green: 0.27, blue: 0.3, alpha: 1)
         case .yellow: CGColor(srgbRed: 1, green: 0.82, blue: 0.2, alpha: 1)
         case .green: CGColor(srgbRed: 0.2, green: 0.8, blue: 0.5, alpha: 1)
-        case .blue: CGColor(srgbRed: 0.42, green: 0.36, blue: 0.98, alpha: 1)
+        // Palette.accent, the app's own color and the default.
+        case .purple: CGColor(srgbRed: 0.42, green: 0.36, blue: 0.98, alpha: 1)
         case .white: CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
         case .black: CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
         }

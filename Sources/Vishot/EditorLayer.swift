@@ -2,24 +2,18 @@ import AppKit
 
 private enum Style {
     static let cropDim = NSColor(white: 0, alpha: 0.7)
-    static let cropOutline = NSColor(white: 1, alpha: 0.6)
+    /// The crop's outline: accent while it is drawn, then white.
+    static let cropping = Palette.accent
+    static let cropped = NSColor.white
+    /// A rectangle annotation's shadow, one cell down and right.
+    static let cropShadow = NSColor(white: 0, alpha: 0.35)
     static let accent = Palette.accent
 
-    static let background = Palette.chrome
-    static let padding: CGFloat = 8
     /// Between the image and the toolbar, and between the toolbar and the screen edge.
     static let margin: CGFloat = 12
     static let floatingInset: CGFloat = 24
-    static let buttonHeight: CGFloat = 24
-    static let buttonPadding: CGFloat = 8
-    static let buttonGap: CGFloat = 2
-    static let groupGap: CGFloat = 12
-    static let swatchSize: CGFloat = 16
-    static let lineGap: CGFloat = 6
-    static let titleFont = NSFont.systemFont(ofSize: 12, weight: .medium)
-    static let keyFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-    static let swatchKeyFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .bold)
-    static let statusFont = NSFont.systemFont(ofSize: 12)
+    /// Around the selected swatch.
+    static let swatchRing: CGFloat = 2
 }
 
 /// The editor on one panel: the frozen image, its annotations, the dimming around it, the cursor and,
@@ -29,7 +23,7 @@ final class EditorLayer: NSObject, CALayerDelegate {
     private let image = CALayer()
     private let annotations = CALayer()
     private let cropDim = SelectionStyle.makeDim(Style.cropDim)
-    private let cropOutline = CALayer()
+    private let cropOutline = CAShapeLayer()
     private let outsideDim = SelectionStyle.makeDim()
     private let crosshair = SelectionStyle.makeCrosshair()
     private let caret = CALayer()
@@ -52,8 +46,10 @@ final class EditorLayer: NSObject, CALayerDelegate {
 
         cropDim.frame = root.bounds
         outsideDim.frame = root.bounds
-        cropOutline.borderWidth = 1
-        caret.cornerRadius = 1
+        cropOutline.shadowColor = Style.cropShadow.cgColor
+        cropOutline.shadowOpacity = 1
+        cropOutline.shadowRadius = 0
+        cropOutline.shadowOffset = CGSize(width: PixelArt.cell, height: -PixelArt.cell)
         caret.borderColor = NSColor(white: 1, alpha: 0.8).cgColor
         caret.borderWidth = 0.5
 
@@ -97,13 +93,19 @@ final class EditorLayer: NSObject, CALayerDelegate {
 
         cropDim.isHidden = scene.crop == nil
         cropOutline.isHidden = scene.crop == nil
-        if let crop = scene.crop.map(local) {
+        if let crop = scene.crop {
             let path = CGMutablePath()
             path.addRect(imageRect)
-            path.addRect(crop)
+            path.addRect(local(crop))
             cropDim.path = path
-            cropOutline.frame = crop.insetBy(dx: -1, dy: -1)
-            cropOutline.borderColor = (scene.isCropping ? Style.accent : Style.cropOutline).cgColor
+            // Drawn in image space, flipped into the layer's y-up coordinates.
+            cropOutline.frame = imageRect
+            let flip = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: imageRect.height)
+            let ring = CGMutablePath()
+            ring.addRects(Self.cropRing(crop).map(PixelArt.rect), transform: flip)
+            cropOutline.path = ring
+            cropOutline.shadowPath = ring
+            cropOutline.fillColor = (scene.isCropping ? Style.cropping : Style.cropped).cgColor
         }
 
         crosshair.isHidden = scene.cursor == nil
@@ -119,6 +121,17 @@ final class EditorLayer: NSObject, CALayerDelegate {
             toolbar.update(scene)
             toolbar.root.frame.origin = toolbarOrigin(around: visible.isEmpty ? imageRect : visible)
         }
+    }
+
+    /// A rectangle annotation's ring, on the cells just outside the crop, so it covers only the corner
+    /// cells of what is kept.
+    private static func cropRing(_ crop: CGRect) -> [PixelArt.Cell] {
+        let cell = PixelArt.cell
+        let minX = ((crop.minX / cell).rounded(.down) - 1) * cell
+        let minY = ((crop.minY / cell).rounded(.down) - 1) * cell
+        let maxX = ((crop.maxX / cell).rounded(.up) + 1) * cell
+        let maxY = ((crop.maxY / cell).rounded(.up) + 1) * cell
+        return PixelArt.outline(CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY))
     }
 
     /// Below the image if there is room, otherwise above it, otherwise inside its bottom edge.
@@ -170,128 +183,107 @@ final class EditorLayer: NSObject, CALayerDelegate {
     }
 }
 
-/// Buttons for the tools, colors, undo and redo, and the finishing actions, each with its key, above
-/// a status line. Laid out once; updates only change highlights and the status.
+/// The picker's HUD with the editor's keys: its name, the tools, the colors, undo and redo, and the
+/// finishing actions, in two rows above a status line. Each entry is a button. Laid out once; updates
+/// only change highlights and the status.
 private final class EditorToolbar {
     let root = CALayer()
-    private var buttons: [(item: ToolbarItem, layer: CALayer)] = []
-    private let status = CATextLayer()
+    private var buttons: [(item: ToolbarItem, layer: CALayer, entry: HUD.Entry?)] = []
+    private let status: CATextLayer
 
-    private static let groups: [[(item: ToolbarItem, title: String, key: String)]] = [
-        EditorController.Tool.allCases.map { (.tool($0), $0.name, $0.key) },
-        AnnotationColor.allCases.enumerated().map { (.color($1), "", "\($0 + 1)") },
-        [(.undo, "undo", "u"), (.redo, "redo", "⌃r")],
-        [
-            (.finish(.copy), "copy", "y"),
-            (.finish(.save), "save", "s"),
-            (.finish(.saveAndCopy), "save+copy", "S"),
-            (.finish(.saveAs), "save as", "⌘s"),
-            (.finish(.discard), "discard", "esc"),
-        ],
+    private static let tools = EditorController.Tool.allCases.map { (ToolbarItem.tool($0), HUDKey($0.key, action: $0.name)) }
+    private static let actions: [(ToolbarItem, HUDKey)] = [
+        (.undo, HUDKey("u", action: "undo")),
+        (.redo, HUDKey("⌃r", action: "redo")),
+        (.finish(.copy), HUDKey("y", action: "copy")),
+        (.finish(.save), HUDKey("s", action: "save")),
+        (.finish(.saveAndCopy), HUDKey("S", action: "save+copy")),
+        (.finish(.saveAs), HUDKey("⌘s", action: "save as")),
+        (.finish(.discard), HUDKey("esc", action: "discard")),
     ]
 
     init(scale: CGFloat) {
-        root.backgroundColor = Style.background.cgColor
-        root.cornerRadius = 10
+        status = HUD.makeStatus(scale: scale)
+        HUD.stylePanel(root)
 
-        let statusHeight = ceil(("Hg" as NSString).size(withAttributes: [.font: Style.statusFont]).height)
-        let buttonY = Style.padding + statusHeight + Style.lineGap
-        var x = Style.padding
-        for group in Self.groups {
-            for (item, title, key) in group {
-                let button: CALayer
-                if case .color(let color) = item {
-                    button = Self.makeSwatch(color, key: key, scale: scale)
-                } else {
-                    button = Self.makeButton(title: title, key: key, scale: scale)
-                }
-                button.frame.origin = CGPoint(x: x, y: buttonY)
-                root.addSublayer(button)
-                buttons.append((item, button))
-                x += button.frame.width + Style.buttonGap
-            }
-            // The swatches' numbers pick a color; tab cycles through them.
-            if case .color = group[0].item {
-                let hint = Self.makeText(" tab", font: Style.keyFont, color: Palette.textTertiary, scale: scale)
-                hint.frame.origin = CGPoint(x: x - Style.buttonGap, y: buttonY + ((Style.buttonHeight - hint.frame.height) / 2).rounded())
-                root.addSublayer(hint)
-                x += hint.frame.width
-            }
-            x += Style.groupGap - Style.buttonGap
+        // The first row: the tools, then the swatches with their numbers, and tab, which cycles them.
+        var top: [(layer: CALayer, gap: CGFloat)] = []
+        for (item, key) in Self.tools {
+            let entry = HUD.makeEntry(key, scale: scale)
+            buttons.append((item, entry.layer, entry))
+            top.append((entry.layer, HUD.entryGap))
         }
-        let width = x - Style.groupGap + Style.padding
-        root.frame.size = CGSize(width: width, height: buttonY + Style.buttonHeight + Style.padding)
+        for (index, color) in AnnotationColor.allCases.enumerated() {
+            let swatch = Self.makeSwatch(color, key: "\(index + 1)", scale: scale)
+            buttons.append((.color(color), swatch, nil))
+            top.append((swatch, index == 0 ? HUD.entryGap : HUD.keyGap - 2 * Style.swatchRing))
+        }
+        top.append((HUD.makeText("/", font: HUD.textFont, color: Palette.textDim, scale: scale), HUD.keyGap))
+        top.append((HUD.makeEntry(HUDKey("tab", action: "color"), scale: scale).layer, HUD.keyGap))
 
-        status.font = Style.statusFont
-        status.fontSize = Style.statusFont.pointSize
-        status.foregroundColor = Palette.textSecondary.cgColor
-        status.contentsScale = scale
-        status.truncationMode = .end
-        status.frame = CGRect(x: Style.padding + 4, y: Style.padding, width: width - 2 * Style.padding - 8, height: statusHeight)
+        // The second row, under the first's entries: undo, redo and the finishing actions.
+        var bottom: [(layer: CALayer, gap: CGFloat)] = []
+        for (item, key) in Self.actions {
+            let entry = HUD.makeEntry(key, scale: scale)
+            buttons.append((item, entry.layer, entry))
+            bottom.append((entry.layer, bottom.isEmpty ? 0 : HUD.entryGap))
+        }
+
+        let topHeight = top.map(\.layer.frame.height).max() ?? 0
+        let bottomHeight = bottom.map(\.layer.frame.height).max() ?? 0
+        let statusHeight = HUD.textSize("Hg", font: HUD.textFont).height
+        let bottomY = HUD.padding.height + statusHeight + HUD.lineGap
+        let topY = bottomY + bottomHeight + HUD.lineGap
+
+        let name = HUD.makeName("EDIT", rowHeight: topHeight, scale: scale)
+        name.frame.origin.x = HUD.padding.width
+        name.frame.origin.y += topY
+        root.addSublayer(name)
+        let indent = name.frame.maxX
+        let topWidth = Self.place(top, x: indent, y: topY, height: topHeight, in: root)
+        let bottomWidth = Self.place(bottom, x: indent + HUD.entryGap, y: bottomY, height: bottomHeight, in: root)
+
+        let width = max(topWidth, bottomWidth) + HUD.padding.width
+        root.frame.size = CGSize(width: width, height: topY + topHeight + HUD.padding.height)
+        root.shadowPath = CGPath(rect: root.bounds, transform: nil)
+        status.frame = CGRect(x: HUD.padding.width, y: HUD.padding.height, width: width - 2 * HUD.padding.width, height: statusHeight)
         root.addSublayer(status)
     }
 
-    private static func makeButton(title: String, key: String, scale: CGFloat) -> CALayer {
-        let string = NSMutableAttributedString(string: title, attributes: [.font: Style.titleFont, .foregroundColor: NSColor.white])
-        string.append(NSAttributedString(
-            string: " " + key,
-            attributes: [.font: Style.keyFont, .foregroundColor: Palette.textTertiary]
-        ))
-        let size = string.size()
-        let text = CATextLayer()
-        text.string = string
-        text.contentsScale = scale
-        text.frame = CGRect(
-            x: Style.buttonPadding, y: ((Style.buttonHeight - ceil(size.height)) / 2).rounded(),
-            width: ceil(size.width), height: ceil(size.height)
-        )
-        let button = CALayer()
-        button.cornerRadius = 6
-        button.frame.size = CGSize(width: ceil(size.width) + 2 * Style.buttonPadding, height: Style.buttonHeight)
-        button.addSublayer(text)
-        return button
+    /// Lays `parts` out left to right from `x`, each after its gap, centred in a row `height` tall at `y`.
+    /// Returns where the row ends.
+    private static func place(_ parts: [(layer: CALayer, gap: CGFloat)], x: CGFloat, y: CGFloat, height: CGFloat, in root: CALayer) -> CGFloat {
+        var x = x
+        for (layer, gap) in parts {
+            x += gap
+            layer.frame.origin = CGPoint(x: x, y: y + ((height - layer.frame.height) / 2).rounded())
+            root.addSublayer(layer)
+            x += layer.frame.width
+        }
+        return x
     }
 
-    private static func makeText(_ string: String, font: NSFont, color: NSColor, scale: CGFloat) -> CATextLayer {
-        let attributed = NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color])
-        let size = attributed.size()
-        let text = CATextLayer()
-        text.string = attributed
-        text.contentsScale = scale
-        text.frame.size = CGSize(width: ceil(size.width), height: ceil(size.height))
-        return text
-    }
-
+    /// A keycap with the color on its face and the number that picks it, in a ring shown while selected.
     private static func makeSwatch(_ color: AnnotationColor, key: String, scale: CGFloat) -> CALayer {
-        let dot = CALayer()
-        dot.backgroundColor = color.cgColor
-        dot.cornerRadius = Style.swatchSize / 2
-        dot.borderColor = NSColor(white: 1, alpha: 0.4).cgColor
-        dot.borderWidth = 1
-        let inset = (Style.buttonHeight - Style.swatchSize) / 2
-        dot.frame = CGRect(x: inset, y: inset, width: Style.swatchSize, height: Style.swatchSize)
-        let button = CALayer()
-        button.cornerRadius = Style.buttonHeight / 2
-        button.borderColor = NSColor.white.cgColor
-        button.frame.size = CGSize(width: Style.buttonHeight, height: Style.buttonHeight)
-        button.addSublayer(dot)
         let isLight = [.yellow, .green, .white].contains(color)
-        let digit = makeText(key, font: Style.swatchKeyFont, color: isLight ? .black : .white, scale: scale)
-        digit.frame.origin = CGPoint(
-            x: ((Style.swatchSize - digit.frame.width) / 2).rounded(),
-            y: ((Style.swatchSize - digit.frame.height) / 2).rounded()
-        )
-        dot.addSublayer(digit)
-        return button
+        let keycap = HUD.makeKeycap(key, face: NSColor(cgColor: color.cgColor) ?? .gray, text: isLight ? Palette.ink : .white, scale: scale).edge
+        keycap.frame.origin = CGPoint(x: Style.swatchRing, y: Style.swatchRing)
+        let swatch = CALayer()
+        swatch.borderColor = Palette.text.cgColor
+        swatch.frame.size = CGSize(width: keycap.frame.width + 2 * Style.swatchRing, height: keycap.frame.height + 2 * Style.swatchRing)
+        swatch.addSublayer(keycap)
+        return swatch
     }
 
     func update(_ scene: EditorScene) {
-        for (item, layer) in buttons {
+        for (item, layer, entry) in buttons {
             switch item {
             case .tool(let tool):
-                layer.backgroundColor = tool == scene.tool ? Style.accent.cgColor : nil
+                let isActive = tool == scene.tool
+                entry?.faces.forEach { $0.backgroundColor = (isActive ? Style.accent : Palette.surfaceRaised).cgColor }
+                entry?.action.foregroundColor = (isActive ? Palette.text : Palette.textMuted).cgColor
             case .color(let color):
-                layer.borderWidth = color == scene.color ? 2 : 0
+                layer.borderWidth = color == scene.color ? Style.swatchRing : 0
             case .undo:
                 layer.opacity = scene.canUndo ? 1 : 0.35
             case .redo:

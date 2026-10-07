@@ -5,22 +5,45 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private enum Mode {
         case window, element, hint, screen, region
 
-        var keys: String {
+        var name: String {
             switch self {
-            case .window: "WINDOW   hjkl move · f elements · v region · G screen · ↵ copy · ⇧↵/e edit · esc cancel"
-            case .element: "ELEMENT  f elements · v region · G screen · ↵ copy · ⇧↵/e edit · esc back"
-            case .hint: "HINT     type a label · ⌫ undo · esc back"
-            case .screen: "SCREEN   hjkl move · v region · ↵ copy · ⇧↵/e edit · esc back"
-            case .region: "REGION   hjkl move (⇧ far, ⌥ slow) · v corner · tab screen · ↵ copy · ⇧↵/e edit · esc back"
+            case .window: "WINDOW"
+            case .element: "ELEMENT"
+            case .hint: "HINT"
+            case .screen: "SCREEN"
+            case .region: "REGION"
+            }
+        }
+
+        var keys: [HUDKey] {
+            switch self {
+            case .window: [
+                HUDKey("hjkl", action: "move"), HUDKey("f", action: "elements"), HUDKey("v", action: "region"),
+                HUDKey("G", action: "screen"), HUDKey("↵", action: "copy"), HUDKey("⇧↵", "e", action: "edit"),
+                HUDKey("esc", action: "cancel"),
+            ]
+            case .element: [
+                HUDKey("f", action: "elements"), HUDKey("v", action: "region"), HUDKey("G", action: "screen"),
+                HUDKey("↵", action: "copy"), HUDKey("⇧↵", "e", action: "edit"), HUDKey("esc", action: "back"),
+            ]
+            case .hint: [HUDKey(action: "type a hint"), HUDKey("⌫", action: "undo"), HUDKey("esc", action: "back")]
+            case .screen: [
+                HUDKey("hjkl", action: "move"), HUDKey("v", action: "region"), HUDKey("↵", action: "copy"),
+                HUDKey("⇧↵", "e", action: "edit"), HUDKey("esc", action: "back"),
+            ]
+            case .region: [
+                HUDKey("hjkl", action: "move (⇧ far, ⌥ slow)"), HUDKey("v", action: "corner"), HUDKey("tab", action: "screen"),
+                HUDKey("↵", action: "copy"), HUDKey("⇧↵", "e", action: "edit"), HUDKey("esc", action: "back"),
+            ]
             }
         }
     }
 
-    /// A labelled element in hint mode.
+    /// A hint and the element it is shown on.
     private struct Hint {
-        let label: String
+        let code: String
         let target: CaptureTarget
-        /// Containers are outlined, so it is clear which area a label stands for.
+        /// Containers are outlined, so it is clear which area a hint stands for.
         let isContainer: Bool
     }
 
@@ -234,7 +257,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     // MARK: - Hints
 
-    /// Labels the elements of the current window. The window stays selected until a label is typed.
+    /// Puts hints on the elements of the current window. The window stays selected until a hint is typed.
     private func startHints() {
         guard elements.isTrusted() else {
             NSSound.beep()
@@ -251,7 +274,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         elements.prepare(root, pid: window.pid)
         let warmUpEnd = elements.warmUpEnd(for: window.pid)
         let found = hints(below: root)
-        // An app still building its tree gets labels as they appear.
+        // An app still building its tree gets hints as they appear.
         guard !found.isEmpty || warmUpEnd != nil else {
             NSSound.beep()
             status = "nothing to label"
@@ -269,21 +292,21 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func hints(below root: AXNode) -> [Hint] {
         let window = windows[currentWindow]
         let nodes = elements.hints(below: root, in: window)
-        return zip(HintLabels.make(count: nodes.count), nodes).map { label, node in
-            Hint(label: label, target: elements.target(for: node, in: window), isContainer: node.hasChildren)
+        return zip(Hints.make(count: nodes.count), nodes).map { code, node in
+            Hint(code: code, target: elements.target(for: node, in: window), isContainer: node.hasChildren)
         }
     }
 
     private func typeHint(_ letter: String) {
         let typed = typedHint + letter
-        let matches = hints.filter { $0.label.hasPrefix(typed) }
+        let matches = hints.filter { $0.code.hasPrefix(typed) }
         guard !matches.isEmpty else {
             NSSound.beep()
             return
         }
         typedHint = typed
-        // Labels have equal length, so a complete label matches exactly one hint.
-        if let hint = matches.first(where: { $0.label == typed }) {
+        // Hints have equal length, so a complete one matches exactly one element.
+        if let hint = matches.first(where: { $0.code == typed }) {
             stopWarmUp()
             mode = .element
             hints = []
@@ -298,13 +321,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         case kVK_Escape: enterWindowMode()
         case kVK_Delete: typedHint = String(typedHint.dropLast())
         default:
-            if let letter = HintLabels.letter(forKeyCode: keyCode) { typeHint(letter) }
+            if let letter = Hints.letter(forKeyCode: keyCode) { typeHint(letter) }
         }
     }
 
     // MARK: - Warm-up
 
-    /// Electron and Chromium build their trees after a flag is set, so the labels reload until `end`.
+    /// Electron and Chromium build their trees after a flag is set, so the hints reload until `end`.
     private func startWarmUp(_ root: AXNode, until end: Date) {
         let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
             self?.reloadHints(below: root, until: end)
@@ -320,7 +343,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             if isShowing { render() }
             return
         }
-        // Labels must not change under a label being typed.
+        // Hints must not change while one is being typed.
         guard typedHint.isEmpty else { return }
         let reloaded = hints(below: root)
         guard reloaded.map(\.target.frame) != hints.map(\.target.frame) else { return }
@@ -391,16 +414,16 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let marks = hints.compactMap { hint -> HintMark? in
             let colorIndex = hint.isContainer ? containers : nil
             if hint.isContainer { containers += 1 }
-            guard hint.label.hasPrefix(typedHint) else { return nil }
-            return HintMark(rect: hint.target.frame.flippedBetweenCocoaAndCG, label: hint.label, colorIndex: colorIndex)
+            guard hint.code.hasPrefix(typedHint) else { return nil }
+            return HintMark(rect: hint.target.frame.flippedBetweenCocoaAndCG, code: hint.code, colorIndex: colorIndex)
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for panel in panels {
-            panel.highlight(target?.frame.flippedBetweenCocoaAndCG, label: target?.label ?? "", cornerRadius: target?.cornerRadius ?? 0)
+            panel.highlight(target?.frame.flippedBetweenCocoaAndCG, label: target?.label ?? "")
             panel.showRegion(regionRect, cursor: regionCursor)
             panel.showHints(marks, typed: typedHint.count)
-            panel.showHUD(keys: mode.keys, status: statusLine, visible: panel === hudPanel)
+            panel.showHUD(name: mode.name, keys: mode.keys, status: statusLine, visible: panel === hudPanel)
         }
         CATransaction.commit()
     }

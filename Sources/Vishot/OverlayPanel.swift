@@ -1,33 +1,32 @@
 import AppKit
 
 private enum Style {
+    /// Also the size of the pixel left out of each corner, as in the logo.
     static let borderWidth: CGFloat = 4
     static let color = Palette.accent
-    static let labelFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
-    static let labelPadding = CGSize(width: 8, height: 4)
+    static let labelFont = Fonts.pixel()
+    static let labelPadding = CGSize(width: 8, height: 2)
     static let labelInset: CGFloat = 10
+    /// The landing page's button shadow: hard, offset right and down.
+    static let labelShadow: CGFloat = 2
 
-    static let hudKeysFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
-    static let hudStatusFont = NSFont.systemFont(ofSize: 12)
-    static let hudBackground = Palette.chrome
-    static let hudPadding = CGSize(width: 14, height: 8)
-    static let hudLineGap: CGFloat = 4
     static let hudBottomInset: CGFloat = 24
     /// Fully transparent pixels let clicks through to the windows below, so the panel keeps a trace of tint.
     static let panelBackground = NSColor(white: 0, alpha: 0.01)
 
-    static let hintFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)
-    /// Leaves: yellow labels, no outline.
+    static let hintFont = Fonts.mono(11, bold: true)
+    /// Leaves: yellow hints, no outline.
     static let hintBackground = Palette.hintLeaf
-    /// Containers: outline and label share one of these. No yellow, so it stays the mark of a leaf.
+    /// Containers: outline and hint share one of these. No yellow, so it stays the mark of a leaf.
     static let hintPalette = Palette.hintContainers
     static let hintPadding = CGSize(width: 4, height: 1)
 }
 
-/// A hint label. `rect` is in Cocoa global space. Containers have a `colorIndex` and get an outline.
+/// A hint and the element it is shown on. `rect` is in Cocoa global space. Containers have a
+/// `colorIndex` and get an outline.
 struct HintMark {
     let rect: CGRect
-    let label: String
+    let code: String
     let colorIndex: Int?
 }
 
@@ -42,16 +41,18 @@ final class OverlayPanel: NSPanel {
     var onMouseDragged: ((CGPoint) -> Void)?
     var onMouseUp: ((CGPoint) -> Void)?
 
-    private let border = CALayer()
+    private let border = CAShapeLayer()
     private let labelBackground = CALayer()
     private let labelText = CATextLayer()
     private let hud = CALayer()
-    private let hudKeys = CATextLayer()
-    private let hudStatus = CATextLayer()
-    /// All outlines sit below all labels, so no outline crosses a label.
+    /// The mode's name and keys, laid out again only when the mode changes.
+    private let hudRow = CALayer()
+    private var hudRowContent: (name: String, keys: [HUDKey]) = ("", [])
+    private let hudStatus: CATextLayer
+    /// All outlines sit below all hints, so no outline crosses a hint.
     private let hintOutlines = CALayer()
-    private let hintLabels = CALayer()
-    /// Hint outlines and labels, grown on first use and reused after.
+    private let hints = CALayer()
+    /// Each hint's outline, background and text, grown on first use and reused after.
     private var hintLayers: [(outline: CALayer, background: CALayer, text: CATextLayer)] = []
     /// Region mode: the dimming around the region, and the cursor.
     private let regionDim = SelectionStyle.makeDim()
@@ -60,6 +61,7 @@ final class OverlayPanel: NSPanel {
 
     init(screen: NSScreen) {
         editor = EditorLayer(size: screen.frame.size, scale: screen.backingScaleFactor)
+        hudStatus = HUD.makeStatus(scale: screen.backingScaleFactor)
         super.init(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         setFrame(screen.frame, display: false)
         isOpaque = false
@@ -79,21 +81,22 @@ final class OverlayPanel: NSPanel {
         view.onMouseUp = { [weak self] in self?.onMouseUp?($0) }
         contentView = view
 
-        border.borderWidth = Style.borderWidth
-        border.borderColor = Style.color.cgColor
-        border.cornerCurve = .continuous
+        border.frame = view.bounds
+        border.fillColor = Style.color.cgColor
+        border.fillRule = .evenOdd
 
         labelBackground.backgroundColor = Style.color.cgColor
-        labelBackground.cornerRadius = 6
-        configure(labelText, font: Style.labelFont, color: .white, scale: screen.backingScaleFactor)
+        labelBackground.shadowColor = Palette.hintLeaf.cgColor
+        labelBackground.shadowOpacity = 1
+        labelBackground.shadowRadius = 0
+        labelBackground.shadowOffset = CGSize(width: Style.labelShadow, height: -Style.labelShadow)
+        HUD.configure(labelText, font: Style.labelFont, color: .white, scale: screen.backingScaleFactor)
         labelBackground.addSublayer(labelText)
 
-        hud.backgroundColor = Style.hudBackground.cgColor
-        hud.cornerRadius = 10
+        HUD.stylePanel(hud)
         hud.isHidden = true
-        configure(hudKeys, font: Style.hudKeysFont, color: .white, scale: screen.backingScaleFactor)
-        configure(hudStatus, font: Style.hudStatusFont, color: Palette.textSecondary, scale: screen.backingScaleFactor)
-        hud.addSublayer(hudKeys)
+        hudRow.masksToBounds = true
+        hud.addSublayer(hudRow)
         hud.addSublayer(hudStatus)
 
         regionDim.frame = view.bounds
@@ -104,9 +107,9 @@ final class OverlayPanel: NSPanel {
         view.layer?.addSublayer(border)
         view.layer?.addSublayer(labelBackground)
         hintOutlines.frame = view.bounds
-        hintLabels.frame = view.bounds
+        hints.frame = view.bounds
         view.layer?.addSublayer(hintOutlines)
-        view.layer?.addSublayer(hintLabels)
+        view.layer?.addSublayer(hints)
         view.layer?.addSublayer(crosshair)
         view.layer?.addSublayer(hud)
         view.layer?.addSublayer(editor.root)
@@ -123,8 +126,8 @@ final class OverlayPanel: NSPanel {
     }
 
     /// `rect` is in Cocoa global space. Parts outside this screen are clipped by the panel. Nil, as in
-    /// region mode before anything is drawn, hides the highlight. `cornerRadius` is the target's own.
-    func highlight(_ rect: CGRect?, label: String, cornerRadius: CGFloat) {
+    /// region mode before anything is drawn, hides the highlight.
+    func highlight(_ rect: CGRect?, label: String) {
         let local = rect?.offsetBy(dx: -frame.minX, dy: -frame.minY)
         let bounds = CGRect(origin: .zero, size: frame.size)
         let visible = local?.intersects(bounds) ?? false
@@ -136,9 +139,12 @@ final class OverlayPanel: NSPanel {
         // where it stays visible.
         let outset = local.insetBy(dx: -Style.borderWidth, dy: -Style.borderWidth)
         let isInset = bounds.contains(local) && !bounds.contains(outset)
-        border.frame = isInset ? local : outset
-        // Outside the target, the border's radius grows by its width so it runs parallel to the corner.
-        border.cornerRadius = isInset ? cornerRadius : cornerRadius + Style.borderWidth
+        let outer = isInset ? local : outset
+        // A ring, through the even-odd fill: the outer shape and the same shape one border width in.
+        let path = CGMutablePath()
+        path.addPixelRoundedRect(outer, pixel: Style.borderWidth)
+        path.addPixelRoundedRect(outer.insetBy(dx: Style.borderWidth, dy: Style.borderWidth), pixel: Style.borderWidth)
+        border.path = path
 
         let textSize = (label as NSString).size(withAttributes: [.font: Style.labelFont])
         let maxWidth = max(0, local.width - 2 * Style.labelInset - 2 * Style.labelPadding.width)
@@ -150,33 +156,61 @@ final class OverlayPanel: NSPanel {
             width: size.width,
             height: size.height
         )
-        labelText.frame = CGRect(x: Style.labelPadding.width, y: Style.labelPadding.height, width: textWidth, height: ceil(textSize.height))
+        labelBackground.shadowPath = CGPath(rect: CGRect(origin: .zero, size: size), transform: nil)
+        labelText.frame = CGRect(
+            x: Style.labelPadding.width, y: HUD.textY(Style.labelFont, lineHeight: ceil(textSize.height), in: size.height, scale: backingScaleFactor),
+            width: textWidth, height: ceil(textSize.height)
+        )
         labelText.string = label
     }
 
-    /// The mode's keys, and an optional status line below them, at the bottom centre of the screen.
-    func showHUD(keys: String, status: String, visible: Bool) {
+    /// The mode's name and keys, and an optional status line below them, at the bottom centre of the screen.
+    func showHUD(name: String, keys: [HUDKey], status: String, visible: Bool) {
         hud.isHidden = !visible
         guard visible else { return }
 
-        let keysSize = textSize(keys, font: Style.hudKeysFont)
-        let statusSize = status.isEmpty ? .zero : textSize(status, font: Style.hudStatusFont)
-        let statusHeight = status.isEmpty ? 0 : statusSize.height + Style.hudLineGap
-        let maxWidth = frame.width - 2 * Style.hudPadding.width
-        let width = min(max(keysSize.width, statusSize.width), maxWidth)
-        let height = keysSize.height + statusHeight + 2 * Style.hudPadding.height
+        if hudRowContent.name != name || hudRowContent.keys != keys {
+            layOutHUDRow(name: name, keys: keys)
+            hudRowContent = (name, keys)
+        }
+        let rowSize = hudRow.bounds.size
+        let statusSize = status.isEmpty ? .zero : HUD.textSize(status, font: HUD.textFont)
+        let statusHeight = status.isEmpty ? 0 : statusSize.height + HUD.lineGap
+        let maxWidth = frame.width - 2 * HUD.padding.width
+        let width = min(max(rowSize.width, statusSize.width), maxWidth)
+        let height = rowSize.height + statusHeight + 2 * HUD.padding.height
 
         hud.frame = CGRect(
-            x: ((frame.width - width) / 2 - Style.hudPadding.width).rounded(),
+            x: ((frame.width - width) / 2 - HUD.padding.width).rounded(),
             y: Style.hudBottomInset,
-            width: width + 2 * Style.hudPadding.width,
+            width: width + 2 * HUD.padding.width,
             height: height
         )
-        hudKeys.frame = CGRect(x: Style.hudPadding.width, y: Style.hudPadding.height + statusHeight, width: width, height: keysSize.height)
-        hudKeys.string = keys
+        hud.shadowPath = CGPath(rect: hud.bounds, transform: nil)
+        // A row wider than the screen is cut off by the row's own bounds, not the HUD's, so the shadow stays.
+        hudRow.frame = CGRect(x: HUD.padding.width, y: HUD.padding.height + statusHeight, width: min(rowSize.width, width), height: rowSize.height)
         hudStatus.isHidden = status.isEmpty
-        hudStatus.frame = CGRect(x: Style.hudPadding.width, y: Style.hudPadding.height, width: width, height: statusSize.height)
+        hudStatus.frame = CGRect(x: HUD.padding.width, y: HUD.padding.height, width: width, height: statusSize.height)
         hudStatus.string = status
+    }
+
+    /// The mode's name in the pixel font, then each entry's keys as keycaps followed by what they do,
+    /// in one row sized to fit, centred vertically.
+    private func layOutHUDRow(name: String, keys: [HUDKey]) {
+        hudRow.sublayers?.forEach { $0.removeFromSuperlayer() }
+        let entries = keys.map { HUD.makeEntry($0, scale: backingScaleFactor).layer }
+        let nameHeight = HUD.textSize(name, font: HUD.nameFont).height
+        let height = max(nameHeight, entries.map(\.frame.height).max() ?? 0)
+        let nameLayer = HUD.makeName(name, rowHeight: height, scale: backingScaleFactor)
+        hudRow.addSublayer(nameLayer)
+        var x = nameLayer.frame.width
+        for entry in entries {
+            x += HUD.entryGap
+            entry.frame.origin = CGPoint(x: x, y: ((height - entry.frame.height) / 2).rounded())
+            hudRow.addSublayer(entry)
+            x += entry.frame.width
+        }
+        hudRow.bounds.size = CGSize(width: x, height: height)
     }
 
     /// Region mode: dims everything around `rect` and shows the cursor, both in Cocoa global space.
@@ -222,9 +256,9 @@ final class OverlayPanel: NSPanel {
         return CGPoint(x: cocoa.x - frame.minX, y: cocoa.y - frame.minY)
     }
 
-    /// Labels at the top-left corner of each mark. Containers also get an outline in their label's
-    /// color, so a label can be matched to the area it stands for. The first `typed` letters of each
-    /// label are dimmed.
+    /// Each hint at the top-left corner of its element. Containers also get an outline in their hint's
+    /// color, so a hint can be matched to the area it stands for. The first `typed` letters of each
+    /// hint are dimmed.
     func showHints(_ marks: [HintMark], typed: Int) {
         let bounds = CGRect(origin: .zero, size: frame.size)
         var used = 0
@@ -240,18 +274,18 @@ final class OverlayPanel: NSPanel {
             outline.frame = local.insetBy(dx: 1, dy: 1)
             outline.borderColor = color.cgColor
 
-            let size = textSize(mark.label, font: Style.hintFont)
-            let labelSize = CGSize(width: size.width + 2 * Style.hintPadding.width, height: size.height + 2 * Style.hintPadding.height)
+            let size = HUD.textSize(mark.code, font: Style.hintFont)
+            let hintSize = CGSize(width: size.width + 2 * Style.hintPadding.width, height: size.height + 2 * Style.hintPadding.height)
             let origin = CGPoint(
-                x: min(max(local.minX, 0), bounds.width - labelSize.width),
-                y: min(max(local.maxY - labelSize.height, 0), bounds.height - labelSize.height)
+                x: min(max(local.minX, 0), bounds.width - hintSize.width),
+                y: min(max(local.maxY - hintSize.height, 0), bounds.height - hintSize.height)
             )
-            background.frame = CGRect(origin: origin, size: labelSize)
+            background.frame = CGRect(origin: origin, size: hintSize)
             background.backgroundColor = color.cgColor
             background.isHidden = false
             text.frame = CGRect(x: Style.hintPadding.width, y: Style.hintPadding.height, width: size.width, height: size.height)
-            let string = NSMutableAttributedString(string: mark.label, attributes: [.font: Style.hintFont, .foregroundColor: NSColor.black])
-            string.addAttribute(.foregroundColor, value: NSColor(white: 0, alpha: 0.35), range: NSRange(location: 0, length: min(typed, mark.label.utf16.count)))
+            let string = NSMutableAttributedString(string: mark.code, attributes: [.font: Style.hintFont, .foregroundColor: Palette.ink])
+            string.addAttribute(.foregroundColor, value: Palette.ink.withAlphaComponent(0.35), range: NSRange(location: 0, length: min(typed, mark.code.utf16.count)))
             text.string = string
         }
         for unused in hintLayers[used...] {
@@ -263,31 +297,32 @@ final class OverlayPanel: NSPanel {
     private func makeHintLayer() -> (outline: CALayer, background: CALayer, text: CATextLayer) {
         let outline = CALayer()
         outline.borderWidth = 2
-        outline.cornerRadius = 4
         hintOutlines.addSublayer(outline)
 
         let background = CALayer()
-        background.cornerRadius = 3
         background.borderColor = NSColor(white: 0, alpha: 0.4).cgColor
         background.borderWidth = 0.5
         let text = CATextLayer()
         text.contentsScale = backingScaleFactor
         background.addSublayer(text)
-        hintLabels.addSublayer(background)
+        hints.addSublayer(background)
         return (outline, background, text)
     }
+}
 
-    private func configure(_ layer: CATextLayer, font: NSFont, color: NSColor, scale: CGFloat) {
-        layer.font = font
-        layer.fontSize = font.pointSize
-        layer.foregroundColor = color.cgColor
-        layer.contentsScale = scale
-        layer.truncationMode = .end
-    }
-
-    private func textSize(_ text: String, font: NSFont) -> CGSize {
-        let size = (text as NSString).size(withAttributes: [.font: font])
-        return CGSize(width: ceil(size.width), height: ceil(size.height))
+private extension CGMutablePath {
+    /// `rect` with a `pixel`-sized square left out of each corner, the logo's pixel-art rounding.
+    func addPixelRoundedRect(_ rect: CGRect, pixel: CGFloat) {
+        let p = min(pixel, rect.width / 2, rect.height / 2)
+        addLines(between: [
+            CGPoint(x: rect.minX + p, y: rect.minY), CGPoint(x: rect.maxX - p, y: rect.minY),
+            CGPoint(x: rect.maxX - p, y: rect.minY + p), CGPoint(x: rect.maxX, y: rect.minY + p),
+            CGPoint(x: rect.maxX, y: rect.maxY - p), CGPoint(x: rect.maxX - p, y: rect.maxY - p),
+            CGPoint(x: rect.maxX - p, y: rect.maxY), CGPoint(x: rect.minX + p, y: rect.maxY),
+            CGPoint(x: rect.minX + p, y: rect.maxY - p), CGPoint(x: rect.minX, y: rect.maxY - p),
+            CGPoint(x: rect.minX, y: rect.minY + p), CGPoint(x: rect.minX + p, y: rect.minY + p),
+        ])
+        closeSubpath()
     }
 }
 

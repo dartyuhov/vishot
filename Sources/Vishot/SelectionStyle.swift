@@ -22,7 +22,7 @@ enum SelectionStyle {
             arms.path = path
             arms.strokeColor = color.cgColor
             arms.lineWidth = width
-            arms.lineCap = .round
+            arms.lineCap = .square
             crosshair.addSublayer(arms)
         }
         return crosshair

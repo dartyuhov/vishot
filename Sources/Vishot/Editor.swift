@@ -75,7 +75,7 @@ final class EditorController {
     private var history = EditHistory()
     private let cursor: KeyboardCursor
     private var tool = Tool.arrow
-    private var color = AnnotationColor.red
+    private var color = AnnotationColor.purple
     /// The image's top-left, in CoreGraphics global space.
     private let imageOrigin: CGPoint
     /// The last key asked to discard, so the next esc does it.
@@ -435,7 +435,7 @@ final class EditorController {
         if !message.isEmpty { return message }
         switch action {
         case .idle:
-            return "\(color.name) · 1–6 or tab color · hjkl move (⇧ far, ⌥ slow) · 0 $ g G M jump"
+            return "\(color.name) · hjkl move (⇧ far, ⌥ slow) · 0 $ g G M jump"
         case .anchored:
             return "\(color.name) \(tool.name) · move, then ↵ or \(tool.key) to finish · esc cancel"
         case .dragging:

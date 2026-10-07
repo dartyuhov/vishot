@@ -1,8 +1,8 @@
 import Carbon.HIToolbox
 
-/// Vimium-style labels for hint mode. All labels have the same length, so a label is complete as soon
+/// Vimium-style hints for hint mode. All hints have the same length, so a hint is complete as soon
 /// as it is typed.
-enum HintLabels {
+enum Hints {
     /// Home row first, then the rows above and below.
     private static let alphabet = Array("asdfghjklqwertyuiopzxcvbnm").map(String.init)
 
@@ -16,7 +16,7 @@ enum HintLabels {
         kVK_ANSI_Z: "z",
     ]
 
-    /// At most 26 × 26 labels.
+    /// At most 26 × 26 hints.
     static func make(count: Int) -> [String] {
         if count <= alphabet.count { return Array(alphabet.prefix(count)) }
         let pairs = alphabet.lazy.flatMap { first in alphabet.lazy.map { first + $0 } }

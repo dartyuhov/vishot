@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Regenerates Resources/AppIcon.icns from Resources/logo/vishot-mark.svg. Needs rsvg-convert (brew install librsvg).
+# Regenerates Resources/AppIcon.icns and site/favicon.svg from Resources/logo/vishot-mark.svg, the one source of the logo.
+# Needs rsvg-convert (brew install librsvg).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,3 +18,6 @@ for size in 16 32 128 256 512; do
 done
 iconutil -c icns "$SET" -o Resources/AppIcon.icns
 echo "Wrote Resources/AppIcon.icns"
+
+cp Resources/logo/vishot-mark.svg site/favicon.svg
+echo "Wrote site/favicon.svg"

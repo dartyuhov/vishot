@@ -25,7 +25,7 @@ final class WatermarkTests: XCTestCase {
         let image = try XCTUnwrap(Self.whiteImage(width: 400, height: 300))
         let badge = try XCTUnwrap(Watermark.badgeRect(in: CGSize(width: 400, height: 300)))
         let output = Watermark.apply(to: image, scale: 1)
-        // Inside the pill's left padding: the dark fill, not the text.
+        // Inside the plate's left padding: the dark fill, not the text.
         XCTAssertLessThan(Self.red(of: output, x: Int(badge.minX) + 4, y: Int(badge.midY)), 100)
         XCTAssertEqual(Self.red(of: output, x: 0, y: 0), 255)
         XCTAssertEqual(Self.red(of: output, x: Int(badge.minX) - 2, y: Int(badge.midY)), 255)

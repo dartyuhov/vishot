@@ -15,6 +15,9 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/Vishot" "$APP/Contents/MacOS/Vishot"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# The landing page's fonts, which the overlay and the editor use too (Fonts.swift).
+mkdir -p "$APP/Contents/Resources/Fonts"
+cp site/fonts/*.woff2 "$APP/Contents/Resources/Fonts/"
 codesign --force --options runtime --sign "$IDENTITY" "$APP"
 echo "Built $APP"
 

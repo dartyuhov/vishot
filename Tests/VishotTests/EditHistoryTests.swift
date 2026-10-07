@@ -3,7 +3,7 @@ import XCTest
 
 final class EditHistoryTests: XCTestCase {
     private let arrow = Annotation.arrow(from: CGPoint(x: 1, y: 2), to: CGPoint(x: 30, y: 40), color: .red)
-    private let rect = Annotation.rect(CGRect(x: 5, y: 5, width: 10, height: 10), color: .blue)
+    private let rect = Annotation.rect(CGRect(x: 5, y: 5, width: 10, height: 10), color: .purple)
     private let crop = CGRect(x: 0, y: 0, width: 50, height: 50)
 
     func testUndoRestoresTheSnapshotPushedBeforeAChange() {
