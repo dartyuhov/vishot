@@ -379,6 +379,12 @@
     const ctx = canvas.getContext('2d');
     const p = painter(ctx);
 
+    // The size of one of the demo's pixels on the page, so the selection border around the active
+    // feature and an open answer is drawn as thick as the one in the demo.
+    new ResizeObserver(() => {
+      document.documentElement.style.setProperty('--px', `${canvas.clientWidth / canvas.width}px`);
+    }).observe(canvas);
+
     const desktop = document.createElement('canvas');
     desktop.width = 192;
     desktop.height = 120;
@@ -599,16 +605,43 @@
       });
     }
 
-    // The pixel grid drifts at a third of the scroll speed, so the sections slide over it.
+    // Depth while scrolling. The backdrop's far pixels move at a sixth of the scroll speed and
+    // its grid at two fifths, so both fall behind the page. Each section's pieces get ahead of
+    // it instead, the later ones more, by a fraction of how far the section is from the top of
+    // the window. Only where the page snaps: there a section is one window tall and comes to
+    // rest at the top, where every piece is back in place. In a long scrolling column the
+    // pieces would drift into each other.
+    const depth = [
+      ['#intro', [['.headline', 0.05], ['.subline', 0.1], ['.hero-row', 0.18]]],
+      ['#guide', [['.screen', 0.08], ['.features', 0.18]]],
+      ['#faq', [['.faq-title', 0.05], ['.faq-list', 0.12], ['.closing', 0.2]]],
+    ].map(([section, pieces]) => ({
+      section: document.querySelector(section),
+      pieces: pieces.map(([sel, k]) => ({ el: document.querySelector(sel), k })),
+    }));
+    for (const { pieces } of depth) for (const { el } of pieces) el.classList.add('depth');
+    const snaps = matchMedia('(min-width: 961px) and (min-height: 640px)');
+    const root = document.body.style;
+
+    function drift() {
+      root.setProperty('--far', `${-Math.round(scrollY / 6 % 128)}px`);
+      root.setProperty('--near', `${-Math.round(scrollY * 0.4 % 32)}px`);
+      const h = innerHeight;
+      for (const { section, pieces } of depth) {
+        const at = snaps.matches ? Math.max(-1, Math.min(1, section.getBoundingClientRect().top / h)) : 0;
+        for (const { el, k } of pieces) el.style.setProperty('--lift', `${Math.round(at * k * h)}px`);
+      }
+    }
+
     let scrollQueued = false;
-    addEventListener('scroll', () => {
+    const queueDrift = () => {
       if (scrollQueued) return;
       scrollQueued = true;
-      requestAnimationFrame(() => {
-        scrollQueued = false;
-        document.body.style.backgroundPositionY = `${-1 - Math.round(scrollY / 3)}px`;
-      });
-    }, { passive: true });
+      requestAnimationFrame(() => { scrollQueued = false; drift(); });
+    };
+    addEventListener('scroll', queueDrift, { passive: true });
+    addEventListener('resize', queueDrift);
+    drift();
   }
 
   // The dots mark the section that holds most of the window.
