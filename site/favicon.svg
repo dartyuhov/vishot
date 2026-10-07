@@ -1,22 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="512" height="512" shape-rendering="crispEdges">
-  <!-- Pixel art on a 40×40 grid, one unit per pixel, to match the landing page. Shapes are painted in order. -->
-  <!-- stepped rounded square -->
-  <path fill="#12121A" d="M4 0H36V1H37V2H38V3H39V4H40V36H39V37H38V38H37V39H36V40H4V39H3V38H2V37H1V36H0V4H1V3H2V2H3V1H4Z"/>
-  <!-- selection border, Palette.accent, corner pixels left out so it reads as rounded -->
-  <path fill="#6B5CFA" d="M4 12h32v1h1v22h-1v1h-32v-1h-1v-22h1z"/>
-  <path fill="#12121A" d="M5 13h30v1h1v20h-1v1h-30v-1h-1v-20h1z"/>
-  <!-- window -->
-  <path fill="#2A2A40" d="M6 14h28v1h1v18h-1v1h-28v-1h-1v-18h1z"/>
-  <path fill="#3A3A5C" d="M5 17h30v1h-30z"/>
-  <path fill="#FFFFFF" fill-opacity=".5" d="M7 15h1v1h-1zM9 15h1v1h-1zM11 15h1v1h-1z"/>
-  <!-- the target label, drawn above the border (the app draws it inside), flush with the border's outer left edge -->
-  <path fill="#6B5CFA" d="M3 5h25v6h-25z"/>
-  <!-- "vishot" in the pixel font's small capitals, like the landing page's header -->
-  <path fill="#FFFFFF" d="
-    M4 6h1v3h-1zM6 6h1v3h-1zM5 9h1v1h-1z
-    M8 6h3v1h-3zM9 7h1v2h-1zM8 9h3v1h-3z
-    M13 6h2v1h-2zM12 7h1v1h-1zM14 8h1v1h-1zM12 9h2v1h-2z
-    M16 6h1v4h-1zM18 6h1v4h-1zM17 7h1v1h-1z
-    M21 6h1v1h-1zM20 7h1v2h-1zM22 7h1v2h-1zM21 9h1v1h-1z
-    M24 6h3v1h-3zM25 7h1v3h-1z"/>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 32 32" width="512" height="512" shape-rendering="crispEdges">
+  <!-- The 32 px master: pixel art on a 32×32 grid, one unit per pixel, scaled only by whole numbers
+       (scripts/icon.sh). 16 px has its own master, vishot-mark-16.svg. Shapes are painted in order. -->
+  <!-- Palette.hintLeaf hard shadow, one cell down and right -->
+  <path fill="#FFD147" d="M5 4H29V5H30V29H29V30H5V29H4V5H5Z"/>
+  <!-- Palette.accent plate, 26 of 32 like macOS's 824 of 1024, a corner cell left out -->
+  <path fill="#6B5CFA" d="M4 3H28V4H29V28H28V29H4V28H3V4H4Z"/>
+  <!-- the pixel font's v, mirror-symmetric and centered on the plate -->
+  <defs>
+    <path id="v" d="M9 8h4v7h-4zM19 8h4v7h-4zM10 15h4v2h-4zM18 15h4v2h-4zM11 17h4v2h-4zM17 17h4v2h-4zM12 19h8v1h-8zM13 20h6v1h-6zM14 21h4v1h-4z"/>
+  </defs>
+  <!-- its extrusion in a shade of the accent: the v again, two cells deep -->
+  <use xlink:href="#v" fill="#4637C7" transform="translate(2 2)"/>
+  <use xlink:href="#v" fill="#4637C7" transform="translate(1 1)"/>
+  <use xlink:href="#v" fill="#EDEDF5"/>
 </svg>

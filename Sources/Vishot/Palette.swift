@@ -3,10 +3,10 @@ import AppKit
 /// Every color the UI draws, in one place so the app, the logo and the landing page share one look.
 /// The names in comments are the landing page's CSS variables (site/style.css).
 enum Palette {
-    /// The brand accent, a vivid indigo. Selection border, active tool, crop outline. `--accent`.
+    /// The brand accent, a vivid indigo. The logo's plate, selection border, active tool, crop outline. `--accent`.
     static let accent = NSColor(rgb: 0x6B5CFA)
 
-    /// The darkest surface: the logo's background, the watermark's plate, text on light chips. `--bg`.
+    /// The darkest surface: the watermark's plate, text on light chips. `--bg`.
     static let ink = NSColor(rgb: 0x12121A)
     /// The HUD and the editor toolbar. `--surface`.
     static let surface = NSColor(rgb: 0x1B1B28)

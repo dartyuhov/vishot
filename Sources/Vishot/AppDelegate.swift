@@ -90,24 +90,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = item
     }
 
-    /// The logo's label and selection border around a window, as pixel art on an 18 pt grid. A template
-    /// image, so the menu bar tints it.
+    /// The logo's plate and v (Resources/logo/vishot-mark-16.svg), one point per pixel. A template image
+    /// has only alpha, so the v is cut out of the plate and its extrusion is half see-through. The menu
+    /// bar tints it.
     private static func statusImage() -> NSImage {
-        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { _ in
-            NSColor.black.setFill()
-            let pixels = [
-                // label
-                NSRect(x: 2, y: 2, width: 9, height: 3),
-                // selection border, corner pixels left out so it reads as rounded
-                NSRect(x: 3, y: 6, width: 12, height: 1), NSRect(x: 3, y: 15, width: 12, height: 1),
-                NSRect(x: 2, y: 7, width: 1, height: 8), NSRect(x: 15, y: 7, width: 1, height: 8),
-                NSRect(x: 3, y: 7, width: 1, height: 1), NSRect(x: 14, y: 7, width: 1, height: 1),
-                NSRect(x: 3, y: 14, width: 1, height: 1), NSRect(x: 14, y: 14, width: 1, height: 1),
-                // window: title bar, then body
-                NSRect(x: 5, y: 8, width: 8, height: 1), NSRect(x: 4, y: 9, width: 10, height: 1),
-                NSRect(x: 4, y: 11, width: 10, height: 2), NSRect(x: 5, y: 13, width: 8, height: 1),
-            ]
-            pixels.forEach { $0.fill() }
+        let rows = [
+            ".###########.",
+            "#############",
+            "###  ###  ###",
+            "###  +##  +##",
+            "###  +##  +##",
+            "###  +##  +##",
+            "###  +##  +##",
+            "####  #  ++##",
+            "#####   ++###",
+            "###### ++####",
+            "#######+#####",
+            "#############",
+            ".###########.",
+        ]
+        let image = NSImage(size: NSSize(width: 13, height: 13), flipped: true) { _ in
+            for (y, row) in rows.enumerated() {
+                for (x, cell) in row.enumerated() where cell == "#" || cell == "+" {
+                    NSColor.black.withAlphaComponent(cell == "#" ? 1 : 0.5).setFill()
+                    NSRect(x: x, y: y, width: 1, height: 1).fill()
+                }
+            }
             return true
         }
         image.isTemplate = true

@@ -71,7 +71,7 @@ enum PixelArt {
     }
 
     /// A one-cell ring around the cells `rect` touches, with the outer corner cells left out and the
-    /// inner ones filled, like the logo's selection border. Too small for a ring, the cells are all filled.
+    /// inner ones filled, like the selection border. Too small for a ring, the cells are all filled.
     static func outline(_ rect: CGRect) -> [Cell] {
         let low = cell(at: CGPoint(x: rect.minX, y: rect.minY))
         let high = cell(at: CGPoint(x: max(rect.minX, rect.maxX - cell / 2), y: max(rect.minY, rect.maxY - cell / 2)))

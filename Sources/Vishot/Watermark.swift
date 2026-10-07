@@ -16,8 +16,8 @@ enum Watermark {
     private static let shadowColor = Palette.hintLeaf.cgColor
     private static let textColor = Palette.text.cgColor
 
-    /// The small capitals of the pixel font, rows top to bottom. The logo's wordmark uses the same
-    /// glyphs; the landing page's demo (site/main.js) has the full-height capitals.
+    /// The small capitals of the pixel font, rows top to bottom, as the wordmark is set. The landing
+    /// page's demo (site/main.js) has the full-height capitals.
     private static let glyphs: [Character: [String]] = [
         "v": ["101", "101", "101", "010"],
         "i": ["111", "010", "010", "111"],

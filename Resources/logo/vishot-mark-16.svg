@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 16 16" width="16" height="16" shape-rendering="crispEdges">
+  <!-- The 16 px master: vishot-mark.svg redrawn for 16×16, where scaling it down would blur it.
+       The plate is 13 of 16 and the v is narrower and comes to a one-pixel point. -->
+  <path fill="#FFD147" d="M3 2H14V3H15V14H14V15H3V14H2V3H3Z"/>
+  <path fill="#6B5CFA" d="M2 1H13V2H14V13H13V14H2V13H1V2H2Z"/>
+  <defs>
+    <path id="v" d="M4 3h2v5h-2zM9 3h2v5h-2zM5 8h2v1h-2zM8 8h2v1h-2zM6 9h3v1h-3zM7 10h1v1h-1z"/>
+  </defs>
+  <use xlink:href="#v" fill="#4637C7" transform="translate(1 1)"/>
+  <use xlink:href="#v" fill="#EDEDF5"/>
+</svg>

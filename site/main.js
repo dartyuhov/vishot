@@ -33,7 +33,7 @@
   };
 
   // 3×5 pixel font, rows top to bottom. Its small capitals, for the wordmark, live in
-  // Sources/Vishot/Watermark.swift and Resources/logo/vishot-mark.svg.
+  // Sources/Vishot/Watermark.swift.
   const GLYPHS = {
     A: '010101111101101', C: '011100100100011', D: '110101101101110', E: '111100110100111',
     F: '111100110100100', I: '111010010010111', L: '100100100100111', M: '101111111101101',
