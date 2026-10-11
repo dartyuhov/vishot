@@ -516,6 +516,7 @@
     // The page answers to the same keys as the app.
     document.addEventListener('keydown', e => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select')) return;
+      if (document.querySelector('dialog[open]')) return;
       if (e.key === 'j') seekSegment(shownSeg + 1);
       else if (e.key === 'k') seekSegment(shownSeg - 1);
       else if (e.key >= '1' && e.key <= String(SEG_START.length)) seekSegment(Number(e.key) - 1);
@@ -802,5 +803,43 @@
     }
   }
 
+  // ---------- Demo video ----------
+  // The video lives on YouTube, and nothing from there loads until a visitor asks for it: the
+  // iframe is made when the dialog opens and removed when it closes, which also stops the sound.
+  // Without JavaScript the button is a plain link to the video.
+  const VIDEO_URL = 'https://www.youtube-nocookie.com/embed/mEV0ZhQbhLg?autoplay=1&rel=0&cc_load_policy=1';
+
+  function setUpVideo() {
+    const link = document.querySelector('.watch');
+    const dialog = document.getElementById('watch');
+    if (!link || !dialog || !dialog.showModal) return;
+    const frame = dialog.querySelector('.watch-frame');
+    let demoWasPlaying = false;
+
+    link.addEventListener('click', e => {
+      e.preventDefault();
+      const player = document.createElement('iframe');
+      player.src = VIDEO_URL;
+      player.title = 'Vishot demo video';
+      player.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
+      player.allowFullscreen = true;
+      player.referrerPolicy = 'strict-origin-when-cross-origin';
+      frame.replaceChildren(player);
+      // Two things moving at once is one too many.
+      demoWasPlaying = playing;
+      if (render) setPlaying(false);
+      dialog.showModal();
+    });
+
+    dialog.addEventListener('close', () => {
+      frame.replaceChildren();
+      if (render) setPlaying(demoWasPlaying);
+    });
+    // A click on the backdrop lands on the dialog itself, not on anything inside it.
+    dialog.addEventListener('click', e => { if (e.target === dialog) dialog.close(); });
+    dialog.querySelector('.watch-close').addEventListener('click', () => dialog.close());
+  }
+
+  setUpVideo();
   forms.forEach(setUp);
 })();

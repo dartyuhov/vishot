@@ -8,6 +8,10 @@
   <meta property="og:title" content="Vishot: the keyboard-first screenshot tool">
   <meta property="og:description" content="A keyboard-first, Vim-inspired screenshot tool for macOS. Join the waitlist.">
   <meta property="og:url" content="https://vishot.dev">
+  <meta property="og:image" content="https://vishot.dev/og.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="720">
+  <meta name="twitter:card" content="summary_large_image">
   <meta name="theme-color" content="#12121A">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preload" href="fonts/silkscreen-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
@@ -37,6 +41,11 @@
           Vishot is a Vim-inspired screenshot tool. Pick a window, an element or a single button,
           mark it up and paste it without leaving the keyboard.
         </p>
+
+        <a class="watch" href="https://youtu.be/mEV0ZhQbhLg" target="_blank" rel="noopener">
+          <svg viewBox="0 0 8 8" aria-hidden="true"><path d="M2 1h1v6H2zM3 2h1v4H3zM4 3h1v2H4zM5 3h1v2H5z"/></svg>
+          Watch the demo <time datetime="PT1M4S">1:04</time>
+        </a>
 
         <form id="waitlist" class="waitlist" action="/api/subscribe" method="post" novalidate>
           <label for="email">Get early access</label>
@@ -183,6 +192,15 @@
     </footer>
     </div>
   </main>
+
+  <dialog id="watch" class="watch-dialog" aria-label="Vishot demo video">
+    <div class="watch-bar">
+      <span class="watch-title">Demo</span>
+      <span class="watch-note">Plays from YouTube</span>
+      <button class="watch-close" type="button" aria-label="Close the video"><kbd>Esc</kbd> close</button>
+    </div>
+    <div class="watch-frame"></div>
+  </dialog>
 
   <nav class="dots" aria-label="Sections">
     <a href="#intro" aria-label="Intro"></a>

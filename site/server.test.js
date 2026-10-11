@@ -56,11 +56,16 @@ after(async () => {
 
 test('serves the landing page and its assets', async () => {
   for (const [url, type] of [['/', 'text/html'], ['/main.js', 'text/javascript'], ['/style.css', 'text/css'],
-    ['/favicon.svg', 'image/svg+xml'], ['/fonts/silkscreen-latin-400-normal.woff2', 'font/woff2']]) {
+    ['/favicon.svg', 'image/svg+xml'], ['/og.png', 'image/png'], ['/fonts/silkscreen-latin-400-normal.woff2', 'font/woff2']]) {
     const res = await fetch(base + url);
     assert.equal(res.status, 200, url);
     assert.ok(res.headers.get('content-type').startsWith(type), url);
   }
+});
+
+test('loads nothing from YouTube until the demo video is asked for', async () => {
+  const html = await (await fetch(base + '/')).text();
+  assert.ok(!/<iframe|youtube-nocookie|<(script|link|img)[^>]+(src|href)="https?:/i.test(html));
 });
 
 test('keeps server files and the database private', async () => {

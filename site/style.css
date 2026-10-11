@@ -213,6 +213,76 @@ kbd {
   font-size: 1.05rem;
 }
 
+/* ---------- Demo video ---------- */
+
+/* Under the text on narrow screens, pulled up out of the grid's gap. Wide ones put it beside the
+   sign-up button; see the media query below. */
+.watch {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: .7rem;
+  margin-top: -1.5rem;
+  box-sizing: border-box;
+  min-height: 48px;
+  padding: 0 1.2rem;
+  /* Cut like the sign-up button (size, type, a hard shadow it presses into), but in the page's
+     neutrals, so it doesn't compete with it. */
+  border: 2px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  font: 700 .95rem/1 var(--pixel);
+  text-transform: uppercase;
+  text-decoration: none;
+  box-shadow: 4px 4px 0 var(--line);
+  transition: transform .1s var(--step), box-shadow .1s var(--step), background-color .15s, border-color .15s;
+}
+.watch svg { width: 16px; height: 16px; fill: var(--hint); shape-rendering: crispEdges; }
+.watch time { color: var(--muted); }
+.watch:hover { background: var(--surface-2); border-color: #4a4a6a; }
+.watch:active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--line); }
+
+/* Beside the sign-up button: the second column starts where the form ends, and the margin skips
+   the form's label so the two buttons line up. */
+@media (min-width: 961px) {
+  .hero-row { grid-template-columns: minmax(0, 36rem) auto; column-gap: .75rem; }
+  .hero-row .waitlist { grid-column: 1; grid-row: 2; }
+  .watch { grid-column: 2; grid-row: 2; align-self: start; margin-top: 1.45rem; }
+}
+
+/* As wide as the window allows, but never taller than it: 16:9 frame plus the bar above it. */
+.watch-dialog {
+  width: min(1100px, 100vw - 2rem, (100svh - 6rem) * 16 / 9);
+  padding: 0;
+  border: 2px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 8px 8px 0 rgb(0 0 0 / 0.45);
+}
+.watch-dialog::backdrop { background: rgb(10 10 16 / 0.85); }
+.watch-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: .6rem .8rem;
+  border-bottom: 2px solid var(--line);
+  font-size: .8rem;
+}
+.watch-title { font: 700 .95rem/1 var(--pixel); text-transform: uppercase; letter-spacing: .04em; }
+.watch-note { color: var(--muted); }
+.watch-close {
+  margin-left: auto;
+  padding: .3rem .5rem;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.watch-close:hover { color: var(--text); }
+.watch-frame { aspect-ratio: 16 / 9; background: #000; }
+.watch-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
+
 /* ---------- Waitlist ---------- */
 
 .waitlist label {
@@ -619,7 +689,7 @@ kbd {
 
 @media (max-width: 520px) {
   .field { flex-direction: column; }
-  .field button { min-height: 52px; }
+  .field button, .watch { min-height: 52px; }
   .top-note { display: none; }
   .headline .line { display: inline; }
   .feature p { margin-left: 0; }
