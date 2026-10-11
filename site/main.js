@@ -515,7 +515,7 @@
 
     // The page answers to the same keys as the app.
     document.addEventListener('keydown', e => {
-      if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select')) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select, [role="combobox"]')) return;
       if (document.querySelector('dialog[open]')) return;
       if (e.key === 'j') seekSegment(shownSeg + 1);
       else if (e.key === 'k') seekSegment(shownSeg - 1);
@@ -660,11 +660,127 @@
 
   const forms = [...document.querySelectorAll('.waitlist')];
 
+  // Which link brought the visitor, from vishot.dev/?ref=reddit: sent along with the sign-up so
+  // the list shows where people come from. The server keeps only a short plain label like this.
+  const ref = (new URLSearchParams(location.search).get('ref') || '').trim().toLowerCase();
+
+  // A <select>'s list belongs to the system and can't be styled, so the page draws its own. The
+  // <select> stays in the form as the value that gets sent (and as the whole control without
+  // JavaScript); this one reads its options and writes its choice back. It follows the ARIA
+  // select-only combobox: arrows, Home/End, Enter or Space to choose, Esc to close, type a letter.
+  let dropdowns = 0;
+
+  function dropdown(select) {
+    const id = `dd-${++dropdowns}`;
+    const options = [...select.options];
+    const items = options.map((option, i) => {
+      const li = document.createElement('li');
+      li.id = `${id}-${i}`;
+      li.setAttribute('role', 'option');
+      li.textContent = option.value ? option.textContent : 'No answer';
+      return li;
+    });
+
+    const box = document.createElement('div');
+    box.className = 'dd';
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'dd-trigger';
+    trigger.setAttribute('role', 'combobox');
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.setAttribute('aria-controls', `${id}-list`);
+    trigger.setAttribute('aria-label', select.labels[0]?.textContent || 'Choose one');
+    const list = document.createElement('ul');
+    list.id = `${id}-list`;
+    list.className = 'dd-list';
+    list.setAttribute('role', 'listbox');
+    list.hidden = true;
+    list.append(...items);
+    box.append(trigger, list);
+    select.hidden = true;
+    select.after(box);
+
+    let active = 0;
+
+    function sync() {
+      const chosen = select.selectedIndex;
+      trigger.textContent = options[chosen].value ? options[chosen].textContent : options[0].textContent;
+      trigger.classList.toggle('placeholder', !options[chosen].value);
+      items.forEach((li, i) => li.setAttribute('aria-selected', String(i === chosen)));
+    }
+
+    function setActive(i) {
+      active = Math.max(0, Math.min(items.length - 1, i));
+      items.forEach((li, j) => li.classList.toggle('active', j === active));
+      trigger.setAttribute('aria-activedescendant', items[active].id);
+      items[active].scrollIntoView({ block: 'nearest' });
+    }
+
+    function setOpen(on) {
+      list.hidden = !on;
+      trigger.setAttribute('aria-expanded', String(on));
+      if (!on) { trigger.removeAttribute('aria-activedescendant'); return; }
+      // Open upwards when the window ends before the list does.
+      list.classList.toggle('up', innerHeight - trigger.getBoundingClientRect().bottom < list.offsetHeight + 16);
+      setActive(select.selectedIndex);
+    }
+
+    function pick(i) {
+      select.selectedIndex = i;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      sync();
+    }
+
+    trigger.addEventListener('click', () => setOpen(list.hidden));
+    trigger.addEventListener('keydown', e => {
+      const open = !list.hidden;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (open) setActive(active + (e.key === 'ArrowDown' ? 1 : -1)); else setOpen(true);
+      } else if ((e.key === 'Home' || e.key === 'End') && open) {
+        e.preventDefault();
+        setActive(e.key === 'Home' ? 0 : items.length - 1);
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        if (open) { pick(active); setOpen(false); } else setOpen(true);
+      } else if (e.key === 'Escape' && open) {
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen(false);
+      } else if (e.key === 'Tab' && open) {
+        pick(active);
+        setOpen(false);
+      } else if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        // Type a letter to jump to the next option that starts with it.
+        const at = [...items.keys()].filter(i => i > 0 && items[i].textContent.toLowerCase().startsWith(e.key.toLowerCase()));
+        const next = at.find(i => i > active) ?? at[0];
+        if (next === undefined) return;
+        if (!open) setOpen(true);
+        setActive(next);
+      }
+    });
+
+    // Clicking an option mustn't take focus off the trigger, or the list would close first.
+    list.addEventListener('mousedown', e => e.preventDefault());
+    list.addEventListener('click', e => {
+      const i = items.indexOf(e.target.closest('li'));
+      if (i < 0) return;
+      pick(i);
+      setOpen(false);
+    });
+    items.forEach((li, i) => li.addEventListener('mousemove', () => { if (active !== i) setActive(i); }));
+    addEventListener('pointerdown', e => { if (!box.contains(e.target)) setOpen(false); });
+    trigger.addEventListener('blur', () => setOpen(false));
+
+    sync();
+  }
+
   function setUp(form) {
     const input = form.querySelector('input[name="email"]');
     const error = form.querySelector('.error');
     const status = form.querySelector('.status');
-    const submit = form.querySelector('button');
+    const submit = form.querySelector('button[type="submit"]');
 
     function validate() {
       let message = '';
@@ -675,6 +791,13 @@
       return !message;
     }
 
+    // "Other" asks for a few words. Focus stays on the dropdown, so arrowing through the options
+    // doesn't get pulled into the text box on the way past.
+    const use = form.querySelector('select[name="use"]');
+    const useOther = form.querySelector('input[name="use_other"]');
+    use.addEventListener('change', () => { useOther.hidden = use.value !== 'Other'; });
+    dropdown(use);
+
     input.addEventListener('blur', () => { if (input.value) validate(); });
     input.addEventListener('input', () => { if (input.getAttribute('aria-invalid') === 'true') validate(); });
 
@@ -684,7 +807,9 @@
       submit.disabled = true;
       status.textContent = 'Joining…';
       try {
-        const result = await post(form.action, new URLSearchParams(new FormData(form)));
+        const body = new URLSearchParams(new FormData(form));
+        if (ref) body.set('ref', ref);
+        const result = await post(form.action, body);
         status.textContent = '';
         if (result === 'subscribed' || result === 'already') {
           // Both sign-ups say so, not only the one that was used.

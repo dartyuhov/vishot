@@ -10,7 +10,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 
-const PORT = Number(process.env.PORT) || 3000;
+// PORT=0 means "any free port", which the tests use, so don't treat it as unset.
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 const EXPORT_TOKEN = process.env.EXPORT_TOKEN || '';
 
 const db = new DatabaseSync(path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH || __dirname, 'waitlist.db'));
@@ -21,8 +22,17 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
   );
 `);
-const insert = db.prepare('INSERT INTO subscribers (email) VALUES (?) ON CONFLICT (email) DO NOTHING');
-const all = db.prepare('SELECT email, created_at FROM subscribers ORDER BY created_at');
+// Columns added after the first deploy, so existing databases get them here: what people
+// screenshot most (an optional answer), and which link brought them (`?ref=`).
+for (const column of ['use_case', 'source']) {
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('subscribers') WHERE name = ?").get(column)) {
+    db.exec(`ALTER TABLE subscribers ADD COLUMN ${column} TEXT`);
+  }
+}
+const insert = db.prepare('INSERT INTO subscribers (email, use_case, source) VALUES (?, ?, ?) ON CONFLICT (email) DO NOTHING');
+// Someone who was already on the list can still answer, once; a later answer never replaces it.
+const fill = db.prepare('UPDATE subscribers SET use_case = COALESCE(use_case, ?), source = COALESCE(source, ?) WHERE email = ?');
+const all = db.prepare('SELECT email, created_at, use_case, source FROM subscribers ORDER BY created_at');
 
 // ---------- Static files ----------
 // Only these are public, so server.js, package.json and node_modules never are.
@@ -52,6 +62,26 @@ const files = new Map(PUBLIC.map(name => [
 // ---------- Waitlist ----------
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// The choices in the form's dropdown (index.html), word for word. Anything else is dropped rather
+// than stored, and the answer is optional, so it never fails a sign-up.
+const USES = ['Whole screen', 'Bugs and errors', 'Parts of a window', 'Code and terminals', 'Web pages', 'Other'];
+
+// Which link brought someone here: the `ref` of vishot.dev/?ref=reddit, whatever it says. It is
+// only ever read back from the export, so it's kept short and tidy (lowercase, one line, 64
+// characters) rather than restricted; exportCsv() makes it safe to open in a spreadsheet.
+function source(fields) {
+  const ref = (fields.get('ref') || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  return Array.from(ref).slice(0, 64).join('') || null;
+}
+
+function useCase(fields) {
+  const choice = fields.get('use');
+  if (!USES.includes(choice)) return null;
+  if (choice !== 'Other') return choice;
+  const text = (fields.get('use_other') || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  return text ? `Other: ${text}` : 'Other';
+}
 
 // Five attempts per address per ten minutes, kept in memory: one instance, and a restart
 // forgetting the counts is harmless.
@@ -119,8 +149,13 @@ async function subscribe(req, res) {
   }
 
   try {
-    if (insert.run(email).changes) reply(201, 'subscribed', "You're on the list. We'll write when the beta opens.");
-    else reply(200, 'already', "You're already on the list.");
+    const use = useCase(fields);
+    const from = source(fields);
+    if (insert.run(email, use, from).changes) reply(201, 'subscribed', "You're on the list. We'll write when the beta opens.");
+    else {
+      if (use || from) fill.run(use, from, email);
+      reply(200, 'already', "You're already on the list.");
+    }
   } catch (err) {
     console.error('subscribe failed:', err.message);
     reply(500, 'error', "That didn't go through. Try again in a moment.");
@@ -137,9 +172,13 @@ function exportCsv(req, res) {
   }
   // Emails were validated to have no whitespace, but may still contain commas or quotes.
   const quote = s => `"${s.replaceAll('"', '""')}"`;
-  const rows = all.all().map(r => `${quote(r.email)},${r.created_at}`);
+  // The answer is one of USES or "Other: " and some text, so it can't start with =, + or @.
+  // The source is whatever the link said, so a spreadsheet must not read it as a formula: one
+  // that starts with = + - or @ gets a leading apostrophe. (The answer can't start with those.)
+  const safe = s => (/^[=+\-@]/.test(s) ? `'${s}` : s);
+  const rows = all.all().map(r => `${quote(r.email)},${r.created_at},${r.use_case ? quote(r.use_case) : ''},${r.source ? quote(safe(r.source)) : ''}`);
   res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Cache-Control': 'no-store' });
-  res.end(['email,created_at', ...rows].join('\n') + '\n');
+  res.end(['email,created_at,use_case,source', ...rows].join('\n') + '\n');
 }
 
 // ---------- Server ----------

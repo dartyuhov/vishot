@@ -7,6 +7,7 @@
   <meta name="description" content="A Vim-inspired screenshot tool for macOS. Pick a window or a single element with the keyboard, mark it up, and copy or save it without touching the mouse.">
   <meta property="og:title" content="Vishot: the keyboard-first screenshot tool">
   <meta property="og:description" content="A keyboard-first, Vim-inspired screenshot tool for macOS. Join the waitlist.">
+  <link rel="canonical" href="https://vishot.dev/">
   <meta property="og:url" content="https://vishot.dev">
   <meta property="og:image" content="https://vishot.dev/og.png">
   <meta property="og:image:width" content="1280">
@@ -52,17 +53,32 @@
           <div class="field">
             <input id="email" name="email" type="email" inputmode="email" autocomplete="email"
                    placeholder="you@example.com" required aria-describedby="email-error privacy">
+            <p id="email-error" class="error" role="alert"></p>
+            <div class="use">
+              <label class="visually-hidden" for="use">What do you screenshot most? (optional)</label>
+              <select id="use" name="use" aria-describedby="privacy">
+                <option value="">I mostly screenshot…</option>
+                <option>Whole screen</option>
+                <option>Bugs and errors</option>
+                <option>Parts of a window</option>
+                <option>Code and terminals</option>
+                <option>Web pages</option>
+                <option>Other</option>
+              </select>
+              <input id="use-other" name="use_other" type="text" maxlength="120"
+                     placeholder="Tell us what" aria-label="What else do you screenshot?" autocomplete="off" hidden>
+            </div>
             <button type="submit">Join waitlist</button>
           </div>
           <div class="trap" aria-hidden="true">
             <label for="website">Leave this empty</label>
             <input id="website" name="website" type="text" tabindex="-1" autocomplete="off">
           </div>
-          <p id="email-error" class="error" role="alert"></p>
           <p class="status" role="status" aria-live="polite"></p>
           <p id="privacy" class="privacy">
-            We will notify you once the early build is available. Your email will be stored by Vishot,
-            used only to send you Vishot news, never shared, and deleted on request.
+            We will notify you once the early build is available. Your email, the link that brought
+            you here, and your answer if you give one will be stored by Vishot, used only to send you
+            Vishot news and to decide what to build first, never shared, and deleted on request.
           </p>
         </form>
       </div>
@@ -171,17 +187,32 @@
         <div class="field">
           <input id="email-2" name="email" type="email" inputmode="email" autocomplete="email"
                  placeholder="you@example.com" required aria-describedby="email-error-2 privacy-2">
+          <p id="email-error-2" class="error" role="alert"></p>
+          <div class="use">
+            <label class="visually-hidden" for="use-2">What do you screenshot most? (optional)</label>
+            <select id="use-2" name="use" aria-describedby="privacy-2">
+              <option value="">I mostly screenshot…</option>
+              <option>Whole screen</option>
+              <option>Bugs and errors</option>
+              <option>Parts of a window</option>
+              <option>Code and terminals</option>
+              <option>Web pages</option>
+              <option>Other</option>
+            </select>
+            <input id="use-other-2" name="use_other" type="text" maxlength="120"
+                   placeholder="Tell us what" aria-label="What else do you screenshot?" autocomplete="off" hidden>
+          </div>
           <button type="submit">Join waitlist</button>
         </div>
         <div class="trap" aria-hidden="true">
           <label for="website-2">Leave this empty</label>
           <input id="website-2" name="website" type="text" tabindex="-1" autocomplete="off">
         </div>
-        <p id="email-error-2" class="error" role="alert"></p>
         <p class="status" role="status" aria-live="polite"></p>
         <p id="privacy-2" class="privacy">
-          We will notify you once the early build is available. Your email will be stored by Vishot,
-          used only to send you Vishot news, never shared, and deleted on request.
+          We will notify you once the early build is available. Your email, the link that brought
+          you here, and your answer if you give one will be stored by Vishot, used only to send you
+          Vishot news and to decide what to build first, never shared, and deleted on request.
         </p>
       </form>
     </section>
