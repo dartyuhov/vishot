@@ -1,7 +1,25 @@
 import XCTest
+import UniformTypeIdentifiers
 @testable import Vishot
 
 final class WatermarkTests: XCTestCase {
+    func testOutputSnapshotsWatermarkAndEncodesBothClipboardFormats() throws {
+        let image = try XCTUnwrap(Self.whiteImage(width: 400, height: 300))
+        var preference = false
+        let output = ImageOutput(image: image, scale: 1, watermark: preference)
+        preference = true
+        for type in [UTType.png, UTType.tiff] {
+            let data = try XCTUnwrap(output.data(type: type))
+            let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+            let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+            XCTAssertEqual(Self.red(of: decoded, x: 270, y: 270), 255)
+        }
+        let marked = ImageOutput(image: image, scale: 1, watermark: preference)
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(try XCTUnwrap(marked.data(type: .png)) as CFData, nil))
+        let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        let badge = try XCTUnwrap(Watermark.badgeRect(in: CGSize(width: 400, height: 300)))
+        XCTAssertLessThan(Self.red(of: decoded, x: Int(badge.minX) + 4, y: Int(badge.midY)), 100)
+    }
     func testBadgeSitsInTheBottomRightCorner() throws {
         let size = CGSize(width: 800, height: 600)
         let badge = try XCTUnwrap(Watermark.badgeRect(in: size))

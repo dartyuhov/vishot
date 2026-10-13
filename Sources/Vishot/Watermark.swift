@@ -2,7 +2,7 @@ import AppKit
 
 /// The "vishot.dev" credit in the bottom-right corner of every copied or saved image, in the landing
 /// page's look: light pixel small capitals on a square dark plate with a hard amber shadow, so it reads
-/// on any content. Always drawn; there is no setting to turn it off.
+/// on any content. Output preferences control whether it is drawn.
 enum Watermark {
     static let text = "vishot.dev"
     /// From the image's right and bottom edges to the shadow, in points.

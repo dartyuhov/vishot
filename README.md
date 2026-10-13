@@ -55,7 +55,36 @@ swift test                   # unit tests for navigation, element filtering, cro
 
 Builds are signed with your `Apple Development` certificate (override with `VISHOT_SIGN_IDENTITY`), so the Screen Recording and Accessibility permissions survive rebuilds.
 
-Change the hotkey in `Config` in `Sources/Vishot/AppDelegate.swift`.
+## Settings
+
+Open **Settings…** from the menu bar to record a global capture shortcut,
+toggle the watermark, or open the configuration file. The watermark defaults
+to on; keeping it on helps others discover Vishot.
+
+Settings and external file edits share `~/.config/vishot/config.toml`:
+
+```toml
+watermark = true
+
+[shortcut]
+key = "S"
+modifiers = ["command", "shift"]
+```
+
+Shortcuts use physical key positions and require `command` or `control`.
+Optional modifiers are `option` and `shift`. Supported keys include uppercase
+letters, digits, `F1`–`F12`, and names such as `Space`, `Return`, `Tab`,
+`Left`, `Right`, `Up`, `Down`, and `Minus`.
+
+File changes reload automatically and apply after the current picker/editor
+session ends. Invalid edits or unavailable shortcuts keep the working settings;
+**Settings… — Configuration Error** shows how to fix them. A broken file at
+startup uses defaults without overwriting it. Missing fields use defaults.
+
+Window edits preserve comments and unrelated content. For layouts that cannot
+be edited safely, such as modifier arrays containing comments, edit the file
+directly. Symlinked dotfiles are supported. Output keeps the watermark choice
+from copy/save time, including images encoded later when pasted.
 
 ## Speed notes
 

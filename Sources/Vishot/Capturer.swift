@@ -14,6 +14,7 @@ final class Capturer {
     private var contentTask: Task<SCShareableContent, Error>?
     /// Must stay alive until the clipboard is taken over, so images can be encoded on paste.
     private var provider: ImageProvider?
+    var watermark = true
 
     /// SCShareableContent can take tens of milliseconds. Starting it when the overlay opens
     /// hides that cost behind the time you spend choosing a window.
@@ -23,12 +24,13 @@ final class Capturer {
 
     /// Captures `target` and copies it. The ↵ path: runs after the overlay hides.
     func capture(_ target: CaptureTarget) {
+        let watermark = watermark
         Task { @MainActor in
             guard let capture = await image(for: target) else {
                 NSSound.beep()
                 return
             }
-            copy(capture.image, scale: capture.scale)
+            copy(capture.image, scale: capture.scale, watermark: watermark)
         }
     }
 
@@ -90,10 +92,10 @@ final class Capturer {
     }
 
     /// Puts the image on the clipboard. Encoding waits until something pastes.
-    func copy(_ image: CGImage, scale: CGFloat) {
+    func copy(_ image: CGImage, scale: CGFloat, watermark: Bool? = nil) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        let provider = ImageProvider(image: image, scale: scale)
+        let provider = ImageProvider(output: ImageOutput(image: image, scale: scale, watermark: watermark ?? self.watermark))
         let item = NSPasteboardItem()
         item.setDataProvider(provider, forTypes: [.png, .tiff])
         pasteboard.writeObjects([item])
@@ -101,11 +103,11 @@ final class Capturer {
     }
 
     /// Writes a PNG in the background. If that fails the image goes to the clipboard, so it isn't lost.
-    func save(_ image: CGImage, scale: CGFloat, to url: URL) {
+    func save(_ image: CGImage, scale: CGFloat, to url: URL, watermark: Bool? = nil) {
+        let output = ImageOutput(image: image, scale: scale, watermark: watermark ?? self.watermark)
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let marked = Watermark.apply(to: image, scale: scale)
-                guard let data = ImageEncoding.data(marked, scale: scale, type: .png) else {
+                guard let data = output.data(type: .png) else {
                     throw CocoaError(.fileWriteUnknown)
                 }
                 try data.write(to: url, options: .atomic)
@@ -113,7 +115,7 @@ final class Capturer {
                 NSLog("Vishot save to \(url.path) failed: \(error)")
                 DispatchQueue.main.async {
                     NSSound.beep()
-                    self.copy(image, scale: scale)
+                    self.copy(image, scale: scale, watermark: output.watermark)
                 }
             }
         }
@@ -142,19 +144,32 @@ final class Capturer {
 /// takes ~100 ms, so the copy itself returns immediately. The watermark is drawn then too, once for
 /// both types.
 private final class ImageProvider: NSObject, NSPasteboardItemDataProvider {
-    private let image: CGImage
-    private let scale: CGFloat
-    private lazy var marked = Watermark.apply(to: image, scale: scale)
+    private let output: ImageOutput
 
-    init(image: CGImage, scale: CGFloat) {
-        self.image = image
-        self.scale = scale
+    init(output: ImageOutput) {
+        self.output = output
     }
 
     func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
-        guard let data = ImageEncoding.data(marked, scale: scale, type: type == .png ? .png : .tiff) else { return }
+        guard let data = output.data(type: type == .png ? .png : .tiff) else { return }
         item.setData(data, forType: type)
     }
+}
+
+/// Immutable output preferences, with pixels prepared only on paste/save.
+final class ImageOutput {
+    private let image: CGImage
+    private let scale: CGFloat
+    let watermark: Bool
+    private lazy var marked = watermark ? Watermark.apply(to: image, scale: scale) : image
+
+    init(image: CGImage, scale: CGFloat, watermark: Bool) {
+        self.image = image
+        self.scale = scale
+        self.watermark = watermark
+    }
+
+    func data(type: UTType) -> Data? { ImageEncoding.data(marked, scale: scale, type: type) }
 }
 
 enum ImageEncoding {

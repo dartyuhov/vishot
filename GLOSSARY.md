@@ -23,5 +23,6 @@ The name "vishot" in the pixel font's small capitals, the way the landing page s
 _Avoid_: Logotype, VISHOT (full-height capitals)
 
 **Watermark**:
-The "vishot.dev" badge in the corner of every copied or saved image, crediting Vishot. Always present; the user can't turn it off.
+The optional "vishot.dev" badge in the corner of a copied or saved image,
+crediting Vishot.
 _Avoid_: Badge, signature, branding

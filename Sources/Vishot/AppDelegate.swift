@@ -3,10 +3,6 @@ import Carbon.HIToolbox
 import ServiceManagement
 
 enum Config {
-    /// ⇧⌘S. A global hotkey, so apps no longer get it (it is Save As in many).
-    static let hotKeyCode = kVK_ANSI_S
-    static let hotKeyModifiers = cmdKey | shiftKey
-
     /// Where macOS saves screenshots (set in the Screenshot app's options), or the Desktop.
     static func saveFolder() -> URL {
         let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
@@ -46,7 +42,10 @@ enum Config {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private var hotKey: HotKey?
+    private var settings: SettingsStore?
+    private var settingsWindow: SettingsWindow?
+    private var captureItem: NSMenuItem?
+    private var settingsItem: NSMenuItem?
     private var overlay: OverlayController?
     private var launchAtLoginItem: NSMenuItem?
 
@@ -55,13 +54,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Fonts.register()
         let overlay = OverlayController()
         self.overlay = overlay
-        hotKey = HotKey(keyCode: Config.hotKeyCode, modifiers: Config.hotKeyModifiers) {
-            overlay.toggle()
+        let settings = SettingsStore { [weak self] shortcut in
+            guard let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.carbonModifiers, action: { [weak self] in
+                if self?.settingsWindow?.recordGlobalShortcut(shortcut) == true { return }
+                overlay.toggle()
+            }) else { throw SettingsError(message: "Could not register \(shortcut.display). It may be used by macOS or another app.") }
+            return hotKey
         }
-        if hotKey == nil {
-            NSLog("Vishot: could not register hotkey, it may be taken by another app")
-        }
+        self.settings = settings
+        overlay.onSessionChange = { [weak settings] in settings?.setSessionActive($0) }
+        settings.onChange = { [weak self] in self?.settingsChanged() }
         setUpStatusItem()
+        settings.start()
 
         if !CGPreflightScreenCaptureAccess() {
             CGRequestScreenCaptureAccess()
@@ -73,10 +77,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.image = Self.statusImage()
 
         let menu = NSMenu()
-        let capture = NSMenuItem(title: "Capture Window", action: #selector(captureFromMenu), keyEquivalent: "s")
-        capture.keyEquivalentModifierMask = [.command, .shift]
+        let capture = NSMenuItem(title: "Capture Window", action: #selector(captureFromMenu), keyEquivalent: "")
         capture.target = self
         menu.addItem(capture)
+        captureItem = capture
+        let preferences = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        preferences.target = self
+        menu.addItem(preferences)
+        settingsItem = preferences
         menu.addItem(.separator())
 
         let launchAtLogin = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
@@ -126,6 +134,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func captureFromMenu() {
         // Let the menu finish closing before the overlay takes key focus.
         DispatchQueue.main.async { self.overlay?.toggle() }
+    }
+
+    private func settingsChanged() {
+        guard let settings else { return }
+        // A physical-key title remains accurate on non-Latin layouts; a
+        // character-based menu equivalent would advertise a different key.
+        captureItem?.title = "Capture Window  (\(settings.active.shortcut.display))"
+        settingsItem?.title = settings.error == nil ? "Settings…" : "Settings… — Configuration Error"
+        overlay?.watermark = settings.active.watermark
+        settingsWindow?.refresh()
+    }
+
+    @objc private func openSettings() {
+        guard let settings else { return }
+        if settingsWindow == nil { settingsWindow = SettingsWindow(store: settings) }
+        settingsWindow?.present()
     }
 
     @objc private func toggleLaunchAtLogin() {

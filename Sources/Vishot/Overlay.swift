@@ -50,6 +50,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var panels: [OverlayPanel] = []
     private var isShowing = false
     private let capturer = Capturer()
+    var onSessionChange: ((Bool) -> Void)?
+    var watermark: Bool {
+        get { capturer.watermark }
+        set { capturer.watermark = newValue }
+    }
     private let elements = ElementCatalog()
     private let raiser = WindowRaiser()
 
@@ -108,6 +113,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         status = ""
         enterWindowMode()
         isShowing = true
+        onSessionChange?(true)
         render()
         panels.forEach { $0.orderFrontRegardless() }
         keyPanel.makeKey()
@@ -130,6 +136,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
         raiser.restore()
         appToReactivate?.activate()
         appToReactivate = nil
+        // Copy/save call sites finish synchronously after hide. Defer settings
+        // activation so those outputs retain the just-finished session's values.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !isShowing else { return }
+            onSessionChange?(false)
+        }
     }
 
     /// What ↵ copies and ⇧↵/e edits. Region mode has nothing until a region is drawn.
@@ -192,6 +204,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// The save panel can't show above the overlay, so the overlay steps aside, and comes back with
     /// the edit intact if the panel is cancelled.
     private func saveAs(_ image: CGImage, scale: CGFloat) {
+        let watermark = capturer.watermark
         isPresentingSavePanel = true
         panels.forEach { $0.orderOut(nil) }
         if !NSApp.isActive { appToReactivate = NSWorkspace.shared.frontmostApplication }
@@ -205,7 +218,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if response == .OK, let url = savePanel.url {
             // The hotkey may have closed the overlay meanwhile, but the save was still asked for.
             if isShowing { hide() }
-            capturer.save(image, scale: scale, to: url)
+            capturer.save(image, scale: scale, to: url, watermark: watermark)
         } else if isShowing {
             panels.forEach { $0.orderFrontRegardless() }
             panels.first?.makeKey()
