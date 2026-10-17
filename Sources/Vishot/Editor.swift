@@ -6,6 +6,7 @@ enum ToolbarItem: Equatable {
     case tool(EditorController.Tool)
     case color(AnnotationColor)
     case undo, redo
+    case toggleHUD
     case finish(EditorController.Finish)
 }
 
@@ -23,7 +24,10 @@ struct EditorScene {
     /// Nil while typing, when the caret shows instead.
     let cursor: CGPoint?
     let caret: CGRect?
-    let tool: EditorController.Tool
+    let tool: EditorController.Tool?
+    /// A drawing, label, or resize is in progress; show its controls instead of the tool list.
+    let isUsingTool: Bool
+    let isHUDHidden: Bool
     let color: AnnotationColor
     let canUndo: Bool
     let canRedo: Bool
@@ -75,7 +79,7 @@ final class EditorController {
     private var document: EditDocument
     private var history = EditHistory()
     private let cursor: KeyboardCursor
-    private var tool = Tool.arrow
+    private var tool: Tool?
     private var color = AnnotationColor.purple
     /// The image's top-left, in CoreGraphics global space.
     private let imageOrigin: CGPoint
@@ -97,6 +101,9 @@ final class EditorController {
     }
     private var resizing: Resize?
     private var hoveredHandle: EditArea.Handle?
+    private(set) var isHUDHidden = false
+    /// Refreshed from the rendered toolbar's placement on its host panel.
+    var canHideHUD = false
 
     init(capture: Capture) {
         document = EditDocument(image: capture.image, scale: capture.scale)
@@ -119,6 +126,12 @@ final class EditorController {
         if event.isARepeat, keyCode == kVK_Escape || keyCode == kVK_ANSI_Q { return }
         message = ""
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // Plain letters still type normally in a label; the clickable toggle remains available.
+        if keyCode == kVK_ANSI_O, flags.intersection([.command, .control, .option]).isEmpty,
+           !isTyping {
+            if !event.isARepeat { toggleHUD() }
+            return
+        }
         if case let .typing(text, at) = action {
             handleTyping(event, keyCode: keyCode, flags: flags, text: text, at: at)
             return
@@ -178,6 +191,15 @@ final class EditorController {
 
     func keyUp(_ event: NSEvent) {
         cursor.keyUp(event)
+    }
+
+    private var isTyping: Bool {
+        if case .typing = action { return true }
+        return false
+    }
+
+    private func toggleHUD() {
+        if isHUDHidden || canHideHUD { isHUDHidden.toggle() }
     }
 
     /// `1`…`6` pick the colors in toolbar order.
@@ -294,7 +316,7 @@ final class EditorController {
         }
         guard let start = pressedAt else { return }
         cursor.move(to: imagePoint(point))
-        if action == .idle, tool != .text, !Drag.isClick(from: start, to: cursor.position) {
+        if action == .idle, tool != nil, tool != .text, !Drag.isClick(from: start, to: cursor.position) {
             action = .dragging(start)
         }
     }
@@ -346,6 +368,7 @@ final class EditorController {
         let confirmed = confirmsDiscard
         confirmsDiscard = false
         switch item {
+        case .toggleHUD: toggleHUD()
         case .tool(let newTool):
             if newTool == .crop {
                 if resizing != nil { finishResize(commit: true) } else { beginResize() }
@@ -418,7 +441,7 @@ final class EditorController {
         case .rect:
             guard rect.width >= 1, rect.height >= 1 else { return nil }
             return .rect(rect, color: color)
-        case .crop, .text:
+        case .crop, .text, nil:
             return nil
         }
     }
@@ -545,6 +568,8 @@ final class EditorController {
             cursor: caret == nil ? cursor.position : nil,
             caret: caret,
             tool: resizing == nil ? tool : .crop,
+            isUsingTool: resizing != nil || action != .idle,
+            isHUDHidden: isHUDHidden,
             color: color,
             canUndo: history.canUndo,
             canRedo: history.canRedo,
@@ -555,6 +580,7 @@ final class EditorController {
         for panel in panels {
             panel.showEditor(scene, showsToolbar: panel === toolbarPanel)
         }
+        canHideHUD = toolbarPanel?.canHideEditorHUD ?? false
     }
 
     private func visibleArea(of frame: CGRect, on panel: OverlayPanel) -> CGFloat {
@@ -564,16 +590,16 @@ final class EditorController {
 
     private var status: String {
         if !message.isEmpty { return message }
-        if resizing != nil { return "resize · tab corner · hjkl / drag edges · c / ↵ / esc apply · u cancel" }
+        if resizing != nil { return "tab corner · hjkl / drag resize · ↵ / esc apply · u cancel" }
         switch action {
         case .idle:
-            return "\(color.name) · arrows/hjkl move"
+            return tool == nil ? "choose a tool to start editing · arrows/hjkl move" : "arrows/hjkl move · choose a tool or drag to draw"
         case .anchored:
-            return "\(color.name) \(tool.name) · move, then ↵ or \(tool.key) to finish · esc cancel"
+            return "move, then ↵ / \(tool?.key ?? "") / esc place · u cancel"
         case .dragging:
-            return "\(color.name) \(tool.name) · release to finish · esc cancel"
+            return "release / esc place · u cancel"
         case .typing:
-            return "\(color.name) text · ⇧↵ new line · ↵ / esc place · ⌘z cancel"
+            return "⇧↵ new line · ↵ / esc place · ⌘z cancel · tab color"
         }
     }
 }

@@ -246,6 +246,8 @@ final class OverlayPanel: NSPanel {
         editor.hide()
     }
 
+    var canHideEditorHUD: Bool { editor.canHideHUD }
+
     /// `point` is in CoreGraphics global space.
     func toolbarContains(_ point: CGPoint) -> Bool {
         editor.toolbarContains(localPoint(point))

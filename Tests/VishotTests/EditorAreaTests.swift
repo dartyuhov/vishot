@@ -4,6 +4,50 @@ import XCTest
 @testable import Vishot
 
 final class EditorAreaTests: XCTestCase {
+    func testDraggingDoesNotDrawUntilAToolIsSelected() throws {
+        let editor = try makeEditor()
+        let original = try exportedBytes(editor)
+        func drag() {
+            editor.mouseDown(at: CGPoint(x: 140, y: 140))
+            editor.mouseDragged(to: CGPoint(x: 240, y: 200))
+            editor.mouseUp(at: CGPoint(x: 240, y: 200))
+        }
+        drag()
+        XCTAssertEqual(original, try exportedBytes(editor))
+        editor.select(.tool(.arrow))
+        drag()
+        XCTAssertNotEqual(original, try exportedBytes(editor))
+    }
+
+    func testHUDToggleWorksDuringResizeAndDoesNotConsumeTypedO() throws {
+        let editor = try makeEditor()
+        key(kVK_ANSI_O, editor)
+        XCTAssertFalse(editor.isHUDHidden)
+        editor.select(.toggleHUD)
+        XCTAssertFalse(editor.isHUDHidden)
+        editor.canHideHUD = true
+        key(kVK_ANSI_O, editor)
+        XCTAssertTrue(editor.isHUDHidden)
+        editor.canHideHUD = false
+        key(kVK_ANSI_C, editor)
+        key(kVK_ANSI_O, editor)
+        XCTAssertFalse(editor.isHUDHidden)
+        key(kVK_Return, editor)
+        editor.canHideHUD = true
+        key(kVK_ANSI_T, editor)
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                    windowNumber: 0, context: nil, characters: "o", charactersIgnoringModifiers: "o",
+                                    isARepeat: false, keyCode: UInt16(kVK_ANSI_O))!
+        editor.handle(event)
+        XCTAssertFalse(editor.isHUDHidden)
+        editor.select(.toggleHUD)
+        XCTAssertTrue(editor.isHUDHidden)
+        key(kVK_Return, editor)
+        let withText = try exportedBytes(editor)
+        key(kVK_ANSI_U, editor)
+        XCTAssertNotEqual(withText, try exportedBytes(editor))
+    }
+
     func testShiftReturnAddsLineWhileReturnPlacesText() throws {
         let editor = try makeEditor()
         func type(_ text: String) {
@@ -105,6 +149,7 @@ final class EditorAreaTests: XCTestCase {
 
     func testAnnotationSurvivesShrinkingAndExpandingArea() throws {
         let editor = try makeEditor()
+        editor.select(.tool(.arrow))
         editor.mouseDown(at: CGPoint(x: 120, y: 130))
         editor.mouseDragged(to: CGPoint(x: 180, y: 180))
         editor.mouseUp(at: CGPoint(x: 180, y: 180))

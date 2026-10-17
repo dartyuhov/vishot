@@ -517,7 +517,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard isShowing, !isCapturing else { return }
         if let editor {
             // The cursor stays on the image while the pointer is over the toolbar.
-            guard !panels.contains(where: { $0.toolbarContains(point) }) else { return }
+            if let panel = panels.first(where: { $0.toolbarContains(point) }) {
+                (panel.toolbarItem(at: point) == nil ? NSCursor.arrow : NSCursor.pointingHand).set()
+                return
+            }
             editor.mouseMoved(to: point)
             render()
             return
