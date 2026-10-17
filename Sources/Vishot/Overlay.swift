@@ -51,6 +51,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var isShowing = false
     private let capturer = Capturer()
     let historyLibrary = HistoryLibrary()
+    private lazy var screenshotCompletion = ScreenshotCompletion(history: historyLibrary) { [capturer] image, scale, watermark in
+        capturer.copy(image, scale: scale, watermark: watermark)
+    }
     private var browser: HistoryBrowser?
     private var reusableBrowser: HistoryBrowser!
     private var historyEditingID: UUID?
@@ -273,10 +276,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let label = captureLabel, title = captureWindowTitle, watermark = capturer.watermark
         prepareSource(for: target) { [self] capture in
             let document = EditDocument(image: capture.image, scale: capture.scale, crop: capture.initialCrop)
-            guard let image = AnnotationRenderer.export(document) else { status = "export failed"; render(); return }
-            historyLibrary.commit(document: document, undo: [], label: label, windowTitle: title)
-            hide()
-            capturer.copy(image, scale: capture.scale, watermark: watermark)
+            guard let request = screenshotCompletion.prepare(document: document, undo: [], label: label,
+                windowTitle: title, session: session, watermark: watermark)
+            else { status = "export failed"; render(); return }
+            present(request.copy(currentSession: self.session))
         }
     }
 
@@ -330,16 +333,31 @@ final class OverlayController: NSObject, NSWindowDelegate {
             saveAs(image, scale: scale)
             return
         }
+        if finish == .copy, let editor {
+            guard let request = screenshotCompletion.prepare(document: editor.document, undo: editor.history.snapshots,
+                label: captureLabel, windowTitle: captureWindowTitle, id: historyEditingID,
+                session: session, watermark: capturer.watermark, exported: image) else { return }
+            present(request.copy(currentSession: session))
+            return
+        }
         let commit = historyCommit()
         if finish == .save {
             completeSave(image, scale: scale, to: Config.newSaveURL(), commit: commit)
             return
         }
         if let id = historyEditingID { returnToHistory(id, release: false) } else { hide() }
-        if finish == .copy || finish == .saveAndCopy { capturer.copy(image, scale: scale) }
-        if finish == .copy || finish == .saveAndCopy { commit() }
         if finish == .saveAndCopy {
+            capturer.copy(image, scale: scale)
+            commit()
             capturer.save(image, scale: scale, to: Config.newSaveURL())
+        }
+    }
+
+    private func present(_ presentation: ScreenshotCompletion.Presentation?) {
+        switch presentation {
+        case .close: hide()
+        case .history(let id): returnToHistory(id)
+        case nil: break
         }
     }
 
