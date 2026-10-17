@@ -118,8 +118,10 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
         let visible = Array(matches.dropFirst(start).prefix(capacity))
         // Keep only the visible strip in memory.
         let visibleIDs = Set(visible.map(\.id))
-        thumbnailCache = thumbnailCache.filter { visibleIDs.contains($0.key) }
-        for id in Array(thumbnailRequests.keys) where !visibleIDs.contains(id) {
+        let revisions = Dictionary(uniqueKeysWithValues: visible.map { ($0.id, $0.revision) })
+        let previousRevisions = Dictionary(uniqueKeysWithValues: view.items.map { ($0.id, $0.revision) })
+        thumbnailCache = thumbnailCache.filter { revisions[$0.key] == $0.value.0 }
+        for id in Array(thumbnailRequests.keys) where !visibleIDs.contains(id) || previousRevisions[id] != revisions[id] {
             thumbnailRequests.removeValue(forKey: id)?.cancel()
             pendingThumbnails.remove(id)
         }

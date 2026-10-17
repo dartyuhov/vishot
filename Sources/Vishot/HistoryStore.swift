@@ -181,6 +181,34 @@ final class HistoryStore {
         return try Self.image(at: url)
     }
 
+    /// Snapshot the bytes while publication/deletion is excluded by the library's worker.
+    /// An old browser entry is obsolete, not evidence of damaged storage.
+    func previewData(_ entry: HistoryEntry, thumbnail: Bool) throws -> Data? {
+        let directory = folder(entry.id)
+        guard files.fileExists(atPath: metadata(entry.id).path),
+              !files.fileExists(atPath: directory.appendingPathComponent("deleted").path) else { return nil }
+        guard try read(entry.id).revision == entry.revision else { return nil }
+        return try Data(contentsOf: asset(entry, thumbnail ? "thumbnail" : "preview"))
+    }
+
+    static func previewImage(_ data: Data, maxPixelSize: Int?) throws -> CGImage {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+            throw SettingsError(message: "Could not read History preview.")
+        }
+        let image: CGImage?
+        if let maxPixelSize {
+            image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceThumbnailMaxPixelSize: max(1, maxPixelSize),
+                kCGImageSourceShouldCacheImmediately: true,
+            ] as CFDictionary)
+        } else {
+            image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
+        }
+        guard let image else { throw SettingsError(message: "Could not read History preview.") }
+        return image
+    }
+
     @discardableResult
     func index(_ id: UUID, revision: UUID, text: String) throws -> Bool {
         guard !files.fileExists(atPath: folder(id).appendingPathComponent("deleted").path),
