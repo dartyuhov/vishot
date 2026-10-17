@@ -51,7 +51,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var isShowing = false
     private let capturer = Capturer()
     let historyLibrary = HistoryLibrary()
-    private lazy var screenshotCompletion = ScreenshotCompletion(history: historyLibrary) { [capturer] image, scale, watermark in
+    private lazy var screenshotCompletion = ScreenshotCompletion(history: historyLibrary, save: { [capturer] in
+        capturer.save($0, scale: $1, to: $2, watermark: $3, completion: $4)
+    }) { [capturer] image, scale, watermark in
         capturer.copy(image, scale: scale, watermark: watermark)
     }
     private var browser: HistoryBrowser?
@@ -203,14 +205,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func returnToHistory(_ id: UUID, release: Bool = true) {
+    private func returnToHistory(_ id: UUID) {
         editor = nil
         historyEditingID = nil
         isShowing = false
         isCapturing = false
         panels.forEach { $0.hideEditor(); $0.orderOut(nil) }
         browser?.resume(select: id)
-        if release { historyLibrary.release(id) }
+        historyLibrary.release(id)
     }
 
     private func show() {
@@ -257,8 +259,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         raiser.restore()
         appToReactivate?.activate()
         appToReactivate = nil
-        // Copy/save call sites finish synchronously after hide. Defer settings
-        // activation so those outputs retain the just-finished session's values.
+        // Activate settings between sessions after presentation has finished unwinding.
         DispatchQueue.main.async { [weak self] in
             guard let self, !isSessionActive else { return }
             onSessionChange?(false)
@@ -325,31 +326,25 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     private func finishEditing(_ finish: EditorController.Finish, export: (image: CGImage, scale: CGFloat)?) {
         guard !isCapturing else { return }
-        guard let (image, scale) = export else {
+        guard let (image, _) = export else {
             if let id = historyEditingID { returnToHistory(id) } else { hide() }
             return
         }
-        if finish == .saveAs {
-            saveAs(image, scale: scale)
-            return
-        }
-        if finish == .copy, let editor {
-            guard let request = screenshotCompletion.prepare(document: editor.document, undo: editor.history.snapshots,
-                label: captureLabel, windowTitle: captureWindowTitle, id: historyEditingID,
-                session: session, watermark: capturer.watermark, exported: image) else { return }
+        guard let editor, let request = screenshotCompletion.prepare(document: editor.document, undo: editor.history.snapshots,
+            label: captureLabel, windowTitle: captureWindowTitle, id: historyEditingID,
+            session: session, watermark: capturer.watermark, exported: image) else { return }
+        switch finish {
+        case .copy:
             present(request.copy(currentSession: session))
-            return
-        }
-        let commit = historyCommit()
-        if finish == .save {
-            completeSave(image, scale: scale, to: Config.newSaveURL(), commit: commit)
-            return
-        }
-        if let id = historyEditingID { returnToHistory(id, release: false) } else { hide() }
-        if finish == .saveAndCopy {
-            capturer.copy(image, scale: scale)
-            commit()
-            capturer.save(image, scale: scale, to: Config.newSaveURL())
+        case .save, .saveAndCopy:
+            isCapturing = true
+            request.save(to: Config.newSaveURL(), copying: finish == .saveAndCopy,
+                currentSession: { [weak self] in self?.session ?? -1 },
+                present: { [weak self] in self?.present($0) })
+        case .saveAs:
+            saveAs(request)
+        case .discard:
+            break
         }
     }
 
@@ -361,34 +356,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Keep the session and its retention hold until save (or clipboard fallback) completes.
-    private func completeSave(_ image: CGImage, scale: CGFloat, to url: URL, watermark: Bool? = nil, commit: @escaping () -> Void) {
-        isCapturing = true
-        let session = session
-        capturer.save(image, scale: scale, to: url, watermark: watermark) { [weak self] in
-            commit()
-            guard let self, self.session == session else { return }
-            self.isCapturing = false
-            if let id = self.historyEditingID { self.returnToHistory(id, release: false) } else { self.hide() }
-        }
-    }
-
-    private func historyCommit() -> () -> Void {
-        guard let editor else { return {} }
-        let document = editor.document, undo = editor.history.snapshots
-        let id = historyEditingID, label = captureLabel, title = captureWindowTitle
-        let enabled = historyLibrary.retention != .off
-        return { [historyLibrary] in
-            if enabled || id != nil { historyLibrary.commit(document: document, undo: undo, label: label, windowTitle: title, id: id, recording: enabled) }
-            if let id { historyLibrary.release(id) }
-        }
-    }
-
     /// The save panel can't show above the overlay, so the overlay steps aside, and comes back with
     /// the edit intact if the panel is cancelled.
-    private func saveAs(_ image: CGImage, scale: CGFloat) {
-        let watermark = capturer.watermark
-        let commit = historyCommit()
+    private func saveAs(_ request: ScreenshotCompletion.Request) {
         isPresentingSavePanel = true
         panels.forEach { $0.orderOut(nil) }
         if !NSApp.isActive { appToReactivate = NSWorkspace.shared.frontmostApplication }
@@ -399,20 +369,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
         savePanel.nameFieldStringValue = Config.fileName(for: Date())
         let response = savePanel.runModal()
         isPresentingSavePanel = false
-        if response == .OK, let url = savePanel.url {
-            // The hotkey may have closed the overlay meanwhile, but the save was still asked for.
-            if isShowing {
-                panels.forEach { $0.orderFrontRegardless() }
-                panels.first?.makeKey()
-                completeSave(image, scale: scale, to: url, watermark: watermark, commit: commit)
-            } else {
-                capturer.save(image, scale: scale, to: url, watermark: watermark, completion: commit)
-            }
-        } else if isShowing {
+        let url = response == .OK ? savePanel.url : nil
+        if isShowing {
             panels.forEach { $0.orderFrontRegardless() }
             panels.first?.makeKey()
-            render()
+            if url == nil { render() }
         }
+        if url != nil, isShowing { isCapturing = true }
+        request.saveAs(to: url, currentSession: { [weak self] in self?.session ?? -1 },
+            present: { [weak self] in self?.present($0) })
     }
 
     // MARK: - Modes

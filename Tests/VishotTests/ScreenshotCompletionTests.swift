@@ -3,6 +3,272 @@ import XCTest
 @testable import Vishot
 
 final class ScreenshotCompletionTests: XCTestCase {
+    func testNewSaveKeepsRequestedPreferencesAndDocumentWhenSettingsChange() throws {
+        for recording in [false, true] {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let library = HistoryLibrary(store: HistoryStore(url: folder))
+            library.retention = recording ? .sevenDays : .off
+            var finishSave: (() -> Void)?
+            var watermark = false
+            let completion = ScreenshotCompletion(history: library, save: { image, _, _, marked, done in
+                XCTAssertEqual(image.width, 20)
+                XCTAssertFalse(marked)
+                finishSave = done
+            }) { _, _, _ in XCTFail("Save-only copied") }
+            var document = try makeDocument()
+            document.crop = CGRect(x: 0, y: 0, width: 10, height: 8)
+            let requested = document.snapshot
+            let request = try XCTUnwrap(completion.prepare(document: document, undo: [], label: "Requested",
+                session: 1, watermark: watermark))
+            document.crop = nil
+            watermark = true
+            library.retention = recording ? .off : .sevenDays
+            request.save(to: folder.appendingPathComponent("output.png"), currentSession: { 2 }) { XCTAssertNil($0) }
+            try XCTUnwrap(finishSave)()
+            drain(library)
+            XCTAssertEqual(library.entries.count, recording ? 1 : 0)
+            if recording { XCTAssertEqual(library.entries.first?.snapshot, requested) }
+        }
+    }
+
+    func testCopyAdapterCannotReenterAndCompleteTheSameRequestTwice() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let library = HistoryLibrary(store: HistoryStore(url: folder))
+        var request: ScreenshotCompletion.Request?
+        var copies = 0
+        let completion = ScreenshotCompletion(history: library) { _, _, _ in
+            copies += 1
+            if copies == 1 { XCTAssertNil(request?.copy(currentSession: 1)) }
+        }
+        request = completion.prepare(document: try makeDocument(), undo: [], label: "Copy", session: 1, watermark: false)
+        XCTAssertEqual(request?.copy(currentSession: 1), .close)
+        XCTAssertEqual(copies, 1)
+        drain(library)
+        XCTAssertEqual(library.entries.count, 1)
+    }
+
+    func testAcceptedSaveAsKeepsSnapshotAndHoldAcrossReplacementSession() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = HistoryStore(url: folder)
+        var document = try makeDocument()
+        let original = document.snapshot
+        let capturedAt = Date().addingTimeInterval(-40 * 86400)
+        let entry = try store.commit(document: document, undo: [], label: "Original", now: capturedAt)
+        let library = HistoryLibrary(store: store)
+        library.hold(entry.id)
+        document.crop = CGRect(x: 1, y: 2, width: 10, height: 8)
+        let requested = document.snapshot
+        var finishSave: (() -> Void)?
+        let url = folder.appendingPathComponent("chosen.png")
+        let completion = ScreenshotCompletion(history: library, save: { image, scale, destination, watermark, done in
+            XCTAssertEqual(image.width, 20)
+            XCTAssertEqual(image.height, 16)
+            XCTAssertEqual(scale, 2)
+            XCTAssertEqual(destination, url)
+            XCTAssertFalse(watermark)
+            finishSave = done
+        }) { _, _, _ in XCTFail("Save-only copied") }
+        var session = 1
+        var presentations: [ScreenshotCompletion.Presentation?] = []
+        var request = completion.prepare(document: document, undo: [original], label: "Ignored",
+            id: entry.id, session: session, watermark: false)
+        try XCTUnwrap(request).saveAs(to: url, currentSession: { session }) { presentations.append($0) }
+        request?.cancel() // An accepted output survives UI cancellation.
+        request = nil // The output adapter retains the request.
+        library.release(entry.id)
+        document.crop = nil
+        library.retention = .off
+        session = 2
+        drain(library)
+        XCTAssertEqual(library.entries.first?.revision, entry.revision)
+        let done = try XCTUnwrap(finishSave)
+        done()
+        done()
+        drain(library)
+        XCTAssertEqual(presentations.count, 1)
+        XCTAssertNil(presentations.first!)
+        let updated = try XCTUnwrap(library.entries.first)
+        XCTAssertEqual(updated.id, entry.id)
+        XCTAssertEqual(updated.createdAt, capturedAt)
+        XCTAssertEqual(updated.snapshot, requested)
+        XCTAssertEqual(updated.undo, [original])
+    }
+
+    func testUnchangedSaveReleasesOnlyOutputHoldAndDoesNotRenewRetention() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = HistoryStore(url: folder)
+        let document = try makeDocument()
+        let entry = try store.commit(document: document, undo: [], label: "Expired",
+            now: Date().addingTimeInterval(-40 * 86400))
+        let library = HistoryLibrary(store: store)
+        library.hold(entry.id)
+        var finishSave: (() -> Void)?
+        let completion = ScreenshotCompletion(history: library, save: { _, _, _, _, done in finishSave = done }) {
+            _, _, _ in XCTFail("Save copied")
+        }
+        let request = try XCTUnwrap(completion.prepare(document: document, undo: [], label: "Expired",
+            id: entry.id, session: 1, watermark: true))
+        request.save(to: folder.appendingPathComponent("output.png"), currentSession: { 1 }) {
+            XCTAssertEqual($0, .history(entry.id))
+        }
+        let done = try XCTUnwrap(finishSave)
+        done()
+        done()
+        request.cancel()
+        drain(library)
+        XCTAssertEqual(library.entries.first?.revision, entry.revision)
+        XCTAssertEqual(library.entries.first?.modifiedAt, entry.modifiedAt)
+        library.release(entry.id)
+        drain(library)
+        XCTAssertTrue(library.entries.isEmpty)
+    }
+
+    func testRealFileSaveCompletesDespiteHistoryFailure() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let root = folder.appendingPathComponent("blocked-history")
+        try Data("file blocks history directory".utf8).write(to: root)
+        let library = HistoryLibrary(store: HistoryStore(url: root))
+        let completion = ScreenshotCompletion(history: library) { _, _, _ in XCTFail("Successful save copied") }
+        let request = try XCTUnwrap(completion.prepare(document: makeDocument(), undo: [], label: "Saved",
+            session: 1, watermark: false))
+        let url = folder.appendingPathComponent("saved.png")
+        let saved = expectation(description: "File save completed")
+        request.save(to: url, currentSession: { 1 }) {
+            XCTAssertEqual($0, .close)
+            saved.fulfill()
+        }
+        wait(for: [saved], timeout: 3)
+        let image = try XCTUnwrap(NSImage(contentsOf: url))
+        XCTAssertEqual(image.size.width, 40)
+        XCTAssertEqual(image.size.height, 30)
+        awaitPublication(library) { $0.error != nil }
+        XCTAssertTrue(library.entries.isEmpty)
+    }
+
+    func testFailedSaveFallsBackToClipboardAndRecordsOnce() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let library = HistoryLibrary(store: HistoryStore(url: folder))
+        let capturer = Capturer()
+        let completion = ScreenshotCompletion(history: library, save: {
+            capturer.save($0, scale: $1, to: $2, watermark: $3, completion: $4)
+        }) { _, _, _ in XCTFail("Save-only performed an early copy") }
+        var document = try makeDocument()
+        document.crop = CGRect(x: 0, y: 0, width: 10, height: 8)
+        let request = try XCTUnwrap(completion.prepare(document: document, undo: [], label: "Fallback",
+            session: 1, watermark: false))
+        let saved = expectation(description: "Clipboard fallback completed")
+        request.save(to: folder.appendingPathComponent("missing/output.png"), currentSession: { 1 }) {
+            XCTAssertEqual($0, .close)
+            let data = NSPasteboard.general.data(forType: .png)
+            let image = data.flatMap(NSImage.init(data:))
+            XCTAssertEqual(image?.size.width, 10)
+            XCTAssertEqual(image?.size.height, 8)
+            saved.fulfill()
+        }
+        wait(for: [saved], timeout: 3)
+        XCTAssertNil(request.copy(currentSession: 1))
+        drain(library)
+        XCTAssertEqual(library.entries.count, 1)
+        XCTAssertEqual(library.entries.first?.snapshot, document.snapshot)
+    }
+
+    func testCancelledSaveAsPreservesEditableStateDeletionUndoAndEditorHold() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = HistoryStore(url: folder)
+        let document = try makeDocument()
+        let entry = try store.commit(document: document, undo: [], label: "Expired",
+            now: Date().addingTimeInterval(-40 * 86400))
+        let deleted = try store.commit(document: document, undo: [], label: "Deleted")
+        try store.delete(deleted.id)
+        let library = HistoryLibrary(store: store)
+        library.hold(entry.id)
+        var changed = document
+        changed.crop = CGRect(x: 1, y: 2, width: 10, height: 8)
+        let completion = ScreenshotCompletion(history: library, save: { _, _, _, _, _ in
+            XCTFail("Cancelled Save As wrote a file")
+        }) { _, _, _ in XCTFail("Cancelled Save As copied") }
+        let request = try XCTUnwrap(completion.prepare(document: changed, undo: [document.snapshot], label: "Expired",
+            id: entry.id, session: 1, watermark: false))
+        request.saveAs(to: nil, currentSession: { 1 }) { _ in XCTFail("Cancellation completed presentation") }
+        request.cancel()
+        drain(library)
+        XCTAssertEqual(library.entries.first?.snapshot, document.snapshot)
+        XCTAssertEqual(library.entries.first?.revision, entry.revision)
+        XCTAssertEqual(changed.crop, CGRect(x: 1, y: 2, width: 10, height: 8))
+        let undone = expectation(description: "Deletion undo preserved")
+        library.undoDelete { XCTAssertEqual($0, deleted.id); undone.fulfill() }
+        wait(for: [undone], timeout: 3)
+        library.release(entry.id)
+        drain(library)
+        XCTAssertFalse(library.entries.contains { $0.id == entry.id })
+    }
+
+    func testSaveAndCopyPresentsBeforeWriteFinishesAndNeverRecordsAgain() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let library = HistoryLibrary(store: HistoryStore(url: folder))
+        var copies = 0
+        var finishSave: (() -> Void)?
+        var presentations: [ScreenshotCompletion.Presentation?] = []
+        let completion = ScreenshotCompletion(history: library, save: { _, _, _, _, done in
+            XCTAssertEqual(copies, 1)
+            XCTAssertEqual(presentations, [.close])
+            finishSave = done
+        }) { _, _, _ in copies += 1 }
+        let request = try XCTUnwrap(completion.prepare(document: makeDocument(), undo: [], label: "Save and copy",
+            session: 1, watermark: false))
+        request.save(to: folder.appendingPathComponent("output.png"), copying: true, currentSession: { 1 }) {
+            presentations.append($0)
+        }
+        XCTAssertEqual(copies, 1)
+        awaitPublication(library) { $0.entries.count == 1 }
+        let entry = try XCTUnwrap(library.entries.first)
+        let done = try XCTUnwrap(finishSave)
+        done()
+        done()
+        request.cancel()
+        drain(library)
+        XCTAssertEqual(library.entries.count, 1)
+        XCTAssertEqual(library.entries.first?.revision, entry.revision)
+        XCTAssertEqual(presentations, [.close])
+    }
+
+    func testSaveWaitsForOutputBeforeRecordingAndPresentingExactlyOnce() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let library = HistoryLibrary(store: HistoryStore(url: folder))
+        let url = folder.appendingPathComponent("result.png")
+        var finishSave: (() -> Void)?
+        var presentations: [ScreenshotCompletion.Presentation?] = []
+        let completion = ScreenshotCompletion(history: library, save: { image, scale, destination, watermark, done in
+            XCTAssertEqual(image.width, 80)
+            XCTAssertEqual(scale, 2)
+            XCTAssertEqual(destination, url)
+            XCTAssertFalse(watermark)
+            finishSave = done
+        }) { _, _, _ in XCTFail("Save-only must not copy on success") }
+        let request = try XCTUnwrap(completion.prepare(document: makeDocument(), undo: [], label: "Saved",
+            session: 1, watermark: false))
+        request.save(to: url, currentSession: { 1 }) { presentations.append($0) }
+        XCTAssertTrue(presentations.isEmpty)
+        XCTAssertTrue(library.entries.isEmpty)
+        let done = try XCTUnwrap(finishSave)
+        done()
+        done()
+        XCTAssertNil(request.copy(currentSession: 1))
+        XCTAssertEqual(presentations, [.close])
+        awaitPublication(library) { $0.entries.count == 1 }
+        XCTAssertEqual(library.entries.first?.label, "Saved")
+    }
+
     func testCopyRecordsOneEditableScreenshotAndIgnoresRepeatedCompletion() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -243,6 +509,12 @@ final class ScreenshotCompletionTests: XCTestCase {
         context.setFillColor(NSColor.red.cgColor)
         context.fill(CGRect(x: 0, y: 0, width: 80, height: 60))
         return EditDocument(image: try XCTUnwrap(context.makeImage()), scale: 2)
+    }
+
+    private func drain(_ library: HistoryLibrary) {
+        let drained = expectation(description: "History worker drained")
+        library.load(UUID()) { _ in drained.fulfill() }
+        wait(for: [drained], timeout: 3)
     }
 
     private func awaitPublication(_ library: HistoryLibrary, matching predicate: @escaping (HistoryLibrary) -> Bool) {
