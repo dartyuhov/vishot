@@ -2,6 +2,59 @@ import XCTest
 @testable import Vishot
 
 final class SettingsTests: XCTestCase {
+    func testMultilineClosingQuotesDoNotHideRealInsertionHeader() throws {
+        for delimiter in ["\"", "'"] {
+            let source = "[notes]\ntext = \(String(repeating: delimiter, count: 3))note\(String(repeating: delimiter, count: 4))\n[history] # real"
+            let edited = try AppSettings.edit(source, historyRetention: .oneDay)
+            XCTAssertEqual(edited, source + "\nretention_days = 1\n")
+            XCTAssertEqual(try AppSettings.parse(edited).historyRetention, .oneDay)
+        }
+    }
+
+    func testHistoryShortcutWithExtraInlineFieldsIsRefusedWithoutChangingLastGoodSettings() throws {
+        let source = "[history]\nshortcut = { key = 'H', modifiers = ['control'], note = 'keep me' } # optional\n"
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("config.toml")
+        try source.write(to: url, atomically: true, encoding: .utf8)
+        let store = SettingsStore(url: url) { _ in NSObject() }
+        store.start(watching: false)
+        let lastGood = store.active
+        store.update(clearHistoryShortcut: true)
+        XCTAssertNotNil(store.error)
+        XCTAssertEqual(store.active, lastGood)
+        XCTAssertEqual(try String(contentsOf: url), source)
+        XCTAssertThrowsError(try AppSettings.edit(source, historyShortcut: CaptureShortcut(key: "J", modifiers: ["control"])))
+        let edited = try AppSettings.edit(source, historyRetention: .oneDay)
+        XCTAssertEqual(edited, "[history]\nretention_days = 1\nshortcut = { key = 'H', modifiers = ['control'], note = 'keep me' } # optional\n")
+        XCTAssertEqual(try AppSettings.parse(edited).historyRetention, .oneDay)
+    }
+
+    func testInsertionAndEditsUseQuotedPathsAndIgnoreMultilineFakeHeaders() throws {
+        let source = "# café\r\n[notes]\r\ntext = \"\"\"\r\n[history]\r\n[shortcut]\r\n\"\"\"\r\nvalues = [\r\n  '[history]', # retain array notes\r\n]\r\n[ 'history' ] # real\r\n'shortcut' = false\r\n[\"shortcut\"]\r\n'key' = 'S' # physical\r\n"
+        let edited = try AppSettings.edit(source, shortcut: CaptureShortcut(key: "K", modifiers: ["control"]), historyRetention: .oneDay)
+        XCTAssertEqual(edited, "# café\r\n[notes]\r\ntext = \"\"\"\r\n[history]\r\n[shortcut]\r\n\"\"\"\r\nvalues = [\r\n  '[history]', # retain array notes\r\n]\r\n[ 'history' ] # real\r\nretention_days = 1\r\n'shortcut' = false\r\n[\"shortcut\"]\r\nmodifiers = [\"control\"]\r\n'key' = \"K\" # physical\r\n")
+        XCTAssertEqual(try AppSettings.parse(edited).shortcut, CaptureShortcut(key: "K", modifiers: ["control"]))
+        XCTAssertEqual(try AppSettings.parse(edited).historyRetention, .oneDay)
+    }
+
+    func testQuotedHistoryTableMigrationPreservesHeaderAndFieldComments() throws {
+        let source = "['history'.\"shortcut\"] # optional\r\n'key' = 'H' # key\r\n\"modifiers\" = ['control'] # modifiers\r\n[notes]\r\nx = { 'a.b' = 'untouched', text = '# []' }"
+        let shortcut = CaptureShortcut(key: "J", modifiers: ["command"])
+        let edited = try AppSettings.edit(source, historyShortcut: shortcut)
+        XCTAssertEqual(edited, " # optional\r\n # key\r\n # modifiers\r\n[notes]\r\nx = { 'a.b' = 'untouched', text = '# []' }\r\n[history]\r\nshortcut = { key = \"J\", modifiers = [\"command\"] }\r\n")
+        XCTAssertEqual(try AppSettings.parse(edited).historyShortcut, shortcut)
+    }
+
+    func testHistoryTableMigrationIgnoresMultilineHeadersAndPreservesSource() throws {
+        let source = "# café\r\n[notes]\r\ntext = '''\r\n[history]\r\n[history.shortcut]\r\nkey = 'fake'\r\n'''\r\n[history] # retention\r\nretention_days = 3\r\n[history.shortcut] # optional\r\nkey = 'H' # physical\r\nmodifiers = ['command', 'shift']\r\n[other]\r\nvalues = [1, 2]\r\n"
+        let edited = try AppSettings.edit(source, clearHistoryShortcut: true)
+        XCTAssertEqual(edited, "# café\r\n[notes]\r\ntext = '''\r\n[history]\r\n[history.shortcut]\r\nkey = 'fake'\r\n'''\r\n[history] # retention\r\nshortcut = false\r\nretention_days = 3\r\n # optional\r\n # physical\r\n\r\n[other]\r\nvalues = [1, 2]\r\n")
+        XCTAssertNil(try AppSettings.parse(edited).historyShortcut)
+        XCTAssertEqual(try AppSettings.parse(edited).historyRetention, .threeDays)
+    }
+
     func testHistoryShortcutIsOptInAndCanBeAssignedClearedAndReassigned() throws {
         XCTAssertNil(try AppSettings.parse(AppSettings.defaultSource).historyShortcut)
         XCTAssertNil(try AppSettings.parse("").historyShortcut)
