@@ -165,69 +165,51 @@ struct AppSettings: Equatable {
             } ?? "false", expected.historyShortcut != current.historyShortcut),
         ]
         for (path, value, changed) in updates where changed {
-            if path == "history.shortcut", result.range(of: #"(?m)^\[history\.shortcut\][ \t]*(?:#[^\n]*)?(?:\r?\n|$)"#, options: .regularExpression) != nil {
-                // Move a table-form shortcut into one root dotted assignment, retaining
+            let spans = try SettingsSource(result)
+            let components = path.split(separator: ".").map(String.init)
+            if path == "history.shortcut",
+               let old = try TOMLTable(string: result)["history"]?.table?["shortcut"]?.table,
+               old.count != ["key", "modifiers"].filter({ old[$0] != nil }).count {
+                throw SettingsError(message: "Edit history.shortcut in the file: the table has extra fields.")
+            }
+            if path == "history.shortcut", let header = spans.tables[components] {
+                // Move a table-form shortcut into one assignment, retaining
                 // comments and refusing unknown table fields rather than deleting user data.
-                let table = try TOMLTable(string: result)
-                guard let old = table["history"]?.table?["shortcut"]?.table,
-                      old.count == ["key", "modifiers"].filter({ old[$0] != nil }).count else {
-                    throw SettingsError(message: "Edit history.shortcut in the file: the table has extra fields.")
-                }
-                let ranges = try editableRanges(in: result)
-                for key in ["history.shortcut.key", "history.shortcut.modifiers"] {
-                    if let range = ranges[key], result[range].contains("#") || result[range].contains("\n") {
-                        throw SettingsError(message: "Edit history.shortcut in the file: multiline comments cannot be preserved.")
+                var removals = [header.content]
+                for key in ["key", "modifiers"] {
+                    if let assignment = spans.assignments[components + [key]] {
+                        let range = assignment.value
+                        if result[range].contains("#") || result[range].contains(where: \.isNewline) {
+                            throw SettingsError(message: "Edit history.shortcut in the file: multiline comments cannot be preserved.")
+                        }
+                        removals.append(assignment.content)
                     }
                 }
-                var lines = result.components(separatedBy: "\n")
-                var inShortcut = false
-                for index in lines.indices {
-                    let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
-                    if trimmed.hasPrefix("[") {
-                        inShortcut = trimmed.range(of: #"^\[history\.shortcut\]\s*(#.*)?$"#, options: .regularExpression) != nil
-                        if inShortcut { lines[index] = lines[index].firstIndex(of: "#").map { String(lines[index][$0...]) } ?? "" }
-                    } else if inShortcut, trimmed.hasPrefix("key") || trimmed.hasPrefix("modifiers"), trimmed.contains("=") {
-                        lines[index] = lines[index].firstIndex(of: "#").map { String(lines[index][$0...]) } ?? ""
-                    }
+                for range in removals.sorted(by: { $0.lowerBound > $1.lowerBound }) {
+                    result.removeSubrange(range)
                 }
-                result = lines.joined(separator: "\n")
-                if let historyHeader = result.range(of: #"(?m)^\[history\][ \t]*(?:#[^\n]*)?(?:\r?\n|$)"#, options: .regularExpression) {
-                    let newline = result[historyHeader].hasSuffix("\n") ? "" : "\n"
-                    result.insert(contentsOf: newline + "shortcut = \(value)\n", at: historyHeader.upperBound)
-                } else {
-                    result += (result.hasSuffix("\n") ? "" : "\n") + "[history]\nshortcut = \(value)\n"
-                }
+                try SettingsSource(result).insert(value, at: components, into: &result)
                 continue
             }
-            let ranges = try editableRanges(in: result)
-            if let range = ranges[path] {
+            if let range = spans.assignments[components]?.value {
                 // Replacing an array containing comments would erase user notes.
-                guard !result[range].contains("#"), !result[range].contains("\n") else {
+                guard !result[range].contains("#"), !result[range].contains(where: \.isNewline) else {
                     throw SettingsError(message: "Edit \(path) in the file: this value's comments or multiline formatting cannot be preserved by Settings.")
                 }
                 result.replaceSubrange(range, with: value)
             } else {
                 let table = try TOMLTable(string: result)
-                let parts = path.split(separator: ".").map(String.init)
-                let section = parts.dropLast().joined(separator: ".")
-                let key = parts.last!
+                let section = components.dropLast().joined(separator: ".")
+                let key = components.last!
                 let parent: TOMLTable? = section == "shortcut" ? table["shortcut"]?.table
                     : section == "history" ? table["history"]?.table
                     : section == "history.shortcut" ? table["history"]?.table?["shortcut"]?.table : table
                 let exists = parent?[key] != nil
                 guard !exists else { throw SettingsError(message: "Edit \(path) in the file: its TOML layout cannot be safely updated by Settings.") }
-                // Root values must precede tables. A missing shortcut table can
-                // be introduced using dotted keys before the first table too.
-                if !section.isEmpty, parent != nil {
-                    let pattern = "(?m)^\\[" + NSRegularExpression.escapedPattern(for: section) + "\\][ \\t]*(?:#[^\\n]*)?(?:\\r?\\n|$)"
-                    guard let header = result.range(of: pattern, options: .regularExpression) else {
-                        throw SettingsError(message: "Edit \(path) in the file: its table layout cannot be safely updated by Settings.")
-                    }
-                    let newline = result[header].hasSuffix("\n") ? "" : "\n"
-                    result.insert(contentsOf: newline + "\(key) = \(value)\n", at: header.upperBound)
-                } else if !section.isEmpty {
-                    result += (result.hasSuffix("\n") || result.isEmpty ? "" : "\n") + "[\(section)]\n\(key) = \(value)\n"
-                } else { result = "\(path) = \(value)\n" + result }
+                if !section.isEmpty, parent != nil, spans.tables[Array(components.dropLast())] == nil {
+                    throw SettingsError(message: "Edit \(path) in the file: its table layout cannot be safely updated by Settings.")
+                }
+                spans.insert(value, at: components, into: &result)
             }
         }
         guard try parse(result) == expected else { throw SettingsError(message: "Settings could not safely edit this TOML layout. Edit the file directly.") }
@@ -251,21 +233,45 @@ struct AppSettings: Equatable {
         }
         return result
     }
+}
 
-    private static func editableRanges(in source: String) throws -> [String: Range<String.Index>] {
-        var ranges: [String: Range<String.Index>] = [:]
-        var section = ""
+/// Source locations only: TOMLKit remains responsible for syntax and semantics.
+/// Values are skipped as a unit, so strings and arrays cannot introduce tables.
+private struct SettingsSource {
+    struct Assignment {
+        let value: Range<String.Index>
+        let content: Range<String.Index>
+    }
+    struct Table {
+        let content: Range<String.Index>
+        let end: String.Index
+    }
+    var assignments: [[String]: Assignment] = [:]
+    var tables: [[String]: Table] = [:]
+    let newline: String
+
+    init(_ source: String) throws {
+        newline = source.first(where: \.isNewline).map(String.init) ?? "\n"
+        var section: [String]? = []
         var position = source.startIndex
         while position < source.endIndex {
             let lineEnd = source[position...].firstIndex(where: \.isNewline) ?? source.endIndex
             let line = String(source[position..<lineEnd])
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.hasPrefix("[") {
-                section = ["shortcut", "history", "history.shortcut"].first {
-                    trimmed.range(of: "^\\[" + NSRegularExpression.escapedPattern(for: $0) + "\\]\\s*(#.*)?$", options: .regularExpression) != nil
-                } ?? "unrelated"
-            } else if !trimmed.hasPrefix("#"), let equals = source[position..<lineEnd].firstIndex(of: "=") {
-                let key = source[position..<equals].trimmingCharacters(in: .whitespaces)
+                // Header delimiters and comments can occur inside quoted keys.
+                let end = Self.delimiter("]", in: source, from: source.index(after: position), until: lineEnd)
+                section = nil
+                if !trimmed.hasPrefix("[["), let end,
+                   let open = source[position..<end].firstIndex(of: "[") {
+                    section = try Self.keyPath(String(source[source.index(after: open)..<end]))
+                    if let section {
+                        tables[section] = Table(content: position..<source.index(after: end),
+                                                end: lineEnd < source.endIndex ? source.index(after: lineEnd) : lineEnd)
+                    }
+                }
+            } else if !trimmed.hasPrefix("#"), let equals = Self.delimiter("=", in: source, from: position, until: lineEnd) {
+                let key = try Self.keyPath(String(source[position..<equals]))
                 var start = source.index(after: equals)
                 while start < source.endIndex, source[start] == " " || source[start] == "\t" { start = source.index(after: start) }
                 var end = start
@@ -286,6 +292,12 @@ struct AppSettings: Equatable {
                             if !triple { quote = nil }
                             else if source[end...].hasPrefix(marker) {
                                 end = source.index(end, offsetBy: 2)
+                                // TOML permits one or two quote characters just
+                                // before the closing triple delimiter.
+                                while source.index(after: end) < source.endIndex,
+                                      source[source.index(after: end)] == delimiter {
+                                    end = source.index(after: end)
+                                }
                                 quote = nil
                             }
                         }
@@ -302,8 +314,9 @@ struct AppSettings: Equatable {
                 }
                 var valueEnd = end
                 while valueEnd > start, source[source.index(before: valueEnd)].isWhitespace { valueEnd = source.index(before: valueEnd) }
-                let path = section.isEmpty ? key : section + "." + key
-                if ["watermark", "shortcut.key", "shortcut.modifiers", "history.retention_days", "history.shortcut", "history.shortcut.key", "history.shortcut.modifiers"].contains(path) { ranges[path] = start..<valueEnd }
+                if let section, let key {
+                    assignments[section + key] = Assignment(value: start..<valueEnd, content: position..<valueEnd)
+                }
                 position = end
                 if position < source.endIndex, source[position] == "#" {
                     position = source[position...].firstIndex(where: \.isNewline) ?? source.endIndex
@@ -313,6 +326,48 @@ struct AppSettings: Equatable {
             }
             position = lineEnd < source.endIndex ? source.index(after: lineEnd) : lineEnd
         }
-        return ranges
+    }
+
+    func insert(_ value: String, at path: [String], into source: inout String) {
+        let section = Array(path.dropLast())
+        let assignment = "\(path.last!) = \(value)\(newline)"
+        if let header = tables[section] {
+            let separator = header.end == source.endIndex && !source.hasSuffix(newline) ? newline : ""
+            source.insert(contentsOf: separator + assignment, at: header.end)
+        } else if section.isEmpty {
+            source = assignment + source
+        } else {
+            let separator = source.isEmpty || source.last?.isNewline == true ? "" : newline
+            source += separator + "[\(section.joined(separator: "."))]\(newline)" + assignment
+        }
+    }
+
+    private static func keyPath(_ key: String) throws -> [String]? {
+        var table = try TOMLTable(string: "\(key) = 0")
+        var path: [String] = []
+        while table.count == 1, let name = table.keys.first, let value = table[name] {
+            path.append(name)
+            if let child = value.table { table = child }
+            else { return path }
+        }
+        return nil
+    }
+
+    private static func delimiter(_ delimiter: Character, in source: String,
+                                  from start: String.Index, until end: String.Index) -> String.Index? {
+        var quote: Character?
+        var escaped = false
+        var position = start
+        while position < end {
+            let char = source[position]
+            if escaped { escaped = false }
+            else if quote == "\"", char == "\\" { escaped = true }
+            else if let current = quote { if char == current { quote = nil } }
+            else if char == "\"" || char == "'" { quote = char }
+            else if char == "#" { return nil }
+            else if char == delimiter { return position }
+            position = source.index(after: position)
+        }
+        return nil
     }
 }
