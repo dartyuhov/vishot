@@ -8,12 +8,13 @@ final class HistoryImageRequest {
     var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
 }
 
-/// Main-thread facade. Disk/encoding work is serialized; one OCR request runs at a time on a
-/// separate queue, so recognition never holds up publication or browser reads.
+/// Main-thread facade. Disk/encoding work is serialized; browser decoding and OCR run on
+/// separate queues, so neither holds up publication. Browser reads snapshot immutable bytes
+/// on the worker before revision assets can be replaced or deleted.
 final class HistoryLibrary {
     private let store: HistoryStore
     private let worker = DispatchQueue(label: "dev.vishot.history", qos: .utility)
-    private let browserReader = DispatchQueue(label: "dev.vishot.history.images", qos: .userInitiated)
+    private let browserReader: DispatchQueue
     private let ocr = DispatchQueue(label: "dev.vishot.history.ocr", qos: .utility)
     private var timer: Timer?
     private var indexing: Set<String> = [] // worker queue only
@@ -26,7 +27,11 @@ final class HistoryLibrary {
         didSet { if oldValue != retention { cleanup() } }
     }
 
-    init(store: HistoryStore = HistoryStore()) { self.store = store }
+    init(store: HistoryStore = HistoryStore(),
+         browserReader: DispatchQueue = DispatchQueue(label: "dev.vishot.history.images", qos: .userInitiated)) {
+        self.store = store
+        self.browserReader = browserReader
+    }
     deinit { timer?.invalidate() }
 
     func start() {
@@ -71,14 +76,27 @@ final class HistoryLibrary {
     func image(_ entry: HistoryEntry, thumbnail: Bool, maxPixelSize: Int? = nil,
                completion: @escaping (CGImage?) -> Void) -> HistoryImageRequest {
         let request = HistoryImageRequest()
-        browserReader.async {
+        worker.async {
             guard !request.isCancelled else { return }
             do {
-                let image = try self.store.preview(entry, thumbnail: thumbnail, maxPixelSize: thumbnail ? 320 : maxPixelSize)
-                DispatchQueue.main.async { if !request.isCancelled { completion(image) } }
+                guard let data = try self.store.previewData(entry, thumbnail: thumbnail) else { return }
+                self.browserReader.async {
+                    guard !request.isCancelled else { return }
+                    let result = Result { try HistoryStore.previewImage(data, maxPixelSize: thumbnail ? 320 : maxPixelSize) }
+                    DispatchQueue.main.async {
+                        guard !request.isCancelled else { return }
+                        switch result {
+                        case .success(let image): completion(image)
+                        case .failure(let error): self.report(error, unlessCancelled: request); completion(nil)
+                        }
+                    }
+                }
             } catch {
-                if !request.isCancelled { self.report(error) }
-                DispatchQueue.main.async { if !request.isCancelled { completion(nil) } }
+                DispatchQueue.main.async {
+                    guard !request.isCancelled else { return }
+                    self.report(error, unlessCancelled: request)
+                    completion(nil)
+                }
             }
         }
         return request
@@ -153,7 +171,11 @@ final class HistoryLibrary {
         } catch { indexing.remove(key); failedIndex.insert(entry.revision); report(error) }
     }
 
-    private func report(_ error: Error) {
-        DispatchQueue.main.async { self.error = "History: \(error.localizedDescription)"; self.onChange?() }
+    private func report(_ error: Error, unlessCancelled request: HistoryImageRequest? = nil) {
+        DispatchQueue.main.async {
+            guard request?.isCancelled != true else { return }
+            self.error = "History: \(error.localizedDescription)"
+            self.onChange?()
+        }
     }
 }
