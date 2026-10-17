@@ -220,13 +220,13 @@ private final class EditorToolbar {
         (.undo, HUDKey("u", action: "undo")),
         (.redo, HUDKey("⌃r", action: "redo")),
     ]
-    private static let actions: [(ToolbarItem, HUDKey)] = [
-        (.finish(.copy), HUDKey("y", action: "copy to clipboard")),
-        (.finish(.save), HUDKey("s", action: "save")),
-        (.finish(.saveAndCopy), HUDKey("S", action: "save+copy")),
-        (.finish(.saveAs), HUDKey("⌘s", action: "save as")),
-        (.finish(.discard), HUDKey("esc", action: "discard")),
-        (.toggleHUD, HUDKey("o", action: "hide HUD")),
+    private static let actions: [(item: ToolbarItem, key: HUDKey, row: Int, column: Int)] = [
+        (.finish(.copy), HUDKey("y", action: "copy to clipboard"), 0, 0),
+        (.finish(.save), HUDKey("s", action: "save"), 0, 1),
+        (.finish(.saveAndCopy), HUDKey("S", action: "save+copy"), 1, 0),
+        (.finish(.saveAs), HUDKey("⌘s", action: "save as"), 1, 1),
+        (.escape, HUDKey("esc", action: "discard"), 2, 0),
+        (.toggleHUD, HUDKey("o", action: "hide HUD"), 2, 1),
     ]
 
     init(scale: CGFloat, layout: EditorHUDPlacement.Layout = .horizontal) {
@@ -264,11 +264,11 @@ private final class EditorToolbar {
             historyParts.append((entry.layer, historyParts.isEmpty ? 0 : HUD.entryGap))
         }
 
-        var actions: [CALayer] = []
-        for (item, key) in Self.actions {
-            let entry = HUD.makeEntry(key, scale: scale)
-            buttons.append((item, entry.layer, entry))
-            actions.append(entry.layer)
+        var actions: [ToolbarItem: CALayer] = [:]
+        for control in Self.actions {
+            let entry = HUD.makeEntry(control.key, scale: scale)
+            buttons.append((control.item, entry.layer, entry))
+            actions[control.item] = entry.layer
         }
 
         let statusHeight = HUD.textSize("Hg", font: HUD.textFont).height
@@ -295,12 +295,13 @@ private final class EditorToolbar {
         let editingRight = max(tools.frame.maxX, history.frame.maxX, indent + 440)
         let dividerX = editingRight + HUD.entryGap
         let actionX = dividerX + 2 + HUD.entryGap
-        let firstColumnWidth = max(actions[0].frame.width, actions[2].frame.width, actions[4].frame.width)
+        let firstColumnWidth = Self.actions.filter { $0.column == 0 }.map { actions[$0.item]!.frame.width }.max() ?? 0
         let secondColumnX = actionX + firstColumnWidth + HUD.entryGap
         var actionRight = actionX
-        for (index, layer) in actions.enumerated() {
-            let x = index.isMultiple(of: 2) ? actionX : secondColumnX
-            let y = topY - CGFloat(index / 2) * (rowHeight + HUD.lineGap)
+        for control in Self.actions {
+            let layer = actions[control.item]!
+            let x = control.column == 0 ? actionX : secondColumnX
+            let y = topY - CGFloat(control.row) * (rowHeight + HUD.lineGap)
             layer.frame.origin = CGPoint(x: x, y: y + ((rowHeight - layer.frame.height) / 2).rounded())
             root.addSublayer(layer)
             actionRight = max(actionRight, layer.frame.maxX)
@@ -330,10 +331,11 @@ private final class EditorToolbar {
             var y = height - HUD.padding.height - rowHeight
             name.frame.origin.y = y + HUD.textY(HUD.nameFont, lineHeight: name.frame.height, in: rowHeight, scale: scale)
             y -= step
-            let toolHeight = CGFloat(top.count) * step
+            let toolHeight = CGFloat((top.count + 1) / 2) * step
             tools.frame = CGRect(x: HUD.padding.width, y: y - toolHeight + step, width: contentWidth, height: toolHeight)
             for (index, part) in top.enumerated() {
-                part.layer.frame.origin = CGPoint(x: 0, y: toolHeight - CGFloat(index + 1) * step + Style.swatchRing)
+                part.layer.frame.origin = CGPoint(x: index.isMultiple(of: 2) ? 0 : contentWidth / 2,
+                                                  y: toolHeight - CGFloat(index / 2 + 1) * step + Style.swatchRing)
             }
             y -= toolHeight
             idleStatusFrame = CGRect(x: HUD.padding.width, y: y - 80 + rowHeight, width: contentWidth, height: 80)
@@ -351,29 +353,31 @@ private final class EditorToolbar {
             }
             colors.frame.size = CGSize(width: contentWidth, height: 3 * step)
             y -= 3 * step
-            let historyHeight = CGFloat(historyParts.count) * step
+            let historyHeight = step
             history.frame = CGRect(x: HUD.padding.width, y: y - historyHeight + step, width: contentWidth, height: historyHeight)
             for (index, part) in historyParts.enumerated() {
-                part.layer.frame.origin = CGPoint(x: 0, y: historyHeight - CGFloat(index + 1) * step + Style.swatchRing)
+                part.layer.frame.origin = CGPoint(x: index.isMultiple(of: 2) ? 0 : contentWidth / 2,
+                                                  y: Style.swatchRing)
             }
             y -= historyHeight - rowHeight
             y -= HUD.lineGap
             divider.frame = CGRect(x: HUD.padding.width, y: y, width: contentWidth, height: 2)
             y -= step
-            for layer in actions {
+            for control in Self.actions {
+                let layer = actions[control.item]!
                 layer.frame.origin = CGPoint(x: HUD.padding.width, y: y)
                 y -= step
             }
             // Remove unused space below the last action without changing any of the local slots.
-            let excess = actions.last!.frame.minY - HUD.padding.height
+            let excess = actions.values.map { $0.frame.minY }.min()! - HUD.padding.height
             for layer in root.sublayers ?? [] { layer.frame.origin.y -= excess }
             idleStatusFrame.origin.y -= excess
             activeStatusFrame.origin.y -= excess
             root.frame.size.height -= excess
         } else if layout == .compact {
             for layer in root.sublayers ?? [] { layer.isHidden = true }
-            let toggle = actions.last!
-            let discard = actions[4]
+            let toggle = actions[.toggleHUD]!
+            let discard = actions[.escape]!
             toggle.isHidden = false
             discard.isHidden = false
             let toggleEntry = buttons.first { $0.item == .toggleHUD }!.entry!
@@ -411,16 +415,16 @@ private final class EditorToolbar {
     }
 
     func update(_ scene: EditorScene, canHideHUD: Bool) {
-        tools.isHidden = scene.isUsingTool || layout == .compact
-        history.isHidden = scene.isUsingTool || layout == .compact
+        tools.isHidden = scene.context.isActive || layout == .compact
+        history.isHidden = scene.context.isActive || layout == .compact
         colors.isHidden = scene.isCropping || layout == .compact
         colorHint.action.string = scene.color.name
-        name.string = scene.isUsingTool ? (scene.tool?.name.uppercased() ?? "EDIT") : "EDIT"
-        status.frame = scene.isUsingTool ? activeStatusFrame : idleStatusFrame
+        name.string = scene.context.isActive ? (scene.context.tool?.name.uppercased() ?? "EDIT") : "EDIT"
+        status.frame = scene.context.isActive ? activeStatusFrame : idleStatusFrame
         for (item, layer, entry) in buttons {
             switch item {
             case .tool(let tool):
-                let isActive = tool == scene.tool
+                let isActive = tool == scene.context.tool
                 entry?.faces.forEach { $0.backgroundColor = (isActive ? Style.accent : Palette.surfaceRaised).cgColor }
                 entry?.action.foregroundColor = (isActive ? Palette.text : Palette.textMuted).cgColor
             case .color(let color):
@@ -429,9 +433,9 @@ private final class EditorToolbar {
                 layer.opacity = scene.canUndo ? 1 : 0.35
             case .redo:
                 layer.opacity = scene.canRedo ? 1 : 0.35
-            case .finish(.discard):
+            case .escape:
                 // Esc places the current annotation (or applies a resize) before it can discard.
-                entry?.action.string = scene.isUsingTool ? (scene.isCropping ? "apply" : "place") : "discard"
+                entry?.action.string = scene.context.escapeLabel
             case .finish:
                 break
             case .toggleHUD:
@@ -443,10 +447,14 @@ private final class EditorToolbar {
 
     /// `point` is in the toolbar's coordinates.
     func item(at point: CGPoint) -> ToolbarItem? {
-        buttons.first {
-            guard !$0.layer.isHidden, $0.layer.opacity == 1,
-                  let parent = $0.layer.superlayer, !parent.isHidden else { return false }
-            return $0.layer.frame.contains(parent.convert(point, from: root))
+        guard !root.isHidden, root.bounds.contains(point) else { return nil }
+        return buttons.first {
+            var ancestor: CALayer? = $0.layer
+            while let layer = ancestor, layer !== root {
+                guard !layer.isHidden, layer.opacity == 1 else { return false }
+                ancestor = layer.superlayer
+            }
+            return root.convert($0.layer.bounds, from: $0.layer).contains(point)
         }?.item
     }
 }

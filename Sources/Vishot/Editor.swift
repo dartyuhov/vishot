@@ -2,12 +2,55 @@ import AppKit
 import Carbon.HIToolbox
 
 /// A toolbar button.
-enum ToolbarItem: Equatable {
+enum ToolbarItem: Hashable {
     case tool(EditorController.Tool)
     case color(AnnotationColor)
     case undo, redo
     case toggleHUD
+    case escape
     case finish(EditorController.Finish)
+}
+
+/// The meaning of the current action, shared by input and every HUD layout.
+enum EditorActionContext: Equatable {
+    case idle(EditorController.Tool?)
+    case drawing(EditorController.Tool, mouse: Bool)
+    case typing
+    case resizing
+
+    var isActive: Bool {
+        if case .idle = self { return false }
+        return true
+    }
+
+    var tool: EditorController.Tool? {
+        switch self {
+        case .idle(let tool): return tool
+        case .drawing(let tool, _): return tool
+        case .typing: return .text
+        case .resizing: return .crop
+        }
+    }
+
+    var escapeLabel: String {
+        switch self {
+        case .idle: return "discard"
+        case .resizing: return "apply"
+        case .drawing, .typing: return "place"
+        }
+    }
+
+    var status: String {
+        switch self {
+        case .idle(let tool):
+            return tool == nil ? "choose a tool to start editing · arrows/hjkl move" : "arrows/hjkl move · choose a tool or drag to draw"
+        case .drawing(let tool, mouse: false):
+            return "move, then ↵ / \(tool.key) / esc place · u cancel"
+        case .drawing(_, mouse: true): return "release / esc place · u cancel"
+        case .typing: return "⇧↵ new line · ↵ / esc place · ⌘z cancel · tab color"
+        case .resizing: return "tab corner · hjkl / drag resize · ↵ / esc apply · u cancel"
+        }
+    }
 }
 
 /// What the editor shows. Geometry is in image space, except `frame`.
@@ -19,14 +62,12 @@ struct EditorScene {
     let annotations: [Annotation]
     let crop: CGRect?
     /// A crop is being drawn, so it gets an outline.
-    let isCropping: Bool
+    var isCropping: Bool { context == .resizing }
     let cropHandle: CGPoint?
     /// Nil while typing, when the caret shows instead.
     let cursor: CGPoint?
     let caret: CGRect?
-    let tool: EditorController.Tool?
-    /// A drawing, label, or resize is in progress; show its controls instead of the tool list.
-    let isUsingTool: Bool
+    let context: EditorActionContext
     let isHUDHidden: Bool
     let color: AnnotationColor
     let canUndo: Bool
@@ -37,7 +78,7 @@ struct EditorScene {
 
 /// Edits a capture in place, over the overlay panels. Takes keys and mouse events until it finishes.
 final class EditorController {
-    enum Tool: CaseIterable {
+    enum Tool: CaseIterable, Hashable {
         case arrow, rect, text, crop
 
         var name: String {
@@ -59,7 +100,7 @@ final class EditorController {
         }
     }
 
-    enum Finish {
+    enum Finish: Hashable {
         case copy, save, saveAndCopy, saveAs, discard
     }
 
@@ -197,8 +238,17 @@ final class EditorController {
     }
 
     private var isTyping: Bool {
-        if case .typing = action { return true }
-        return false
+        actionContext == .typing
+    }
+
+    private var actionContext: EditorActionContext {
+        if resizing != nil { return .resizing }
+        switch action {
+        case .idle: return .idle(tool)
+        case .anchored: return .drawing(tool!, mouse: false)
+        case .dragging: return .drawing(tool!, mouse: true)
+        case .typing: return .typing
+        }
     }
 
     private func toggleHUD() {
@@ -251,11 +301,15 @@ final class EditorController {
 
     /// Like a label, a shape in progress is kept. Only ⌘z or u drop it.
     private func escape(confirmed: Bool) {
-        if resizing != nil { finishResize(commit: true); return }
-        switch action {
-        case .anchored(let start), .dragging(let start):
+        switch actionContext {
+        case .resizing: finishResize(commit: true)
+        case .drawing:
             pressedAt = nil
-            commit(from: start, to: cursor.position, beepsWhenEmpty: false)
+            if case .anchored(let start) = action {
+                commit(from: start, to: cursor.position, beepsWhenEmpty: false)
+            } else if case .dragging(let start) = action {
+                commit(from: start, to: cursor.position, beepsWhenEmpty: false)
+            }
         case .typing:
             placeText()
         case .idle:
@@ -384,7 +438,7 @@ final class EditorController {
         case .color(let newColor): color = newColor
         case .undo: undo()
         case .redo: redo()
-        case .finish(.discard): escape(confirmed: confirmed)
+        case .escape, .finish(.discard): escape(confirmed: confirmed)
         case .finish(let kind): finish(kind)
         }
     }
@@ -494,9 +548,8 @@ final class EditorController {
 
     /// With an action in progress, undo only cancels it.
     private func undo() {
-        if resizing != nil { finishResize(commit: false); return }
-        if action != .idle {
-            cancelAction()
+        if actionContext.isActive {
+            cancelCurrentAction()
             return
         }
         var state = document.snapshot
@@ -510,9 +563,8 @@ final class EditorController {
 
     /// With an action in progress, redo only cancels it, like undo.
     private func redo() {
-        if resizing != nil { finishResize(commit: false); return }
-        if action != .idle {
-            cancelAction()
+        if actionContext.isActive {
+            cancelCurrentAction()
             return
         }
         var state = document.snapshot
@@ -544,11 +596,14 @@ final class EditorController {
 
     // MARK: - Output
 
-    func render(on panels: [OverlayPanel]) {
+    private func cancelCurrentAction() {
+        if actionContext == .resizing { finishResize(commit: false) } else { cancelAction() }
+    }
+
+    func makeScene() -> EditorScene {
         let frame = CGRect(origin: imageOrigin, size: CGSize(width: document.size.width * viewScale, height: document.size.height * viewScale))
         var annotations = document.annotations
         var crop = document.crop
-        let isCropping = resizing != nil
         if let resize = resizing {
             crop = resize.area.rect
         }
@@ -561,18 +616,16 @@ final class EditorController {
             caret = AnnotationRenderer.caret(after: text, at: at)
         case .idle: break
         }
-        let scene = EditorScene(
+        return EditorScene(
             image: document.image,
             frame: frame.flippedBetweenCocoaAndCG,
             annotations: annotations,
             crop: crop,
-            isCropping: isCropping,
             cropHandle: resizing.map { $0.handle.point(in: $0.area.rect) }
                 ?? hoveredHandle.map { $0.point(in: editArea.rect) },
             cursor: caret == nil ? cursor.position : nil,
             caret: caret,
-            tool: resizing == nil ? tool : .crop,
-            isUsingTool: resizing != nil || action != .idle,
+            context: actionContext,
             isHUDHidden: isHUDHidden,
             color: color,
             canUndo: history.canUndo,
@@ -580,6 +633,11 @@ final class EditorController {
             status: status,
             viewScale: viewScale
         )
+    }
+
+    func render(on panels: [OverlayPanel]) {
+        let scene = makeScene()
+        let frame = scene.frame.flippedBetweenCocoaAndCG
         // The toolbar goes on the screen showing most of the image.
         let toolbarPanel = panels.max { visibleArea(of: frame, on: $0) < visibleArea(of: frame, on: $1) }
         for panel in panels {
@@ -595,16 +653,6 @@ final class EditorController {
 
     private var status: String {
         if !message.isEmpty { return message }
-        if resizing != nil { return "tab corner · hjkl / drag resize · ↵ / esc apply · u cancel" }
-        switch action {
-        case .idle:
-            return tool == nil ? "choose a tool to start editing · arrows/hjkl move" : "arrows/hjkl move · choose a tool or drag to draw"
-        case .anchored:
-            return "move, then ↵ / \(tool?.key ?? "") / esc place · u cancel"
-        case .dragging:
-            return "release / esc place · u cancel"
-        case .typing:
-            return "⇧↵ new line · ↵ / esc place · ⌘z cancel · tab color"
-        }
+        return actionContext.status
     }
 }
