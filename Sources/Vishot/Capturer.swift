@@ -42,7 +42,7 @@ final class Capturer {
         let task = contentTask ?? Self.loadContent()
         contentTask = nil
         do {
-            let content = try await task.value
+            let content = try await excludingOwnApplication(from: task)
             guard let selection = EditArea.displaySelection(for: target.frame, displays: content.displays.map(\.frame)) else { return nil }
             let display = content.displays[selection.index]
             let own = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
@@ -61,7 +61,7 @@ final class Capturer {
         let task = contentTask ?? Self.loadContent()
         contentTask = nil
         do {
-            let content = try await task.value
+            let content = try await excludingOwnApplication(from: task)
             switch target.kind {
             case .window(let windowID), .element(let windowID, _):
                 guard let window = content.windows.first(where: { $0.windowID == windowID }) else { return nil }
@@ -123,7 +123,7 @@ final class Capturer {
     }
 
     /// Writes a PNG in the background. If that fails the image goes to the clipboard, so it isn't lost.
-    func save(_ image: CGImage, scale: CGFloat, to url: URL, watermark: Bool? = nil) {
+    func save(_ image: CGImage, scale: CGFloat, to url: URL, watermark: Bool? = nil, completion: (() -> Void)? = nil) {
         let output = ImageOutput(image: image, scale: scale, watermark: watermark ?? self.watermark)
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -131,11 +131,13 @@ final class Capturer {
                     throw CocoaError(.fileWriteUnknown)
                 }
                 try data.write(to: url, options: .atomic)
+                DispatchQueue.main.async { completion?() }
             } catch {
                 NSLog("Vishot save to \(url.path) failed: \(error)")
                 DispatchQueue.main.async {
                     NSSound.beep()
                     self.copy(image, scale: scale, watermark: output.watermark)
+                    completion?()
                 }
             }
         }
@@ -155,8 +157,24 @@ final class Capturer {
         return crop.isEmpty ? nil : crop
     }
 
+    /// Prefetch may finish before our panels are on screen. Never build a display filter from
+    /// that snapshot unless it contains our app: an empty exclusion list captures the picker.
+    @MainActor
+    private func excludingOwnApplication(from task: Task<SCShareableContent, Error>) async throws -> SCShareableContent {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        var content = try await task.value
+        if !content.applications.contains(where: { $0.processID == pid }) {
+            content = try await Self.loadContent().value
+        }
+        guard content.applications.contains(where: { $0.processID == pid }) else {
+            throw SettingsError(message: "Could not exclude Vishot from screen capture.")
+        }
+        return content
+    }
+
     private static func loadContent() -> Task<SCShareableContent, Error> {
-        Task { try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true) }
+        // Include our prebuilt, currently offscreen panels in the catalog too.
+        Task { try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: false) }
     }
 }
 

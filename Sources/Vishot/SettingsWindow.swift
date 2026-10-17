@@ -3,30 +3,60 @@ import AppKit
 final class SettingsWindow: NSWindowController, NSWindowDelegate {
     private let store: SettingsStore
     private let recorder = ShortcutRecorder(frame: .zero)
+    private let historyRecorder = ShortcutRecorder(frame: .zero)
+    private let clearHistoryShortcut = NSButton(title: "Clear", target: nil, action: nil)
+    private let retention = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let historyUsage = NSTextField(wrappingLabelWithString: "")
+    private let clearHistory = NSButton(title: "Clear History…", target: nil, action: nil)
+    private let history: HistoryLibrary?
     private let watermark = NSButton(checkboxWithTitle: "Include vishot.dev watermark", target: nil, action: nil)
     private let status = NSTextField(wrappingLabelWithString: "")
     private let statusHeading = NSTextField(labelWithString: "")
     private let statusSection = NSStackView()
     private let contentStack = NSStackView()
     func recordGlobalShortcut(_ shortcut: CaptureShortcut) -> Bool {
-        guard window?.isKeyWindow == true, recorder.isRecording else { return false }
+        guard window?.isKeyWindow == true else { return false }
+        if historyRecorder.isRecording { historyRecorder.accept(shortcut); return true }
+        guard recorder.isRecording else { return false }
         recorder.accept(shortcut)
         return true
     }
 
-    init(store: SettingsStore) {
+    init(store: SettingsStore, history: HistoryLibrary? = nil) {
         self.store = store
+        self.history = history
         let window = SettingsPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 400),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Vishot Settings"
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
-        window.isRecordingShortcut = { [weak self] in self?.recorder.isRecording == true }
+        window.isRecordingShortcut = { [weak self] in self?.recorder.isRecording == true || self?.historyRecorder.isRecording == true }
         recorder.onRecord = { [weak self] shortcut in self?.store.update(shortcut: shortcut) }
         recorder.onError = { [weak self] message in self?.showStatus("Shortcut Error", message: message, isError: true) }
         recorder.setAccessibilityLabel("Global capture shortcut")
         recorder.setAccessibilityHelp("Press to record a shortcut. Include Command or Control. Escape cancels.")
+        historyRecorder.onRecord = { [weak self] in self?.store.update(historyShortcut: $0) }
+        historyRecorder.onError = recorder.onError
+        historyRecorder.setAccessibilityLabel("Global History shortcut")
+        historyRecorder.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        historyRecorder.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        historyRecorder.font = .systemFont(ofSize: 13, weight: .medium)
+        retention.addItems(withTitles: HistoryRetention.allCases.map(\.label))
+        retention.target = self
+        retention.action = #selector(changeRetention)
+        retention.setAccessibilityLabel("History retention")
+        clearHistory.target = self
+        clearHistory.action = #selector(clearCaptures)
+        historyUsage.font = .systemFont(ofSize: 12)
+        historyUsage.textColor = .secondaryLabelColor
+        clearHistoryShortcut.target = self
+        clearHistoryShortcut.action = #selector(removeHistoryShortcut)
+        clearHistoryShortcut.setAccessibilityLabel("Clear History shortcut")
+        let historyKeys = NSStackView(views: [NSTextField(labelWithString: "History shortcut"), NSView(), historyRecorder, clearHistoryShortcut])
+        historyKeys.orientation = .horizontal
+        let historyPolicy = NSStackView(views: [NSTextField(labelWithString: "Keep captures for"), retention, NSView(), clearHistory])
+        historyPolicy.orientation = .horizontal
         watermark.target = self
         watermark.action = #selector(toggleWatermark)
         let path = NSTextField(wrappingLabelWithString: (store.url.path as NSString).abbreviatingWithTildeInPath)
@@ -77,6 +107,9 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
             section("Capture", views: [row, help("Click the shortcut to record a new one. Include ⌘ or ⌃; Esc cancels.")]),
             separator(),
             section("Watermark", views: [watermark, help("Keep this on to help others discover Vishot.")]),
+            separator(),
+            section("Capture History", views: [historyKeys, historyPolicy, historyUsage,
+                help("Stores editable full-display originals locally. Off stops new entries; existing entries still expire. There is no disk-size limit.")]),
             separator(),
             section("Configuration", views: [path, buttons, help("File edits reload automatically. Changes are saved as you make them.")]),
             statusSection,
@@ -161,8 +194,8 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         window.setFrame(frame, display: true)
     }
 
-    func windowWillClose(_ notification: Notification) { recorder.cancel() }
-    func windowDidResignKey(_ notification: Notification) { recorder.cancel() }
+    func windowWillClose(_ notification: Notification) { recorder.cancel(); historyRecorder.cancel() }
+    func windowDidResignKey(_ notification: Notification) { recorder.cancel(); historyRecorder.cancel() }
 
     func present() {
         store.reload()
@@ -175,12 +208,21 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     func refresh() {
         let settings = store.configured ?? store.active
         recorder.shortcut = settings.shortcut
+        historyRecorder.shortcut = settings.historyShortcut
+        historyRecorder.isEnabled = store.configured != nil
+        clearHistoryShortcut.isEnabled = store.configured != nil && settings.historyShortcut != nil
+        retention.selectItem(at: HistoryRetention.allCases.firstIndex(of: settings.historyRetention) ?? 3)
+        retention.isEnabled = store.configured != nil
+        clearHistory.isEnabled = history != nil && !store.isSessionActive
+        historyUsage.stringValue = "Storage used: " + ByteCountFormatter.string(fromByteCount: history?.diskUsage ?? 0, countStyle: .file)
         recorder.toolTip = "\(settings.shortcut.display) — Click to record a new shortcut"
         watermark.state = settings.watermark ? .on : .off
         watermark.isEnabled = store.configured != nil
         recorder.isEnabled = store.configured != nil
         if let error = store.error {
             showStatus("Configuration Error", message: "\(error)\nActive: \(store.active.shortcut.display); watermark \(store.active.watermark ? "on" : "off").", isError: true)
+        } else if let error = history?.error {
+            showStatus("History Error", message: error, isError: true)
         } else if store.isSessionActive && store.configured != store.active {
             showStatus("Changes Pending", message: "Changes apply after this capture/editor session. Active: \(store.active.shortcut.display); watermark \(store.active.watermark ? "on" : "off").", isError: false)
         } else {
@@ -189,6 +231,17 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func toggleWatermark() { store.update(watermark: watermark.state == .on) }
+    @objc private func changeRetention() { store.update(historyRetention: HistoryRetention.allCases[retention.indexOfSelectedItem]) }
+    @objc private func removeHistoryShortcut() { store.update(clearHistoryShortcut: true) }
+    @objc private func clearCaptures() {
+        guard !store.isSessionActive, let history else { return }
+        let alert = NSAlert()
+        alert.messageText = "Clear Capture History?"
+        alert.informativeText = "This permanently removes retained captures and edits. Exported PNG files are not affected."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Clear History")
+        if alert.runModal() == .alertSecondButtonReturn, !store.isSessionActive { history.clear() }
+    }
     @objc private func openFile() {
         if !NSWorkspace.shared.open(store.url) { showStatus("Couldn’t Open File", message: "No app is configured to open TOML files. Use Reveal in Finder to choose an editor.", isError: true) }
     }
@@ -215,7 +268,7 @@ private final class SettingsDocumentView: NSView {
 }
 
 private final class ShortcutRecorder: NSButton {
-    var shortcut = CaptureShortcut.defaults { didSet { if !recording { title = shortcut.display } } }
+    var shortcut: CaptureShortcut? = CaptureShortcut.defaults { didSet { if !recording { title = shortcut?.display ?? "Assign shortcut…" } } }
     var onRecord: ((CaptureShortcut) -> Void)?
     var onError: ((String) -> Void)?
     private var recording = false
@@ -244,13 +297,13 @@ private final class ShortcutRecorder: NSButton {
 
     func cancel() {
         recording = false
-        title = shortcut.display
+        title = shortcut?.display ?? "Assign shortcut…"
     }
 
     func accept(_ next: CaptureShortcut) {
         recording = false
         onRecord?(next)
-        title = shortcut.display
+        title = shortcut?.display ?? "Assign shortcut…"
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

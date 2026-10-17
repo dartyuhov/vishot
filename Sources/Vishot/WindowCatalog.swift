@@ -10,6 +10,7 @@ struct WindowInfo {
     /// Centroid of the part of the window that is actually visible. Used for navigation,
     /// so partially covered windows are reached where you can see them.
     let anchor: CGPoint
+    var title: String = ""
 
     var target: CaptureTarget {
         CaptureTarget(kind: .window(id), frame: frame, anchor: anchor, label: appName)
@@ -61,7 +62,8 @@ enum WindowCatalog {
                 pid: pid,
                 appName: entry[kCGWindowOwnerName as String] as? String ?? "",
                 frame: frame,
-                anchor: anchor
+                anchor: anchor,
+                title: entry[kCGWindowName as String] as? String ?? ""
             ))
         }
         return result

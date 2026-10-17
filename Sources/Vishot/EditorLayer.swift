@@ -35,6 +35,7 @@ final class EditorLayer: NSObject, CALayerDelegate {
     /// What the annotations layer draws, and where the image's top-left is in it (y up).
     private var drawn: [Annotation] = []
     private var drawnOffset = CGPoint.zero
+    private var drawnScale: CGFloat = 1
 
     init(size: CGSize, scale: CGFloat) {
         horizontalToolbar = EditorToolbar(scale: scale)
@@ -74,11 +75,12 @@ final class EditorLayer: NSObject, CALayerDelegate {
         root.isHidden = false
         let bounds = root.bounds
         let imageRect = scene.frame.offsetBy(dx: -panelFrame.minX, dy: -panelFrame.minY)
+        let scale = scene.viewScale
         func local(_ point: CGPoint) -> CGPoint {
-            CGPoint(x: imageRect.minX + point.x, y: imageRect.maxY - point.y)
+            CGPoint(x: imageRect.minX + point.x * scale, y: imageRect.maxY - point.y * scale)
         }
         func local(_ rect: CGRect) -> CGRect {
-            CGRect(x: imageRect.minX + rect.minX, y: imageRect.maxY - rect.maxY, width: rect.width, height: rect.height)
+            CGRect(x: imageRect.minX + rect.minX * scale, y: imageRect.maxY - rect.maxY * scale, width: rect.width * scale, height: rect.height * scale)
         }
 
         if (image.contents as AnyObject?) !== scene.image { image.contents = scene.image }
@@ -93,9 +95,10 @@ final class EditorLayer: NSObject, CALayerDelegate {
             annotationMask.frame = annotations.bounds
             annotationMask.path = CGPath(rect: clip.offsetBy(dx: -visible.minX, dy: -visible.minY), transform: nil)
             let offset = CGPoint(x: imageRect.minX - visible.minX, y: imageRect.maxY - visible.minY)
-            if scene.annotations != drawn || offset != drawnOffset {
+            if scene.annotations != drawn || offset != drawnOffset || scale != drawnScale {
                 drawn = scene.annotations
                 drawnOffset = offset
+                drawnScale = scale
                 annotations.setNeedsDisplay()
             }
         }
@@ -114,7 +117,7 @@ final class EditorLayer: NSObject, CALayerDelegate {
             cropDim.path = path
             // Drawn in image space, flipped into the layer's y-up coordinates.
             cropOutline.frame = imageRect
-            let flip = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: imageRect.height)
+            let flip = CGAffineTransform(a: scale, b: 0, c: 0, d: -scale, tx: 0, ty: imageRect.height)
             let ring = CGMutablePath()
             ring.addRects(Self.cropRing(crop).map(PixelArt.rect), transform: flip)
             cropOutline.path = ring
@@ -188,7 +191,7 @@ final class EditorLayer: NSObject, CALayerDelegate {
     func draw(_ layer: CALayer, in context: CGContext) {
         // Into image space: origin at the image's top-left, y down.
         context.translateBy(x: drawnOffset.x, y: drawnOffset.y)
-        context.scaleBy(x: 1, y: -1)
+        context.scaleBy(x: drawnScale, y: -drawnScale)
         AnnotationRenderer.draw(drawn, in: context)
     }
 

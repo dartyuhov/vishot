@@ -65,6 +65,8 @@ struct CaptureShortcut: Equatable {
 struct AppSettings: Equatable {
     var watermark = true
     var shortcut = CaptureShortcut.defaults
+    var historyRetention = HistoryRetention.sevenDays
+    var historyShortcut: CaptureShortcut?
     static let defaults = AppSettings()
     static let defaultSource = """
     # Keep this on to help others discover Vishot.
@@ -74,6 +76,13 @@ struct AppSettings: Equatable {
     [shortcut]
     key = "S"
     modifiers = ["command", "shift"]
+
+    [history]
+    # 0 disables new entries; existing entries still expire.
+    retention_days = 7
+
+    # Assign an optional History shortcut in Settings.
+    shortcut = false
 
     """
 
@@ -101,23 +110,95 @@ struct AppSettings: Equatable {
             }
         }
         settings.shortcut = try settings.shortcut.validated()
+        if let value = table["history"] {
+            guard let history = value.table else { throw SettingsError(message: "history must be a TOML table.") }
+            if let value = history["retention_days"] {
+                guard let days = value.int, let retention = HistoryRetention(rawValue: days) else {
+                    throw SettingsError(message: "history.retention_days must be 0, 1, 3, 7, or 30.")
+                }
+                settings.historyRetention = retention
+            }
+            if let value = history["shortcut"] {
+                if value.bool == false { settings.historyShortcut = nil }
+                else {
+                guard let shortcut = value.table else { throw SettingsError(message: "history.shortcut must be a TOML table.") }
+                var assigned = CaptureShortcut(key: "H", modifiers: ["command", "shift"])
+                if let value = shortcut["key"] {
+                    guard let key = value.string else { throw SettingsError(message: "history.shortcut.key must be a physical key name.") }
+                    assigned.key = key
+                }
+                if let value = shortcut["modifiers"] {
+                    guard let array = value.array else { throw SettingsError(message: "history.shortcut.modifiers must be an array.") }
+                    assigned.modifiers = try array.map {
+                        guard let name = $0.string else { throw SettingsError(message: "Every History shortcut modifier must be a string.") }
+                        return name
+                    }
+                }
+                settings.historyShortcut = try assigned.validated()
+                }
+            }
+        }
+        guard settings.shortcut != settings.historyShortcut else { throw SettingsError(message: "Capture and History shortcuts must be different.") }
         return settings
     }
 
     /// Full TOML is accepted for reading. Editing is deliberately conservative:
     /// unsupported source layouts are left untouched rather than reformatted.
-    static func edit(_ source: String, watermark: Bool? = nil, shortcut: CaptureShortcut? = nil) throws -> String {
+    static func edit(_ source: String, watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
+                     historyRetention: HistoryRetention? = nil, historyShortcut: CaptureShortcut? = nil,
+                     clearHistoryShortcut: Bool = false) throws -> String {
         let current = try parse(source)
         var expected = current
         if let watermark { expected.watermark = watermark }
         if let shortcut { expected.shortcut = try shortcut.validated() }
+        if let historyRetention { expected.historyRetention = historyRetention }
+        if let historyShortcut { expected.historyShortcut = try historyShortcut.validated() }
+        if clearHistoryShortcut { expected.historyShortcut = nil }
         var result = source
         let updates: [(String, String, Bool)] = [
             ("watermark", expected.watermark ? "true" : "false", expected.watermark != current.watermark),
             ("shortcut.key", "\"\(expected.shortcut.key)\"", expected.shortcut.key != current.shortcut.key),
             ("shortcut.modifiers", "[" + expected.shortcut.modifiers.map { "\"\($0)\"" }.joined(separator: ", ") + "]", expected.shortcut.modifiers != current.shortcut.modifiers),
+            ("history.retention_days", "\(expected.historyRetention.rawValue)", expected.historyRetention != current.historyRetention),
+            ("history.shortcut", expected.historyShortcut.map {
+                "{ key = \"\($0.key)\", modifiers = [" + $0.modifiers.map { "\"\($0)\"" }.joined(separator: ", ") + "] }"
+            } ?? "false", expected.historyShortcut != current.historyShortcut),
         ]
         for (path, value, changed) in updates where changed {
+            if path == "history.shortcut", result.range(of: #"(?m)^\[history\.shortcut\][ \t]*(?:#[^\n]*)?(?:\r?\n|$)"#, options: .regularExpression) != nil {
+                // Move a table-form shortcut into one root dotted assignment, retaining
+                // comments and refusing unknown table fields rather than deleting user data.
+                let table = try TOMLTable(string: result)
+                guard let old = table["history"]?.table?["shortcut"]?.table,
+                      old.count == ["key", "modifiers"].filter({ old[$0] != nil }).count else {
+                    throw SettingsError(message: "Edit history.shortcut in the file: the table has extra fields.")
+                }
+                let ranges = try editableRanges(in: result)
+                for key in ["history.shortcut.key", "history.shortcut.modifiers"] {
+                    if let range = ranges[key], result[range].contains("#") || result[range].contains("\n") {
+                        throw SettingsError(message: "Edit history.shortcut in the file: multiline comments cannot be preserved.")
+                    }
+                }
+                var lines = result.components(separatedBy: "\n")
+                var inShortcut = false
+                for index in lines.indices {
+                    let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
+                    if trimmed.hasPrefix("[") {
+                        inShortcut = trimmed.range(of: #"^\[history\.shortcut\]\s*(#.*)?$"#, options: .regularExpression) != nil
+                        if inShortcut { lines[index] = lines[index].firstIndex(of: "#").map { String(lines[index][$0...]) } ?? "" }
+                    } else if inShortcut, trimmed.hasPrefix("key") || trimmed.hasPrefix("modifiers"), trimmed.contains("=") {
+                        lines[index] = lines[index].firstIndex(of: "#").map { String(lines[index][$0...]) } ?? ""
+                    }
+                }
+                result = lines.joined(separator: "\n")
+                if let historyHeader = result.range(of: #"(?m)^\[history\][ \t]*(?:#[^\n]*)?(?:\r?\n|$)"#, options: .regularExpression) {
+                    let newline = result[historyHeader].hasSuffix("\n") ? "" : "\n"
+                    result.insert(contentsOf: newline + "shortcut = \(value)\n", at: historyHeader.upperBound)
+                } else {
+                    result += (result.hasSuffix("\n") ? "" : "\n") + "[history]\nshortcut = \(value)\n"
+                }
+                continue
+            }
             let ranges = try editableRanges(in: result)
             if let range = ranges[path] {
                 // Replacing an array containing comments would erase user notes.
@@ -127,19 +208,25 @@ struct AppSettings: Equatable {
                 result.replaceSubrange(range, with: value)
             } else {
                 let table = try TOMLTable(string: result)
-                let exists = path == "watermark" ? table["watermark"] != nil : table["shortcut"]?.table?[String(path.dropFirst(9))] != nil
+                let parts = path.split(separator: ".").map(String.init)
+                let section = parts.dropLast().joined(separator: ".")
+                let key = parts.last!
+                let parent: TOMLTable? = section == "shortcut" ? table["shortcut"]?.table
+                    : section == "history" ? table["history"]?.table
+                    : section == "history.shortcut" ? table["history"]?.table?["shortcut"]?.table : table
+                let exists = parent?[key] != nil
                 guard !exists else { throw SettingsError(message: "Edit \(path) in the file: its TOML layout cannot be safely updated by Settings.") }
                 // Root values must precede tables. A missing shortcut table can
                 // be introduced using dotted keys before the first table too.
-                if path.hasPrefix("shortcut."), table["shortcut"] != nil {
-                    let pattern = #"(?m)^\[shortcut\][ \t]*(?:#[^\n]*)?(?:\r?\n|$)"#
+                if !section.isEmpty, parent != nil {
+                    let pattern = "(?m)^\\[" + NSRegularExpression.escapedPattern(for: section) + "\\][ \\t]*(?:#[^\\n]*)?(?:\\r?\\n|$)"
                     guard let header = result.range(of: pattern, options: .regularExpression) else {
                         throw SettingsError(message: "Edit \(path) in the file: its table layout cannot be safely updated by Settings.")
                     }
                     let newline = result[header].hasSuffix("\n") ? "" : "\n"
-                    result.insert(contentsOf: newline + "\(path.dropFirst(9)) = \(value)\n", at: header.upperBound)
-                } else if path.hasPrefix("shortcut.") {
-                    result += (result.hasSuffix("\n") || result.isEmpty ? "" : "\n") + "[shortcut]\n\(path.dropFirst(9)) = \(value)\n"
+                    result.insert(contentsOf: newline + "\(key) = \(value)\n", at: header.upperBound)
+                } else if !section.isEmpty {
+                    result += (result.hasSuffix("\n") || result.isEmpty ? "" : "\n") + "[\(section)]\n\(key) = \(value)\n"
                 } else { result = "\(path) = \(value)\n" + result }
             }
         }
@@ -152,6 +239,11 @@ struct AppSettings: Equatable {
                 shortcutTable.remove(at: "key")
                 shortcutTable.remove(at: "modifiers")
                 if shortcutTable.count == 0 { table.remove(at: "shortcut") }
+            }
+            if let history = table["history"]?.table {
+                history.remove(at: "retention_days")
+                history.remove(at: "shortcut")
+                if history.count == 0 { table.remove(at: "history") }
             }
         }
         guard originalTable == editedTable else {
@@ -169,7 +261,9 @@ struct AppSettings: Equatable {
             let line = String(source[position..<lineEnd])
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.hasPrefix("[") {
-                section = trimmed.range(of: #"^\[shortcut\]\s*(#.*)?$"#, options: .regularExpression) != nil ? "shortcut" : "unrelated"
+                section = ["shortcut", "history", "history.shortcut"].first {
+                    trimmed.range(of: "^\\[" + NSRegularExpression.escapedPattern(for: $0) + "\\]\\s*(#.*)?$", options: .regularExpression) != nil
+                } ?? "unrelated"
             } else if !trimmed.hasPrefix("#"), let equals = source[position..<lineEnd].firstIndex(of: "=") {
                 let key = source[position..<equals].trimmingCharacters(in: .whitespaces)
                 var start = source.index(after: equals)
@@ -209,7 +303,7 @@ struct AppSettings: Equatable {
                 var valueEnd = end
                 while valueEnd > start, source[source.index(before: valueEnd)].isWhitespace { valueEnd = source.index(before: valueEnd) }
                 let path = section.isEmpty ? key : section + "." + key
-                if ["watermark", "shortcut.key", "shortcut.modifiers"].contains(path) { ranges[path] = start..<valueEnd }
+                if ["watermark", "shortcut.key", "shortcut.modifiers", "history.retention_days", "history.shortcut", "history.shortcut.key", "history.shortcut.modifiers"].contains(path) { ranges[path] = start..<valueEnd }
                 position = end
                 if position < source.endIndex, source[position] == "#" {
                     position = source[position...].firstIndex(where: \.isNewline) ?? source.endIndex

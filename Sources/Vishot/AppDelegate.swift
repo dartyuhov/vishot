@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settings: SettingsStore?
     private var settingsWindow: SettingsWindow?
     private var captureItem: NSMenuItem?
+    private var historyItem: NSMenuItem?
     private var settingsItem: NSMenuItem?
     private var overlay: OverlayController?
     private var launchAtLoginItem: NSMenuItem?
@@ -54,7 +55,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Fonts.register()
         let overlay = OverlayController()
         self.overlay = overlay
-        let settings = SettingsStore { [weak self] shortcut in
+        let settings = SettingsStore(registerHistory: { [weak self] shortcut in
+            guard let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.carbonModifiers, action: { [weak self] in
+                if self?.settingsWindow?.recordGlobalShortcut(shortcut) == true { return }
+                overlay.showHistory()
+            }) else { throw SettingsError(message: "Could not register History shortcut \(shortcut.display). It may be used by macOS or another app.") }
+            return hotKey
+        }) { [weak self] shortcut in
             guard let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.carbonModifiers, action: { [weak self] in
                 if self?.settingsWindow?.recordGlobalShortcut(shortcut) == true { return }
                 overlay.toggle()
@@ -64,8 +71,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.settings = settings
         overlay.onSessionChange = { [weak settings] in settings?.setSessionActive($0) }
         settings.onChange = { [weak self] in self?.settingsChanged() }
+        overlay.historyLibrary.onChange = { [weak self, weak overlay] in
+            overlay?.refreshHistory()
+            self?.settingsChanged()
+        }
         setUpStatusItem()
         settings.start()
+        overlay.historyLibrary.start()
 
         if !CGPreflightScreenCaptureAccess() {
             CGRequestScreenCaptureAccess()
@@ -81,6 +93,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         capture.target = self
         menu.addItem(capture)
         captureItem = capture
+        let history = NSMenuItem(title: "Capture History", action: #selector(historyFromMenu), keyEquivalent: "")
+        history.target = self
+        menu.addItem(history)
+        historyItem = history
         let preferences = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         preferences.target = self
         menu.addItem(preferences)
@@ -136,19 +152,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { self.overlay?.toggle() }
     }
 
+    @objc private func historyFromMenu() { DispatchQueue.main.async { self.overlay?.showHistory() } }
+
     private func settingsChanged() {
         guard let settings else { return }
         // A physical-key title remains accurate on non-Latin layouts; a
         // character-based menu equivalent would advertise a different key.
         captureItem?.title = "Capture Window  (\(settings.active.shortcut.display))"
+        historyItem?.title = "Capture History" + (settings.active.historyShortcut.map { "  (\($0.display))" } ?? "") + (overlay?.historyLibrary.error == nil ? "" : " — Storage Error")
         settingsItem?.title = settings.error == nil ? "Settings…" : "Settings… — Configuration Error"
         overlay?.watermark = settings.active.watermark
+        overlay?.historyLibrary.retention = settings.active.historyRetention
         settingsWindow?.refresh()
     }
 
     @objc private func openSettings() {
         guard let settings else { return }
-        if settingsWindow == nil { settingsWindow = SettingsWindow(store: settings) }
+        if settingsWindow == nil { settingsWindow = SettingsWindow(store: settings, history: overlay?.historyLibrary) }
         settingsWindow?.present()
     }
 

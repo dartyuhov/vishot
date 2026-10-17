@@ -4,7 +4,7 @@ import Foundation
 /// Geometry here is in image space: points from the image's top-left, y down. Screen positions are
 /// never stored, so the document is the same on every screen and in the export.
 
-enum AnnotationColor: CaseIterable {
+enum AnnotationColor: String, CaseIterable, Codable {
     case red, yellow, green, purple, white, black
 
     var name: String {
@@ -38,7 +38,7 @@ enum AnnotationColor: CaseIterable {
     }
 }
 
-enum Annotation: Equatable {
+enum Annotation: Equatable, Codable {
     case arrow(from: CGPoint, to: CGPoint, color: AnnotationColor)
     case rect(CGRect, color: AnnotationColor)
     /// `at` is the left end of the line, at its vertical centre.
@@ -69,7 +69,7 @@ struct EditDocument {
 }
 
 /// The part of a document that undo and redo restore.
-struct EditSnapshot: Equatable {
+struct EditSnapshot: Equatable, Codable {
     var annotations: [Annotation]
     var crop: CGRect?
 }
@@ -77,6 +77,9 @@ struct EditSnapshot: Equatable {
 struct EditHistory {
     private var undoStack: [EditSnapshot] = []
     private var redoStack: [EditSnapshot] = []
+
+    init(snapshots: [EditSnapshot] = []) { undoStack = snapshots }
+    var snapshots: [EditSnapshot] { undoStack }
 
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }

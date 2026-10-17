@@ -12,14 +12,18 @@ final class SettingsStore {
     var onChange: (() -> Void)?
     private let register: (CaptureShortcut) throws -> AnyObject
     private var registration: AnyObject?
+    private let registerHistory: ((CaptureShortcut) throws -> AnyObject)?
+    private var historyRegistration: AnyObject?
     private var timer: DispatchSourceTimer?
     private var lastSource: String?
     private var lastTarget: URL?
     private var lastReadError: String?
 
-    init(url: URL = defaultURL, register: @escaping (CaptureShortcut) throws -> AnyObject) {
+    init(url: URL = defaultURL, registerHistory: ((CaptureShortcut) throws -> AnyObject)? = nil,
+         register: @escaping (CaptureShortcut) throws -> AnyObject) {
         self.url = url
         self.register = register
+        self.registerHistory = registerHistory
     }
 
     deinit { timer?.cancel() }
@@ -28,6 +32,10 @@ final class SettingsStore {
         reload()
         if registration == nil {
             do { registration = try register(active.shortcut) }
+            catch { self.error = [self.error, error.localizedDescription].compactMap { $0 }.joined(separator: "\n") }
+        }
+        if historyRegistration == nil, let registerHistory, let shortcut = active.historyShortcut {
+            do { historyRegistration = try registerHistory(shortcut) }
             catch { self.error = [self.error, error.localizedDescription].compactMap { $0 }.joined(separator: "\n") }
         }
         onChange?()
@@ -95,27 +103,38 @@ final class SettingsStore {
 
     func setSessionActive(_ active: Bool) {
         isSessionActive = active
-        if !active { applyConfigured(); onChange?() }
+        if !active { applyConfigured() }
+        onChange?()
     }
 
     private func applyConfigured() {
         guard let candidate = configured else { return }
         do {
+            // Retain both previous registrations until both replacements succeed.
+            var nextCapture = registration
+            var nextHistory = historyRegistration
             if registration == nil || candidate.shortcut != active.shortcut {
-                let next = try register(candidate.shortcut)
-                registration = next // Releases old registration only after success.
+                nextCapture = try register(candidate.shortcut)
             }
+            if let registerHistory, historyRegistration == nil || candidate.historyShortcut != active.historyShortcut {
+                nextHistory = try candidate.historyShortcut.map(registerHistory)
+            }
+            registration = nextCapture
+            historyRegistration = nextHistory
             active = candidate
             error = nil
         } catch { self.error = error.localizedDescription }
     }
 
     /// Edits only the requested preference on fresh source, retaining external edits.
-    func update(watermark: Bool? = nil, shortcut: CaptureShortcut? = nil) {
+    func update(watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
+                historyRetention: HistoryRetention? = nil, historyShortcut: CaptureShortcut? = nil,
+                clearHistoryShortcut: Bool = false) {
         do {
             let target = url.resolvingSymlinksInPath()
             let original = try String(contentsOf: target, encoding: .utf8)
-            let edited = try AppSettings.edit(original, watermark: watermark, shortcut: shortcut)
+            let edited = try AppSettings.edit(original, watermark: watermark, shortcut: shortcut,
+                historyRetention: historyRetention, historyShortcut: historyShortcut, clearHistoryShortcut: clearHistoryShortcut)
             guard url.resolvingSymlinksInPath() == target,
                   try String(contentsOf: target, encoding: .utf8) == original else {
                 throw SettingsError(message: "Configuration changed while saving. Try again.")

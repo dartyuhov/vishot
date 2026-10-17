@@ -50,6 +50,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var panels: [OverlayPanel] = []
     private var isShowing = false
     private let capturer = Capturer()
+    let historyLibrary = HistoryLibrary()
+    private var browser: HistoryBrowser?
+    private var reusableBrowser: HistoryBrowser!
+    private var historyEditingID: UUID?
+    private var captureLabel = ""
+    private var captureWindowTitle = ""
+    var isSessionActive: Bool { isShowing || browser != nil }
     var onSessionChange: ((Bool) -> Void)?
     var watermark: Bool {
         get { capturer.watermark }
@@ -84,6 +91,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     override init() {
         super.init()
+        reusableBrowser = HistoryBrowser(library: historyLibrary)
         raiser.onKey = { [weak self] in $0.type == .keyDown ? self?.handle($0) : self?.keyUp($0) }
         raiser.onActivated = { [weak self] in
             guard let self, isShowing else { return }
@@ -97,7 +105,89 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func toggle() {
+        guard !isPresentingSavePanel else { return }
+        guard !(isCapturing && editor != nil) else { return }
+        if browser != nil {
+            guard editor == nil, !isCapturing else { return }
+            closeHistory()
+            show()
+            return
+        }
         isShowing ? hide() : show()
+    }
+
+    func showHistory() {
+        guard !isShowing, browser == nil,
+              let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main else { return }
+        appToReactivate = NSWorkspace.shared.frontmostApplication
+        let browser = reusableBrowser!
+        self.browser = browser
+        browser.onClose = { [weak self] in self?.closeHistory() }
+        browser.onEdit = { [weak self] in self?.editHistory($0, on: $1) }
+        browser.onYank = { [weak self, weak browser] entry in
+            guard let self, !isCapturing else { return }
+            isCapturing = true
+            browser?.setBusy(true)
+            historyLibrary.image(entry, thumbnail: false) { [weak self] image in
+                guard let self, self.browser === browser else { return }
+                self.isCapturing = false
+                browser?.setBusy(false)
+                guard let image else { return }
+                self.capturer.copy(image, scale: entry.scale)
+                self.closeHistory()
+            }
+        }
+        onSessionChange?(true)
+        browser.show(on: screen)
+    }
+
+    func refreshHistory() { browser?.libraryChanged() }
+
+    private func closeHistory() {
+        hide()
+    }
+
+    private func editHistory(_ id: UUID, on screen: NSScreen) {
+        guard !isCapturing, editor == nil else { return }
+        isCapturing = true
+        browser?.setBusy(true)
+        historyLibrary.hold(id)
+        let session = session
+        historyLibrary.load(id) { [weak self] loaded in
+            guard let self else { return }
+            guard session == self.session, let browser = self.browser else { self.historyLibrary.release(id); return }
+            self.isCapturing = false
+            browser.setBusy(false)
+            guard let loaded else { self.historyLibrary.release(id); return }
+            self.historyEditingID = id
+            self.captureLabel = loaded.entry.label
+            self.captureWindowTitle = loaded.entry.windowTitle
+            let size = loaded.document.size
+            let bounds = screen.cgFrame.insetBy(dx: 24, dy: 24)
+            let scale = min(1, bounds.width / size.width, bounds.height / size.height)
+            let frame = CGRect(x: bounds.midX - size.width * scale / 2, y: bounds.midY - size.height * scale / 2,
+                width: size.width * scale, height: size.height * scale)
+            browser.suspend()
+            self.isShowing = true
+            let capture = Capture(image: loaded.document.image, scale: loaded.document.scale, frame: frame, initialCrop: loaded.document.crop)
+            let editor = EditorController(capture: capture, restored: loaded, viewScale: scale)
+            editor.onFinish = { [weak self] in self?.finishEditing($0, export: $1) }
+            editor.onChange = { [weak self] in self?.render() }
+            self.editor = editor
+            self.panels.forEach { $0.hidePicker(); $0.orderFrontRegardless() }
+            self.render()
+            (self.panels.first { $0.frame == screen.frame } ?? self.panels.first)?.makeKey()
+        }
+    }
+
+    private func returnToHistory(_ id: UUID, release: Bool = true) {
+        editor = nil
+        historyEditingID = nil
+        isShowing = false
+        isCapturing = false
+        panels.forEach { $0.hideEditor(); $0.orderOut(nil) }
+        browser?.resume(select: id)
+        if release { historyLibrary.release(id) }
     }
 
     private func show() {
@@ -120,10 +210,17 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func hide() {
+        if browser != nil {
+            browser?.close()
+            browser = nil
+            historyLibrary.finishSession()
+        }
         isShowing = false
         session += 1
         isCapturing = false
         editor = nil
+        if let id = historyEditingID { historyLibrary.release(id) }
+        historyEditingID = nil
         region = nil
         stopWarmUp()
         hints = []
@@ -139,7 +236,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         // Copy/save call sites finish synchronously after hide. Defer settings
         // activation so those outputs retain the just-finished session's values.
         DispatchQueue.main.async { [weak self] in
-            guard let self, !isShowing else { return }
+            guard let self, !isSessionActive else { return }
             onSessionChange?(false)
         }
     }
@@ -150,9 +247,37 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func confirm() {
-        guard let target = selection else { return }
-        hide()
-        capturer.capture(target)
+        guard !isCapturing, let target = selection else { return }
+        captureMetadata(for: target)
+        let label = captureLabel, title = captureWindowTitle, watermark = capturer.watermark
+        let session = session
+        isCapturing = true
+        stopWarmUp()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await raiser.waitForPendingRaise()
+            guard session == self.session else { return }
+            panels.forEach { $0.hidePicker() }
+            CATransaction.flush()
+            let capture = await capturer.editorImage(for: target)
+            guard session == self.session else { return }
+            isCapturing = false
+            guard let capture else { status = "capture failed"; NSSound.beep(); render(); return }
+            let document = EditDocument(image: capture.image, scale: capture.scale, crop: capture.initialCrop)
+            guard let image = AnnotationRenderer.export(document) else { status = "export failed"; render(); return }
+            historyLibrary.commit(document: document, undo: [], label: label, windowTitle: title)
+            hide()
+            capturer.copy(image, scale: capture.scale, watermark: watermark)
+        }
+    }
+
+    private func captureMetadata(for target: CaptureTarget) {
+        captureLabel = target.label
+        captureWindowTitle = ""
+        switch target.kind {
+        case .window(let id), .element(let id, _): captureWindowTitle = windows.first { $0.id == id }?.title ?? ""
+        default: break
+        }
     }
 
     // MARK: - Editor
@@ -160,6 +285,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// Captures the selection with the overlay up, then edits it in place.
     private func edit() {
         guard !isCapturing, let target = selection else { return }
+        captureMetadata(for: target)
         let session = session
         isCapturing = true
         stopWarmUp()
@@ -198,23 +324,56 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func finishEditing(_ finish: EditorController.Finish, export: (image: CGImage, scale: CGFloat)?) {
+        guard !isCapturing else { return }
         guard let (image, scale) = export else {
-            hide()
+            if let id = historyEditingID { returnToHistory(id) } else { hide() }
             return
         }
         if finish == .saveAs {
             saveAs(image, scale: scale)
             return
         }
-        hide()
+        let commit = historyCommit()
+        if finish == .save {
+            completeSave(image, scale: scale, to: Config.newSaveURL(), commit: commit)
+            return
+        }
+        if let id = historyEditingID { returnToHistory(id, release: false) } else { hide() }
         if finish == .copy || finish == .saveAndCopy { capturer.copy(image, scale: scale) }
-        if finish == .save || finish == .saveAndCopy { capturer.save(image, scale: scale, to: Config.newSaveURL()) }
+        if finish == .copy || finish == .saveAndCopy { commit() }
+        if finish == .saveAndCopy {
+            capturer.save(image, scale: scale, to: Config.newSaveURL())
+        }
+    }
+
+    /// Keep the session and its retention hold until save (or clipboard fallback) completes.
+    private func completeSave(_ image: CGImage, scale: CGFloat, to url: URL, watermark: Bool? = nil, commit: @escaping () -> Void) {
+        isCapturing = true
+        let session = session
+        capturer.save(image, scale: scale, to: url, watermark: watermark) { [weak self] in
+            commit()
+            guard let self, self.session == session else { return }
+            self.isCapturing = false
+            if let id = self.historyEditingID { self.returnToHistory(id, release: false) } else { self.hide() }
+        }
+    }
+
+    private func historyCommit() -> () -> Void {
+        guard let editor else { return {} }
+        let document = editor.document, undo = editor.history.snapshots
+        let id = historyEditingID, label = captureLabel, title = captureWindowTitle
+        let enabled = historyLibrary.retention != .off
+        return { [historyLibrary] in
+            if enabled || id != nil { historyLibrary.commit(document: document, undo: undo, label: label, windowTitle: title, id: id, recording: enabled) }
+            if let id { historyLibrary.release(id) }
+        }
     }
 
     /// The save panel can't show above the overlay, so the overlay steps aside, and comes back with
     /// the edit intact if the panel is cancelled.
     private func saveAs(_ image: CGImage, scale: CGFloat) {
         let watermark = capturer.watermark
+        let commit = historyCommit()
         isPresentingSavePanel = true
         panels.forEach { $0.orderOut(nil) }
         if !NSApp.isActive { appToReactivate = NSWorkspace.shared.frontmostApplication }
@@ -227,8 +386,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         isPresentingSavePanel = false
         if response == .OK, let url = savePanel.url {
             // The hotkey may have closed the overlay meanwhile, but the save was still asked for.
-            if isShowing { hide() }
-            capturer.save(image, scale: scale, to: url, watermark: watermark)
+            if isShowing {
+                panels.forEach { $0.orderFrontRegardless() }
+                panels.first?.makeKey()
+                completeSave(image, scale: scale, to: url, watermark: watermark, commit: commit)
+            } else {
+                capturer.save(image, scale: scale, to: url, watermark: watermark, completion: commit)
+            }
         } else if isShowing {
             panels.forEach { $0.orderFrontRegardless() }
             panels.first?.makeKey()
@@ -415,6 +579,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func render() {
+        // Capture preparation hides picker layers. Input handlers and delayed callbacks must
+        // not reveal them again while ScreenCaptureKit is awaiting a frame.
+        guard !isCapturing || editor != nil else { return }
         if let editor {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -455,6 +622,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     /// Key codes, not characters, so the keys keep working with non-Latin keyboard layouts.
     private func handle(_ event: NSEvent) {
+        if isCapturing, editor != nil { return }
         if let editor {
             editor.handle(event)
             if isShowing, self.editor != nil { render() }
@@ -556,7 +724,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func mouseDragged(to point: CGPoint) {
-        guard isShowing else { return }
+        guard isShowing, !isCapturing else { return }
         if let editor {
             editor.mouseDragged(to: point)
         } else if let region, !isCapturing {
@@ -568,7 +736,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func mouseUp(at point: CGPoint) {
-        guard isShowing else { return }
+        guard isShowing, !isCapturing else { return }
         if let editor {
             editor.mouseUp(at: point)
             if isShowing, self.editor != nil { render() }
@@ -586,6 +754,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     @objc private func screensChanged() {
+        if browser != nil { closeHistory() }
         hide()
         rebuildPanels()
     }
@@ -609,6 +778,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// panel moves key focus between our own panels, which is not a cancel.
     func windowDidResignKey(_ notification: Notification) {
         DispatchQueue.main.async { [self] in
+            if isCapturing, editor != nil { return }
+            if browser != nil, editor == nil { return }
             if isShowing, !isPresentingSavePanel, !raiser.isSwitchingApps, !panels.contains(where: \.isKeyWindow) { hide() }
         }
     }

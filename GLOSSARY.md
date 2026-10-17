@@ -16,6 +16,27 @@ _Avoid_: Title, tab, caption, label
 The short letter code shown on an element of a window, typed to select that element. The hint is the code, not the element.
 _Avoid_: Hint label, hint code, tag, label
 
+## Editing
+
+**Editable screenshot**:
+A screenshot that retains its frozen source image, annotations, and crop as
+separate parts, so edits can be undone and its selected area adjusted.
+_Avoid_: Flattened image, export
+
+**Frozen source**:
+The full image of one display at capture time, from which a screenshot's selected
+area is taken.
+_Avoid_: Live screen, isolated window image
+
+**Capture history**:
+The collection of editable screenshots retained after copying or saving, for
+later reuse and editing.
+_Avoid_: Clipboard history, undo history
+
+**Yank**:
+Copy a screenshot's current result to the clipboard.
+_Avoid_: Restore (when referring only to copying)
+
 ## Brand
 
 **Wordmark**:

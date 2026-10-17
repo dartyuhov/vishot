@@ -2,6 +2,65 @@ import XCTest
 @testable import Vishot
 
 final class SettingsTests: XCTestCase {
+    func testHistoryShortcutIsOptInAndCanBeAssignedClearedAndReassigned() throws {
+        XCTAssertNil(try AppSettings.parse(AppSettings.defaultSource).historyShortcut)
+        XCTAssertNil(try AppSettings.parse("").historyShortcut)
+        let shortcut = CaptureShortcut(key: "J", modifiers: ["control"])
+        let assigned = try AppSettings.edit(AppSettings.defaultSource, historyShortcut: shortcut)
+        XCTAssertEqual(try AppSettings.parse(assigned).historyShortcut, shortcut)
+        let cleared = try AppSettings.edit(assigned, clearHistoryShortcut: true)
+        XCTAssertNil(try AppSettings.parse(cleared).historyShortcut)
+        XCTAssertEqual(try AppSettings.parse(AppSettings.edit(cleared, historyShortcut: shortcut)).historyShortcut, shortcut)
+        let legacy = "[history]\nretention_days = 3\n[history.shortcut]\nkey = 'H' # keep note\nmodifiers = ['command', 'shift']\n[notes]\nx = 1\n"
+        let migrated = try AppSettings.edit(legacy, clearHistoryShortcut: true)
+        XCTAssertNil(try AppSettings.parse(migrated).historyShortcut)
+        XCTAssertTrue(migrated.contains("# keep note"))
+        XCTAssertTrue(migrated.contains("[notes]\nx = 1"))
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var registrations = 0
+        let store = SettingsStore(url: folder.appendingPathComponent("config.toml"), registerHistory: { _ in
+            registrations += 1
+            return NSObject()
+        }) { _ in NSObject() }
+        store.start(watching: false)
+        XCTAssertEqual(registrations, 0)
+        store.update(historyShortcut: shortcut)
+        XCTAssertEqual(registrations, 1)
+        store.update(clearHistoryShortcut: true)
+        XCTAssertNil(store.active.historyShortcut)
+        XCTAssertNil(store.error)
+    }
+    func testHistorySettingsValidateAndPreserveUnrelatedContent() throws {
+        let source = "# keep\n[notes]\nx = 1\n"
+        let shortcut = CaptureShortcut(key: "J", modifiers: ["control"])
+        let edited = try AppSettings.edit(source, historyRetention: .threeDays, historyShortcut: shortcut)
+        XCTAssertTrue(edited.contains("# keep\n[notes]\nx = 1"))
+        XCTAssertEqual(try AppSettings.parse(edited).historyRetention, .threeDays)
+        XCTAssertEqual(try AppSettings.parse(edited).historyShortcut, shortcut)
+        XCTAssertThrowsError(try AppSettings.parse("[history]\nretention_days = 2"))
+        XCTAssertThrowsError(try AppSettings.parse("[history.shortcut]\nkey = 'S'"))
+    }
+    func testHistoryShortcutConflictKeepsAllLastGoodPreferencesAndDefersDuringSession() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("config.toml")
+        let store = SettingsStore(url: url, registerHistory: { shortcut in
+            if shortcut.key == "K" { throw SettingsError(message: "History shortcut taken") }
+            return NSObject()
+        }) { _ in NSObject() }
+        store.start(watching: false)
+        store.setSessionActive(true)
+        store.update(historyRetention: .oneDay, historyShortcut: CaptureShortcut(key: "J", modifiers: ["control"]))
+        XCTAssertEqual(store.active.historyRetention, .sevenDays)
+        store.setSessionActive(false)
+        XCTAssertEqual(store.active.historyRetention, .oneDay)
+        XCTAssertEqual(store.active.historyShortcut?.key, "J")
+        store.update(watermark: false, historyShortcut: CaptureShortcut(key: "K", modifiers: ["control"]))
+        XCTAssertEqual(store.active.historyShortcut?.key, "J")
+        XCTAssertTrue(store.active.watermark)
+        XCTAssertNotNil(store.error)
+    }
     func testCRLFEditsKeepUnrelatedTables() throws {
         let source = "watermark = true\r\n[notes]\r\nx = 1\r\n"
         XCTAssertEqual(try AppSettings.edit(source, watermark: false), "watermark = false\r\n[notes]\r\nx = 1\r\n")

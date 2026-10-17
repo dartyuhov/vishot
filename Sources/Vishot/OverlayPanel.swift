@@ -316,7 +316,7 @@ final class OverlayPanel: NSPanel {
     }
 }
 
-private extension CGMutablePath {
+extension CGMutablePath {
     /// `rect` with a `pixel`-sized square left out of each corner, the logo's pixel-art rounding.
     func addPixelRoundedRect(_ rect: CGRect, pixel: CGFloat) {
         let p = min(pixel, rect.width / 2, rect.height / 2)

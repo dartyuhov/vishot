@@ -32,6 +32,7 @@ struct EditorScene {
     let canUndo: Bool
     let canRedo: Bool
     let status: String
+    var viewScale: CGFloat = 1
 }
 
 /// Edits a capture in place, over the overlay panels. Takes keys and mouse events until it finishes.
@@ -76,8 +77,9 @@ final class EditorController {
     /// Called when the cursor glides, outside of any input event.
     var onChange: (() -> Void)?
 
-    private var document: EditDocument
-    private var history = EditHistory()
+    private(set) var document: EditDocument
+    private(set) var history = EditHistory()
+    private let viewScale: CGFloat
     private let cursor: KeyboardCursor
     private var tool: Tool?
     private var color = AnnotationColor.purple
@@ -105,9 +107,10 @@ final class EditorController {
     /// Refreshed from the rendered toolbar's placement on its host panel.
     var canHideHUD = false
 
-    init(capture: Capture) {
-        document = EditDocument(image: capture.image, scale: capture.scale)
-        document.crop = capture.initialCrop
+    init(capture: Capture, restored: HistoryDocument? = nil, viewScale: CGFloat = 1) {
+        document = restored?.document ?? EditDocument(image: capture.image, scale: capture.scale, crop: capture.initialCrop)
+        history = EditHistory(snapshots: restored?.undo ?? [])
+        self.viewScale = viewScale
         baseline = document.snapshot
         cursor = KeyboardCursor(EditCursor(bounds: document.crop ?? CGRect(origin: .zero, size: document.size)))
         imageOrigin = capture.frame.origin
@@ -358,7 +361,7 @@ final class EditorController {
     }
 
     private func imagePoint(_ point: CGPoint) -> CGPoint {
-        CGPoint(x: point.x - imageOrigin.x, y: point.y - imageOrigin.y)
+        CGPoint(x: (point.x - imageOrigin.x) / viewScale, y: (point.y - imageOrigin.y) / viewScale)
     }
 
     // MARK: - Toolbar
@@ -523,6 +526,7 @@ final class EditorController {
 
     /// What you see is what you get, so an action in progress is committed first.
     private func finish(_ kind: Finish) {
+        cursor.stop()
         if resizing != nil { finishResize(commit: true) }
         switch action {
         case .anchored(let start), .dragging(let start): commit(from: start, to: cursor.position, beepsWhenEmpty: false)
@@ -541,7 +545,7 @@ final class EditorController {
     // MARK: - Output
 
     func render(on panels: [OverlayPanel]) {
-        let frame = CGRect(origin: imageOrigin, size: document.size)
+        let frame = CGRect(origin: imageOrigin, size: CGSize(width: document.size.width * viewScale, height: document.size.height * viewScale))
         var annotations = document.annotations
         var crop = document.crop
         let isCropping = resizing != nil
@@ -573,7 +577,8 @@ final class EditorController {
             color: color,
             canUndo: history.canUndo,
             canRedo: history.canRedo,
-            status: status
+            status: status,
+            viewScale: viewScale
         )
         // The toolbar goes on the screen showing most of the image.
         let toolbarPanel = panels.max { visibleArea(of: frame, on: $0) < visibleArea(of: frame, on: $1) }
