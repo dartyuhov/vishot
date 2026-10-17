@@ -1,7 +1,7 @@
 import AppKit
 
 private enum Style {
-    static let cropDim = NSColor(white: 0, alpha: 0.7)
+    static let cropDim = NSColor(white: 0, alpha: 0.45)
     /// The crop's outline: accent while it is drawn, then white.
     static let cropping = Palette.accent
     static let cropped = NSColor.white
@@ -24,6 +24,8 @@ final class EditorLayer: NSObject, CALayerDelegate {
     private let annotations = CALayer()
     private let cropDim = SelectionStyle.makeDim(Style.cropDim)
     private let cropOutline = CAShapeLayer()
+    private let cropHandle = CALayer()
+    private let annotationMask = CAShapeLayer()
     private let outsideDim = SelectionStyle.makeDim()
     private let crosshair = SelectionStyle.makeCrosshair()
     private let caret = CALayer()
@@ -43,6 +45,10 @@ final class EditorLayer: NSObject, CALayerDelegate {
         annotations.delegate = self
         annotations.contentsScale = scale
         annotations.needsDisplayOnBoundsChange = true
+        annotations.mask = annotationMask
+        cropHandle.backgroundColor = Palette.accent.cgColor
+        cropHandle.borderColor = NSColor.white.cgColor
+        cropHandle.borderWidth = 2
 
         cropDim.frame = root.bounds
         outsideDim.frame = root.bounds
@@ -53,7 +59,7 @@ final class EditorLayer: NSObject, CALayerDelegate {
         caret.borderColor = NSColor(white: 1, alpha: 0.8).cgColor
         caret.borderWidth = 0.5
 
-        for layer in [image, annotations, cropDim, cropOutline, outsideDim, crosshair, caret, toolbar.root] {
+        for layer in [image, annotations, cropDim, cropOutline, outsideDim, crosshair, caret, cropHandle, toolbar.root] {
             root.addSublayer(layer)
         }
     }
@@ -78,6 +84,9 @@ final class EditorLayer: NSObject, CALayerDelegate {
         annotations.isHidden = visible.isEmpty
         if !visible.isEmpty {
             annotations.frame = visible
+            let clip = scene.crop.map(local) ?? imageRect
+            annotationMask.frame = annotations.bounds
+            annotationMask.path = CGPath(rect: clip.offsetBy(dx: -visible.minX, dy: -visible.minY), transform: nil)
             let offset = CGPoint(x: imageRect.minX - visible.minX, y: imageRect.maxY - visible.minY)
             if scene.annotations != drawn || offset != drawnOffset {
                 drawn = scene.annotations
@@ -115,11 +124,16 @@ final class EditorLayer: NSObject, CALayerDelegate {
             caret.frame = local(rect)
             caret.backgroundColor = scene.color.cgColor
         }
+        cropHandle.isHidden = scene.cropHandle == nil
+        if let handle = scene.cropHandle {
+            let position = local(handle)
+            cropHandle.frame = CGRect(x: position.x - 5, y: position.y - 5, width: 10, height: 10)
+        }
 
         toolbar.root.isHidden = !showsToolbar
         if showsToolbar {
             toolbar.update(scene)
-            toolbar.root.frame.origin = toolbarOrigin(around: visible.isEmpty ? imageRect : visible)
+            toolbar.root.frame.origin = toolbarOrigin(around: scene.crop.map(local) ?? imageRect)
         }
     }
 

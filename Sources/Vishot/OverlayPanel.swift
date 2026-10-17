@@ -229,12 +229,16 @@ final class OverlayPanel: NSPanel {
     }
 
     /// Replaces the picker's border, hints, region and HUD with the editor. The toolbar shows on one screen.
-    func showEditor(_ scene: EditorScene, showsToolbar: Bool) {
+    func hidePicker() {
         border.isHidden = true
         labelBackground.isHidden = true
         hud.isHidden = true
         showHints([], typed: 0)
         showRegion(nil, cursor: nil)
+    }
+
+    func showEditor(_ scene: EditorScene, showsToolbar: Bool) {
+        hidePicker()
         editor.show(scene, panelFrame: frame, showsToolbar: showsToolbar)
     }
 

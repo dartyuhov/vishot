@@ -9,6 +9,9 @@ enum AnnotationRenderer {
     private static let headSpread: CGFloat = 0.6
     /// Its pixels are `PixelArt.cell` points, so text sits on the same grid as arrows and rectangles.
     private static let font: CTFont = Fonts.pixel(8 * PixelArt.cell)
+    private static var lineHeight: CGFloat {
+        ceil((CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font)) / PixelArt.cell) * PixelArt.cell + PixelArt.cell
+    }
 
     /// Draws in image space: the context's user space must have its origin at the image's top-left,
     /// y down, in points.
@@ -53,6 +56,12 @@ enum AnnotationRenderer {
     }
 
     private static func drawText(_ text: String, at point: CGPoint, color: AnnotationColor, in context: CGContext) {
+        for (index, line) in text.components(separatedBy: "\n").enumerated() {
+            drawTextLine(line, at: CGPoint(x: point.x, y: point.y + CGFloat(index) * lineHeight), color: color, in: context)
+        }
+    }
+
+    private static func drawTextLine(_ text: String, at point: CGPoint, color: AnnotationColor, in context: CGContext) {
         let line = layout(text).line
         let halo = color == .white ? AnnotationColor.black : .white
         let baseline = baseline(at: point)
@@ -81,16 +90,20 @@ enum AnnotationRenderer {
 
     /// The line box of a text annotation, in image space.
     static func textBounds(_ text: String, at point: CGPoint) -> CGRect {
-        let metrics = layout(text).metrics
+        let lines = text.components(separatedBy: "\n")
+        let metrics = layout("Hg").metrics
+        let width = lines.map { layout($0).metrics.width }.max() ?? 0
         let baseline = baseline(at: point)
-        return CGRect(x: baseline.x, y: baseline.y - metrics.ascent, width: metrics.width, height: metrics.ascent + metrics.descent)
+        return CGRect(x: baseline.x, y: baseline.y - metrics.ascent, width: width,
+                      height: metrics.ascent + metrics.descent + CGFloat(lines.count - 1) * lineHeight)
     }
 
     /// The caret after `text` while it is typed, in image space.
     static func caret(after text: String, at point: CGPoint) -> CGRect {
-        let width = text.isEmpty ? 0 : layout(text).metrics.width
+        let lines = text.components(separatedBy: "\n")
+        let width = layout(lines.last ?? "").metrics.width
         // Measured on sample letters, so the caret has a height before anything is typed.
-        let line = textBounds("Hg", at: point)
+        let line = textBounds("Hg", at: CGPoint(x: point.x, y: point.y + CGFloat(lines.count - 1) * lineHeight))
         return CGRect(x: line.minX + width + 1, y: line.minY, width: 2, height: line.height)
     }
 

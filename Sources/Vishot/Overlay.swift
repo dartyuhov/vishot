@@ -165,7 +165,17 @@ final class OverlayController: NSObject, NSWindowDelegate {
         stopWarmUp()
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let capture = await capturer.image(for: target)
+            await raiser.waitForPendingRaise()
+            guard session == self.session else { return }
+            // Remove picker decorations before freezing, as well as excluding our
+            // windows from capture. Otherwise a stale compositor frame can retain
+            // the old target label/outline inside the backing image.
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            panels.forEach { $0.hidePicker() }
+            CATransaction.commit()
+            CATransaction.flush()
+            let capture = await capturer.editorImage(for: target)
             guard session == self.session else { return }
             isCapturing = false
             guard let capture else {

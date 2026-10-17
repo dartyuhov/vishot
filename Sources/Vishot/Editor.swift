@@ -19,6 +19,7 @@ struct EditorScene {
     let crop: CGRect?
     /// A crop is being drawn, so it gets an outline.
     let isCropping: Bool
+    let cropHandle: CGPoint?
     /// Nil while typing, when the caret shows instead.
     let cursor: CGPoint?
     let caret: CGRect?
@@ -39,7 +40,7 @@ final class EditorController {
             case .arrow: "arrow"
             case .rect: "rect"
             case .text: "text"
-            case .crop: "crop"
+            case .crop: "resize"
             }
         }
 
@@ -85,12 +86,28 @@ final class EditorController {
     private var pressedAt: CGPoint?
     /// Shown instead of the key help until the next input.
     private var message = ""
+    private let baseline: EditSnapshot
+    private struct Resize {
+        let original: CGRect
+        var area: EditArea
+        var handle: EditArea.Handle
+        var mouseOrigin: CGPoint?
+        var dragRect: CGRect?
+        var staysActive = false
+    }
+    private var resizing: Resize?
+    private var hoveredHandle: EditArea.Handle?
 
     init(capture: Capture) {
         document = EditDocument(image: capture.image, scale: capture.scale)
-        cursor = KeyboardCursor(EditCursor(size: document.size))
+        document.crop = capture.initialCrop
+        baseline = document.snapshot
+        cursor = KeyboardCursor(EditCursor(bounds: document.crop ?? CGRect(origin: .zero, size: document.size)))
         imageOrigin = capture.frame.origin
-        cursor.onChange = { [weak self] in self?.onChange?() }
+        cursor.onChange = { [weak self] in
+            self?.updateResizeFromCursor()
+            self?.onChange?()
+        }
     }
 
     // MARK: - Keys
@@ -122,11 +139,31 @@ final class EditorController {
             if keyCode == kVK_ANSI_R { redo() }
             return
         }
+        if resizing != nil {
+            if resizing?.mouseOrigin != nil {
+                if keyCode == kVK_Escape || keyCode == kVK_ANSI_Q { finishResize(commit: true) }
+                return
+            }
+            switch keyCode {
+            case kVK_Tab:
+                cursor.stop()
+                resizing!.handle = resizing!.handle.cycled(by: shift ? -1 : 1)
+                cursor.move(to: resizing!.handle.point(in: resizing!.area.rect))
+            case kVK_Return, kVK_ANSI_KeypadEnter, kVK_ANSI_C:
+                if !event.isARepeat { finishResize(commit: true) }
+            case kVK_Escape, kVK_ANSI_Q: finishResize(commit: true)
+            case kVK_ANSI_U: finishResize(commit: false)
+            default:
+                if cursor.handle(event) { updateResizeFromCursor() }
+            }
+            return
+        }
         if cursor.handle(event) { return }
         switch keyCode {
         case kVK_ANSI_A: toolKey(.arrow)
         case kVK_ANSI_R: toolKey(.rect)
-        case kVK_ANSI_C: toolKey(.crop)
+        case kVK_ANSI_C:
+            if !event.isARepeat { beginResize() }
         case kVK_ANSI_T: startTyping(at: cursor.position)
         case kVK_Return, kVK_ANSI_KeypadEnter: finishAnchored()
         case kVK_Tab: color = color.cycled(by: shift ? -1 : 1)
@@ -156,7 +193,7 @@ final class EditorController {
         action = .anchored(cursor.position)
     }
 
-    /// One line of text. `event.characters`, so any layout types normally.
+    /// Typed text uses `event.characters`, so any layout types normally.
     private func handleTyping(_ event: NSEvent, keyCode: Int, flags: NSEvent.ModifierFlags, text: String, at point: CGPoint) {
         if flags.contains(.command) {
             switch keyCode {
@@ -168,7 +205,9 @@ final class EditorController {
         }
         switch keyCode {
         // Esc keeps the label too; ⌘z or ⌫ drop it.
-        case kVK_Escape, kVK_Return, kVK_ANSI_KeypadEnter: placeText()
+        case kVK_Return, kVK_ANSI_KeypadEnter:
+            if flags.contains(.shift) { action = .typing(text + "\n", at: point) } else { placeText() }
+        case kVK_Escape: placeText()
         case kVK_Delete: action = .typing(String(text.dropLast()), at: point)
         case kVK_Tab: color = color.cycled(by: flags.contains(.shift) ? -1 : 1)
         default:
@@ -187,6 +226,7 @@ final class EditorController {
 
     /// Like a label, a shape in progress is kept. Only ⌘z or u drop it.
     private func escape(confirmed: Bool) {
+        if resizing != nil { finishResize(commit: true); return }
         switch action {
         case .anchored(let start), .dragging(let start):
             pressedAt = nil
@@ -194,7 +234,7 @@ final class EditorController {
         case .typing:
             placeText()
         case .idle:
-            if document.snapshot != EditSnapshot(annotations: [], crop: nil), !confirmed {
+            if document.snapshot != baseline, !confirmed {
                 confirmsDiscard = true
                 message = "esc again to discard"
             } else {
@@ -207,13 +247,34 @@ final class EditorController {
 
     /// Points are in CoreGraphics global space.
     func mouseMoved(to point: CGPoint) {
-        cursor.move(to: imagePoint(point))
+        if resizing?.mouseOrigin != nil { return }
+        if resizing == nil { cursor.move(to: imagePoint(point)) }
+        let handle = editArea.hitTest(imagePoint(point))
+        hoveredHandle = handle
+        switch handle {
+        case .top, .bottom: NSCursor.resizeUpDown.set()
+        case .left, .right: NSCursor.resizeLeftRight.set()
+        case .topLeft, .topRight, .bottomLeft, .bottomRight: NSCursor.crosshair.set()
+        case nil: NSCursor.arrow.set()
+        }
     }
 
     func mouseDown(at point: CGPoint) {
         let local = imagePoint(point)
-        // The dimmed area around the image does nothing.
-        guard CGRect(origin: .zero, size: document.size).contains(local) else { return }
+        if let handle = editArea.hitTest(local) {
+            if resizing != nil {
+                cursor.stop()
+                resizing!.handle = handle
+                resizing!.mouseOrigin = local
+                resizing!.dragRect = resizing!.area.rect
+                resizing!.staysActive = true
+                cursor.move(to: handle.point(in: resizing!.area.rect))
+                return
+            }
+            beginResize(handle: handle, mouseOrigin: local)
+            return
+        }
+        guard resizing == nil, editArea.rect.contains(local) else { return }
         message = ""
         confirmsDiscard = false
         cursor.move(to: local)
@@ -221,6 +282,16 @@ final class EditorController {
     }
 
     func mouseDragged(to point: CGPoint) {
+        if let resize = resizing, let origin = resize.mouseOrigin {
+            let point = imagePoint(point)
+            let rect = resize.dragRect ?? resize.original
+            let start = resize.handle.point(in: rect)
+            var area = EditArea(rect: rect, bounds: resize.area.bounds)
+            area.resize(resize.handle, to: CGPoint(x: start.x + point.x - origin.x, y: start.y + point.y - origin.y))
+            resizing!.area = area
+            cursor.move(to: resize.handle.point(in: area.rect))
+            return
+        }
         guard let start = pressedAt else { return }
         cursor.move(to: imagePoint(point))
         if action == .idle, tool != .text, !Drag.isClick(from: start, to: cursor.position) {
@@ -229,6 +300,25 @@ final class EditorController {
     }
 
     func mouseUp(at point: CGPoint) {
+        if resizing?.mouseOrigin != nil {
+            mouseDragged(to: point)
+            if resizing!.staysActive {
+                // A clicked edge becomes a corner again for subsequent keyboard input.
+                let point = cursor.position
+                let rect = resizing!.area.rect
+                let corner = EditArea.Handle.allCases.prefix(4).min {
+                    let a = $0.point(in: rect), b = $1.point(in: rect)
+                    return hypot(a.x - point.x, a.y - point.y) < hypot(b.x - point.x, b.y - point.y)
+                }!
+                resizing!.handle = corner
+                resizing!.mouseOrigin = nil
+                resizing!.dragRect = nil
+                cursor.move(to: corner.point(in: rect))
+            } else {
+                finishResize(commit: true)
+            }
+            return
+        }
         guard let start = pressedAt else { return }
         pressedAt = nil
         cursor.move(to: imagePoint(point))
@@ -257,6 +347,11 @@ final class EditorController {
         confirmsDiscard = false
         switch item {
         case .tool(let newTool):
+            if newTool == .crop {
+                if resizing != nil { finishResize(commit: true) } else { beginResize() }
+                return
+            }
+            if resizing != nil { finishResize(commit: true) }
             // Only selects the tool. The keys also anchor it.
             if case .typing = action { placeText() } else { cancelAction() }
             tool = newTool
@@ -270,25 +365,60 @@ final class EditorController {
 
     // MARK: - Edits
 
-    private enum Shape {
-        case annotation(Annotation)
-        case crop(CGRect)
+    private var editArea: EditArea {
+        resizing?.area ?? EditArea(rect: document.crop ?? CGRect(origin: .zero, size: document.size),
+                                  bounds: CGRect(origin: .zero, size: document.size))
+    }
+
+    private func beginResize(handle: EditArea.Handle = .topLeft, mouseOrigin: CGPoint? = nil) {
+        guard resizing == nil else { return }
+        if case .typing = action { placeText() } else { cancelAction() }
+        cursor.stop()
+        let area = editArea
+        resizing = Resize(original: area.rect, area: area, handle: handle, mouseOrigin: mouseOrigin)
+        hoveredHandle = nil
+        cursor.cursor = EditCursor(bounds: area.bounds)
+        cursor.move(to: handle.point(in: area.rect))
+    }
+
+    private func updateResizeFromCursor() {
+        guard var resize = resizing, resize.mouseOrigin == nil else { return }
+        resize.area.resize(resize.handle, to: cursor.position)
+        resizing = resize
+        cursor.move(to: resize.handle.point(in: resize.area.rect))
+    }
+
+    private func finishResize(commit: Bool) {
+        guard let resize = resizing else { return }
+        cursor.stop()
+        resizing = nil
+        hoveredHandle = nil
+        if commit, resize.area.rect != resize.original {
+            var next = document.snapshot
+            next.crop = resize.area.rect
+            apply(next)
+        }
+        constrainCursor()
+    }
+
+    private func constrainCursor() {
+        let position = cursor.position
+        cursor.stop()
+        cursor.cursor = EditCursor(bounds: document.crop ?? CGRect(origin: .zero, size: document.size))
+        cursor.move(to: position)
     }
 
     /// What the current tool makes between two points, or nil if it would be empty.
-    private func shape(from start: CGPoint, to end: CGPoint) -> Shape? {
+    private func shape(from start: CGPoint, to end: CGPoint) -> Annotation? {
         let rect = CGRect(corners: start, end)
         switch tool {
         case .arrow:
             guard hypot(end.x - start.x, end.y - start.y) >= 1 else { return nil }
-            return .annotation(.arrow(from: start, to: end, color: color))
+            return .arrow(from: start, to: end, color: color)
         case .rect:
             guard rect.width >= 1, rect.height >= 1 else { return nil }
-            return .annotation(.rect(rect, color: color))
-        case .crop:
-            guard rect.width >= 1, rect.height >= 1 else { return nil }
-            return .crop(rect)
-        case .text:
+            return .rect(rect, color: color)
+        case .crop, .text:
             return nil
         }
     }
@@ -305,10 +435,7 @@ final class EditorController {
             return
         }
         var next = document.snapshot
-        switch shape {
-        case .annotation(let annotation): next.annotations.append(annotation)
-        case .crop(let rect): next.crop = rect
-        }
+        next.annotations.append(shape)
         apply(next)
     }
 
@@ -341,6 +468,7 @@ final class EditorController {
 
     /// With an action in progress, undo only cancels it.
     private func undo() {
+        if resizing != nil { finishResize(commit: false); return }
         if action != .idle {
             cancelAction()
             return
@@ -351,10 +479,12 @@ final class EditorController {
             return
         }
         document.snapshot = state
+        constrainCursor()
     }
 
     /// With an action in progress, redo only cancels it, like undo.
     private func redo() {
+        if resizing != nil { finishResize(commit: false); return }
         if action != .idle {
             cancelAction()
             return
@@ -365,10 +495,12 @@ final class EditorController {
             return
         }
         document.snapshot = state
+        constrainCursor()
     }
 
     /// What you see is what you get, so an action in progress is committed first.
     private func finish(_ kind: Finish) {
+        if resizing != nil { finishResize(commit: true) }
         switch action {
         case .anchored(let start), .dragging(let start): commit(from: start, to: cursor.position, beepsWhenEmpty: false)
         case .typing: placeText()
@@ -389,17 +521,14 @@ final class EditorController {
         let frame = CGRect(origin: imageOrigin, size: document.size)
         var annotations = document.annotations
         var crop = document.crop
-        var isCropping = false
+        let isCropping = resizing != nil
+        if let resize = resizing {
+            crop = resize.area.rect
+        }
         var caret: CGRect?
         switch action {
         case .anchored(let start), .dragging(let start):
-            switch shape(from: start, to: cursor.position) {
-            case .annotation(let annotation): annotations.append(annotation)
-            case .crop(let rect):
-                crop = rect
-                isCropping = true
-            case nil: break
-            }
+            if let annotation = shape(from: start, to: cursor.position) { annotations.append(annotation) }
         case let .typing(text, at):
             if !text.isEmpty { annotations.append(.text(text, at: at, color: color)) }
             caret = AnnotationRenderer.caret(after: text, at: at)
@@ -411,9 +540,11 @@ final class EditorController {
             annotations: annotations,
             crop: crop,
             isCropping: isCropping,
+            cropHandle: resizing.map { $0.handle.point(in: $0.area.rect) }
+                ?? hoveredHandle.map { $0.point(in: editArea.rect) },
             cursor: caret == nil ? cursor.position : nil,
             caret: caret,
-            tool: tool,
+            tool: resizing == nil ? tool : .crop,
             color: color,
             canUndo: history.canUndo,
             canRedo: history.canRedo,
@@ -433,15 +564,16 @@ final class EditorController {
 
     private var status: String {
         if !message.isEmpty { return message }
+        if resizing != nil { return "resize · tab corner · hjkl / drag edges · c / ↵ / esc apply · u cancel" }
         switch action {
         case .idle:
-            return "\(color.name) · hjkl move (⇧ far, ⌥ slow) · 0 $ g G M jump"
+            return "\(color.name) · arrows/hjkl move"
         case .anchored:
             return "\(color.name) \(tool.name) · move, then ↵ or \(tool.key) to finish · esc cancel"
         case .dragging:
             return "\(color.name) \(tool.name) · release to finish · esc cancel"
         case .typing:
-            return "\(color.name) text · type a label · ↵ or esc place · ⌘z cancel"
+            return "\(color.name) text · ⇧↵ new line · ↵ / esc place · ⌘z cancel"
         }
     }
 }

@@ -8,6 +8,7 @@ struct Capture {
     /// Pixels per point.
     let scale: CGFloat
     let frame: CGRect
+    var initialCrop: CGRect? = nil
 }
 
 final class Capturer {
@@ -36,6 +37,25 @@ final class Capturer {
 
     /// Captures `target`, or returns nil if it is gone or the capture fails. Vishot's own windows are
     /// never in the image, so this can run with the overlay up.
+    @MainActor
+    func editorImage(for target: CaptureTarget) async -> Capture? {
+        let task = contentTask ?? Self.loadContent()
+        contentTask = nil
+        do {
+            let content = try await task.value
+            guard let selection = EditArea.displaySelection(for: target.frame, displays: content.displays.map(\.frame)) else { return nil }
+            let display = content.displays[selection.index]
+            let own = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+            let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
+            guard var result = try await capture(filter: filter, frame: display.frame, crop: nil) else { return nil }
+            result.initialCrop = selection.crop
+            return result
+        } catch {
+            NSLog("Vishot editor capture failed: \(error)")
+            return nil
+        }
+    }
+
     @MainActor
     func image(for target: CaptureTarget) async -> Capture? {
         let task = contentTask ?? Self.loadContent()

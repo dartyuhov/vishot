@@ -35,6 +35,13 @@ final class WindowRaiser {
     /// True while a raise may have taken key focus from the overlay, which is not a cancel.
     var isSwitchingApps: Bool { holds > 0 }
 
+    /// A serial-queue barrier waits for all selected-window raises already requested.
+    func waitForPendingRaise() async {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume() }
+        }
+    }
+
     /// Starts a browsing session over `windows`, ordered front to back.
     func begin(_ windows: [WindowInfo]) {
         original = windows
