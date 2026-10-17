@@ -15,6 +15,7 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
     private var previewRevision: UUID?
     private var preview: CGImage?
     private var previewRequest: HistoryImageRequest?
+    private var yankRequest: HistoryImageRequest?
     private var thumbnailRequests: [UUID: HistoryImageRequest] = [:]
     private var hiddenIDs: Set<UUID> = []
     private var busy = false
@@ -55,6 +56,18 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
 
     func setBusy(_ busy: Bool) { self.busy = busy }
 
+    func yank(_ entry: HistoryEntry, completion: @escaping (CGImage?) -> Void) {
+        guard !busy else { return }
+        busy = true
+        let generation = generation
+        yankRequest = library.image(entry, thumbnail: false) { [weak self] image in
+            guard let self, self.generation == generation else { return }
+            self.yankRequest = nil
+            self.busy = false
+            completion(image)
+        }
+    }
+
     func show(on screen: NSScreen) {
         self.screen = screen
         panel?.setFrame(screen.frame, display: false)
@@ -91,6 +104,9 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
 
     func close() {
         generation += 1
+        yankRequest?.cancel()
+        yankRequest = nil
+        busy = false
         cachedQuery = nil
         cachedResults = []
         panel?.delegate = nil

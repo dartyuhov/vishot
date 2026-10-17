@@ -19,6 +19,7 @@ final class HistoryLibrary {
     private var timer: Timer?
     private var indexing: Set<String> = [] // worker queue only
     private var held: [UUID: Int] = [:] // worker queue only; overlapping output/editor holds are independent
+    private var storageLifetime = HistoryImageRequest() // worker queue; invalidated by explicit Clear
     private(set) var entries: [HistoryEntry] = []
     private(set) var error: String?
     private enum Operation: Equatable {
@@ -89,19 +90,27 @@ final class HistoryLibrary {
         let request = HistoryImageRequest()
         worker.async {
             guard !request.isCancelled else { return }
+            let lifetime = self.storageLifetime
             do {
-                guard let data = try self.store.previewData(entry, thumbnail: thumbnail) else { return }
+                guard let data = try self.store.previewData(entry, thumbnail: thumbnail) else {
+                    DispatchQueue.main.async {
+                        guard !request.isCancelled else { return }
+                        completion(nil)
+                    }
+                    return
+                }
                 self.browserReader.async {
                     guard !request.isCancelled else { return }
                     let result = Result { try HistoryStore.previewImage(data, maxPixelSize: thumbnail ? 320 : maxPixelSize) }
                     DispatchQueue.main.async {
                         guard !request.isCancelled else { return }
+                        guard !lifetime.isCancelled else { completion(nil); return }
                         switch result {
                         case .success(let image):
-                            self.recovered(.preview(entry.id), unlessCancelled: request)
+                            self.recovered(.preview(entry.id), unlessCancelled: request, lifetime: lifetime)
                             completion(image)
                         case .failure(let error):
-                            self.report(error, operation: .preview(entry.id), unlessCancelled: request)
+                            self.report(error, operation: .preview(entry.id), unlessCancelled: request, lifetime: lifetime)
                             completion(nil)
                         }
                     }
@@ -109,7 +118,7 @@ final class HistoryLibrary {
             } catch {
                 DispatchQueue.main.async {
                     guard !request.isCancelled else { return }
-                    self.report(error, operation: .preview(entry.id), unlessCancelled: request)
+                    self.report(error, operation: .preview(entry.id), unlessCancelled: request, lifetime: lifetime)
                     completion(nil)
                 }
             }
@@ -143,6 +152,21 @@ final class HistoryLibrary {
     private func perform(_ key: Operation, _ operation: @escaping () throws -> Void) {
         worker.async {
             do { try operation() } catch { self.report(error, operation: key); return }
+            if key == .clear {
+                self.storageLifetime.cancel()
+                self.storageLifetime = HistoryImageRequest()
+                self.failedIndex = []
+                DispatchQueue.main.async {
+                    self.failures.removeAll { failure in
+                        switch failure.0 {
+                        case .commit(.some), .delete, .load, .preview, .index, .undoDelete, .finishDeletions: return true
+                        default: return false
+                        }
+                    }
+                    self.warning = nil
+                    self.updateError()
+                }
+            }
             self.recovered(key)
             do { try self.publish() } catch { self.report(error, operation: .publication) }
         }
@@ -171,6 +195,7 @@ final class HistoryLibrary {
             return
         }
         let key = entry.revision.uuidString
+        let lifetime = storageLifetime
         indexing.insert(key)
         do {
             let image = try store.preview(entry)
@@ -178,6 +203,10 @@ final class HistoryLibrary {
                 let result = Result { try HistorySearch.recognize(image) }
                 self.worker.async {
                     self.indexing.remove(key)
+                    guard !lifetime.isCancelled else {
+                        do { try self.publish() } catch { self.report(error, operation: .publication) }
+                        return
+                    }
                     do {
                         switch result {
                         case .success(let text):
@@ -194,18 +223,20 @@ final class HistoryLibrary {
         } catch { indexing.remove(key); failedIndex.insert(entry.revision); report(error, operation: .index(entry.id)) }
     }
 
-    private func report(_ error: Error, operation: Operation, unlessCancelled request: HistoryImageRequest? = nil) {
+    private func report(_ error: Error, operation: Operation, unlessCancelled request: HistoryImageRequest? = nil,
+                        lifetime: HistoryImageRequest? = nil) {
         DispatchQueue.main.async {
-            guard request?.isCancelled != true else { return }
+            guard request?.isCancelled != true, lifetime?.isCancelled != true else { return }
             self.failures.removeAll { $0.0 == operation }
             self.failures.append((operation, "History: \(error.localizedDescription)"))
             self.updateError()
         }
     }
 
-    private func recovered(_ operation: Operation, unlessCancelled request: HistoryImageRequest? = nil) {
+    private func recovered(_ operation: Operation, unlessCancelled request: HistoryImageRequest? = nil,
+                           lifetime: HistoryImageRequest? = nil) {
         DispatchQueue.main.async {
-            guard request?.isCancelled != true else { return }
+            guard request?.isCancelled != true, lifetime?.isCancelled != true else { return }
             guard self.failures.contains(where: { $0.0 == operation }) else { return }
             self.failures.removeAll { $0.0 == operation }
             self.updateError()

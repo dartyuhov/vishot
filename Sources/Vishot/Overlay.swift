@@ -151,12 +151,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
         browser.onEdit = { [weak self] in self?.editHistory($0, on: $1) }
         browser.onYank = { [weak self, weak browser] entry in
             guard let self, !isCapturing else { return }
-            isCapturing = true
-            browser?.setBusy(true)
-            historyLibrary.image(entry, thumbnail: false) { [weak self] image in
-                guard let self, self.browser === browser else { return }
-                self.isCapturing = false
-                browser?.setBusy(false)
+            let session = session
+            browser?.yank(entry) { [weak self] image in
+                guard let self, self.session == session, self.browser === browser else { return }
                 guard let image else { return }
                 self.capturer.copy(image, scale: entry.scale)
                 self.closeHistory()

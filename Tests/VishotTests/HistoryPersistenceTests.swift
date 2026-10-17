@@ -3,6 +3,73 @@ import AppKit
 @testable import Vishot
 
 final class HistoryPersistenceTests: XCTestCase {
+    func testClearRetiresOCRAssetFailureAndPreservesSubsequentFailure() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = HistoryStore(url: folder)
+        var document = try makeDocument()
+        let entry = try store.commit(document: document, undo: [], label: "Unreadable OCR")
+        let asset = folder.appendingPathComponent(entry.id.uuidString)
+            .appendingPathComponent("\(entry.revision.uuidString)-preview.png")
+        try Data("broken".utf8).write(to: asset)
+        let library = HistoryLibrary(store: store)
+        changed(library, until: { library.error != nil }) { library.cleanup() }
+        changed(library, until: { library.entries.isEmpty && library.error == nil }) { library.clear() }
+        document.crop = CGRect(x: 100, y: 100, width: 10, height: 10)
+        changed(library, until: { library.error != nil }) {
+            library.clear()
+            library.commit(document: document, undo: [], label: "Current failure")
+        }
+        XCTAssertTrue(library.entries.isEmpty)
+        XCTAssertNotNil(library.error, "Clear cannot retire a failure from work requested after it")
+    }
+
+    func testClearRetiresRemovedEntryFailuresButPreservesDirectoryFailure() throws {
+        let files = FileManager.default
+        let folder = files.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {
+            try? files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? files.removeItem(at: folder)
+        }
+        let store = HistoryStore(url: folder)
+        var document = try makeDocument()
+        let entry = try store.commit(document: document, undo: [], label: "Committed")
+        try store.index(entry.id, revision: entry.revision, text: "")
+        let library = HistoryLibrary(store: store)
+        document.crop = CGRect(x: 100, y: 100, width: 10, height: 10)
+        changed(library, until: { library.error != nil }) {
+            library.commit(document: document, undo: [], label: "Failed update", id: entry.id)
+        }
+        let entryFailure = try XCTUnwrap(library.error)
+        try files.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        changed(library, until: { library.error != entryFailure }) { library.cleanup() }
+        let directoryFailure = try XCTUnwrap(try XCTUnwrap(library.error).components(separatedBy: "\n").first)
+        try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        changed(library, until: { library.entries.isEmpty && library.error == directoryFailure }) { library.clear() }
+        XCTAssertFalse(files.fileExists(atPath: folder.appendingPathComponent(entry.id.uuidString).path))
+        changed(library, until: { library.error == nil }) { library.cleanup() }
+    }
+
+    func testClearRecoversFailedUpdateAndAssetRead() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = HistoryStore(url: folder)
+        var document = try makeDocument()
+        let entry = try store.commit(document: document, undo: [], label: "Committed")
+        try store.index(entry.id, revision: entry.revision, text: "")
+        let library = HistoryLibrary(store: store)
+        document.crop = CGRect(x: 100, y: 100, width: 10, height: 10)
+        changed(library, until: { library.error != nil }) {
+            library.commit(document: document, undo: [], label: "Failed", id: entry.id)
+        }
+        let asset = folder.appendingPathComponent(entry.id.uuidString).appendingPathComponent("original.png")
+        try Data("broken".utf8).write(to: asset)
+        let read = expectation(description: "Damaged source reported")
+        library.load(entry.id) { result in XCTAssertNil(result); read.fulfill() }
+        wait(for: [read], timeout: 3)
+        changed(library, until: { library.entries.isEmpty && library.error == nil }) { library.clear() }
+    }
+
     func testNewCaptureStagingAndCleanupFailuresRecoverIndependently() throws {
         let files = FileManager.default
         let folder = files.temporaryDirectory.appendingPathComponent(UUID().uuidString)

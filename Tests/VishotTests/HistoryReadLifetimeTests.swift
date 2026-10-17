@@ -3,6 +3,49 @@ import AppKit
 @testable import Vishot
 
 final class HistoryReadLifetimeTests: XCTestCase {
+    func testDeletedAndExpiredRequestsCompleteWithoutDamage() throws {
+        for expire in [false, true] {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let store = HistoryStore(url: folder)
+            let entry = try store.commit(document: makeDocument(), undo: [], label: "Obsolete",
+                now: Date().addingTimeInterval(-2 * 86400))
+            if expire { try store.cleanup(retention: .oneDay) } else { try store.delete(entry.id) }
+            let library = HistoryLibrary(store: store)
+            let finished = expectation(description: "Obsolete read releases caller")
+            library.image(entry, thumbnail: false) { image in XCTAssertNil(image); finished.fulfill() }
+            wait(for: [finished], timeout: 3)
+            XCTAssertNil(library.error)
+        }
+    }
+
+    func testClearRetiresPendingDecodeFailureWithoutSuppressingCompletion() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = HistoryStore(url: folder)
+        let entry = try store.commit(document: makeDocument(), undo: [], label: "Removed")
+        try store.index(entry.id, revision: entry.revision, text: "")
+        let asset = folder.appendingPathComponent(entry.id.uuidString)
+            .appendingPathComponent("\(entry.revision.uuidString)-preview.png")
+        try Data("broken".utf8).write(to: asset)
+        let reader = DispatchQueue(label: "test.history.clear.decode")
+        reader.suspend()
+        let library = HistoryLibrary(store: store, browserReader: reader)
+        let completed = expectation(description: "Removed read finishes without image")
+        library.image(entry, thumbnail: false) { image in
+            XCTAssertNil(image)
+            completed.fulfill()
+        }
+        let cleared = expectation(description: "Clear published before decode")
+        library.onChange = { library.onChange = nil; cleared.fulfill() }
+        library.clear()
+        wait(for: [cleared], timeout: 3)
+        reader.resume()
+        wait(for: [completed], timeout: 3)
+        drain(reader)
+        XCTAssertNil(library.error, "Late decoding cannot resurrect damage for explicitly cleared storage")
+    }
+
     func testCancelledUnreadableReadDoesNotReportDamage() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -25,7 +68,7 @@ final class HistoryReadLifetimeTests: XCTestCase {
         XCTAssertNil(library.error)
     }
 
-    func testObsoleteEntriesAreSilentButUnreadableCurrentAssetsAreReported() throws {
+    func testObsoleteEntriesCompleteWithoutDamageButUnreadableCurrentAssetsAreReported() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = HistoryStore(url: folder)
@@ -35,10 +78,14 @@ final class HistoryReadLifetimeTests: XCTestCase {
         let current = try store.commit(document: document, undo: [], label: "B", id: old.id)
         let reader = DispatchQueue(label: "test.history.decode")
         let library = HistoryLibrary(store: store, browserReader: reader)
-        library.image(old, thumbnail: false) { _ in XCTFail("Obsolete revision delivered") }
+        let obsolete = expectation(description: "Obsolete request completes without an image")
+        library.image(old, thumbnail: false) { image in
+            XCTAssertNil(image)
+            obsolete.fulfill()
+        }
         let fence = expectation(description: "Obsolete request processed")
         library.load(current.id) { _ in fence.fulfill() }
-        wait(for: [fence], timeout: 3)
+        wait(for: [fence, obsolete], timeout: 3)
         drain(reader)
         XCTAssertNil(library.error)
         let asset = folder.appendingPathComponent(current.id.uuidString)
