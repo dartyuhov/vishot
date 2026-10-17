@@ -64,6 +64,26 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
     private let elements = ElementCatalog()
     private let raiser = WindowRaiser()
+    private lazy var sourcePreparation = FrozenSourcePreparation(
+        waitForRaise: { [raiser] in await raiser.waitForPendingRaise() },
+        excludePicker: { [weak self] in
+            // Remove decorations as well as excluding our app from capture: a
+            // stale compositor frame can otherwise retain the target outline.
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self?.panels.forEach { $0.hidePicker() }
+            CATransaction.commit()
+            CATransaction.flush()
+        },
+        capture: { [capturer] in await capturer.frozenSource(for: $0) },
+        onFailure: { [weak self] in
+            guard let self else { return }
+            isCapturing = false
+            status = "capture failed"
+            NSSound.beep()
+            render()
+        }
+    )
 
     private var mode = Mode.window
     private var windows: [WindowInfo] = []
@@ -217,6 +237,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         isShowing = false
         session += 1
+        sourcePreparation.cancel()
         isCapturing = false
         editor = nil
         if let id = historyEditingID { historyLibrary.release(id) }
@@ -250,19 +271,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard !isCapturing, let target = selection else { return }
         captureMetadata(for: target)
         let label = captureLabel, title = captureWindowTitle, watermark = capturer.watermark
-        let session = session
-        isCapturing = true
-        stopWarmUp()
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            await raiser.waitForPendingRaise()
-            guard session == self.session else { return }
-            panels.forEach { $0.hidePicker() }
-            CATransaction.flush()
-            let capture = await capturer.editorImage(for: target)
-            guard session == self.session else { return }
-            isCapturing = false
-            guard let capture else { status = "capture failed"; NSSound.beep(); render(); return }
+        prepareSource(for: target) { [self] capture in
             let document = EditDocument(image: capture.image, scale: capture.scale, crop: capture.initialCrop)
             guard let image = AnnotationRenderer.export(document) else { status = "export failed"; render(); return }
             historyLibrary.commit(document: document, undo: [], label: label, windowTitle: title)
@@ -286,31 +295,19 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func edit() {
         guard !isCapturing, let target = selection else { return }
         captureMetadata(for: target)
+        prepareSource(for: target) { [self] in startEditing($0) }
+    }
+
+    private func prepareSource(for target: CaptureTarget, receive: @escaping (Capture) -> Void) {
         let session = session
         isCapturing = true
         stopWarmUp()
         Task { @MainActor [weak self] in
-            guard let self else { return }
-            await raiser.waitForPendingRaise()
-            guard session == self.session else { return }
-            // Remove picker decorations before freezing, as well as excluding our
-            // windows from capture. Otherwise a stale compositor frame can retain
-            // the old target label/outline inside the backing image.
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            panels.forEach { $0.hidePicker() }
-            CATransaction.commit()
-            CATransaction.flush()
-            let capture = await capturer.editorImage(for: target)
-            guard session == self.session else { return }
-            isCapturing = false
-            guard let capture else {
-                NSSound.beep()
-                status = "capture failed"
-                render()
-                return
+            guard let self, session == self.session else { return }
+            await sourcePreparation.prepare(for: target) { capture in
+                self.isCapturing = false
+                receive(capture)
             }
-            startEditing(capture)
         }
     }
 

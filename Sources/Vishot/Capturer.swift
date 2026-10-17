@@ -23,22 +23,10 @@ final class Capturer {
         contentTask = Self.loadContent()
     }
 
-    /// Captures `target` and copies it. The ↵ path: runs after the overlay hides.
-    func capture(_ target: CaptureTarget) {
-        let watermark = watermark
-        Task { @MainActor in
-            guard let capture = await image(for: target) else {
-                NSSound.beep()
-                return
-            }
-            copy(capture.image, scale: capture.scale, watermark: watermark)
-        }
-    }
-
-    /// Captures `target`, or returns nil if it is gone or the capture fails. Vishot's own windows are
-    /// never in the image, so this can run with the overlay up.
+    /// Freezes the visible display for Copy and Edit, retaining the target as a crop.
+    /// Vishot's own windows are excluded; overlapping apps remain in the source.
     @MainActor
-    func editorImage(for target: CaptureTarget) async -> Capture? {
+    func frozenSource(for target: CaptureTarget) async -> Capture? {
         let task = contentTask ?? Self.loadContent()
         contentTask = nil
         do {
@@ -47,68 +35,24 @@ final class Capturer {
             let display = content.displays[selection.index]
             let own = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
             let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
-            guard var result = try await capture(filter: filter, frame: display.frame, crop: nil) else { return nil }
-            result.initialCrop = selection.crop
-            return result
+            return try await capture(filter: filter, frame: display.frame, crop: selection.crop)
         } catch {
-            NSLog("Vishot editor capture failed: \(error)")
+            NSLog("Vishot frozen source capture failed: \(error)")
             return nil
         }
     }
 
+    /// Retains all native-scale display pixels; `crop` is in image-space points.
     @MainActor
-    func image(for target: CaptureTarget) async -> Capture? {
-        let task = contentTask ?? Self.loadContent()
-        contentTask = nil
-        do {
-            let content = try await excludingOwnApplication(from: task)
-            switch target.kind {
-            case .window(let windowID), .element(let windowID, _):
-                guard let window = content.windows.first(where: { $0.windowID == windowID }) else { return nil }
-                var crop: (rect: CGRect, content: CGRect)?
-                // The window's frame now, in case it moved since the catalog was read.
-                if case .element(_, let rect) = target.kind { crop = (rect, window.frame) }
-                return try await capture(filter: SCContentFilter(desktopIndependentWindow: window), frame: window.frame, crop: crop)
-
-            case .display(let displayID), .region(let displayID, _):
-                guard let display = content.displays.first(where: { $0.displayID == displayID }) else { return nil }
-                let ownPID = ProcessInfo.processInfo.processIdentifier
-                let own = content.applications.filter { $0.processID == ownPID }
-                let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
-                var crop: (rect: CGRect, content: CGRect)?
-                if case .region(_, let rect) = target.kind { crop = (rect, display.frame) }
-                return try await capture(filter: filter, frame: display.frame, crop: crop)
-            }
-        } catch {
-            NSLog("Vishot capture failed: \(error)")
-            return nil
-        }
-    }
-
-    /// `frame` is where the captured content is, in CoreGraphics global space. `crop` is an element or
-    /// region rect and the frame of the window or display being captured, both in points.
-    @MainActor
-    private func capture(filter: SCContentFilter, frame: CGRect, crop: (rect: CGRect, content: CGRect)?) async throws -> Capture? {
+    private func capture(filter: SCContentFilter, frame: CGRect, crop: CGRect) async throws -> Capture {
         let scale = CGFloat(filter.pointPixelScale)
         let config = SCStreamConfiguration()
         config.width = Int(filter.contentRect.width * scale)
         config.height = Int(filter.contentRect.height * scale)
         config.captureResolution = .best
         config.showsCursor = false
-        config.ignoreShadowsSingleWindow = true
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-        guard let crop else { return Capture(image: image, scale: scale, frame: frame) }
-        let size = CGSize(width: image.width, height: image.height)
-        guard let rect = Self.cropRect(for: crop.rect, in: crop.content, scale: scale, imageSize: size),
-              let cropped = image.cropping(to: rect)
-        else { return nil }
-        let croppedFrame = CGRect(
-            x: crop.content.minX + rect.minX / scale,
-            y: crop.content.minY + rect.minY / scale,
-            width: rect.width / scale,
-            height: rect.height / scale
-        )
-        return Capture(image: cropped, scale: scale, frame: croppedFrame)
+        return Capture(image: image, scale: scale, frame: frame, initialCrop: crop)
     }
 
     /// Puts the image on the clipboard. Encoding waits until something pastes.
@@ -141,20 +85,6 @@ final class Capturer {
                 }
             }
         }
-    }
-
-    /// Pixel rect of `element` inside a capture of the window at `windowFrame`, or of a region inside a
-    /// capture of its display. Both are in points, in CoreGraphics global space.
-    /// Returns nil when the element is entirely outside the image.
-    static func cropRect(for element: CGRect, in windowFrame: CGRect, scale: CGFloat, imageSize: CGSize) -> CGRect? {
-        let pixels = CGRect(
-            x: (element.minX - windowFrame.minX) * scale,
-            y: (element.minY - windowFrame.minY) * scale,
-            width: element.width * scale,
-            height: element.height * scale
-        ).integral
-        let crop = pixels.intersection(CGRect(origin: .zero, size: imageSize))
-        return crop.isEmpty ? nil : crop
     }
 
     /// Prefetch may finish before our panels are on screen. Never build a display filter from
