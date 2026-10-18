@@ -157,6 +157,21 @@ kbd {
   text-transform: uppercase;
 }
 
+.github {
+  display: inline-flex;
+  align-items: center;
+  gap: .75rem;
+  min-height: 44px;
+  padding: .4rem .7rem;
+  border: 2px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  font-size: .875rem;
+  text-decoration: none;
+}
+.github:hover { border-color: var(--accent-text); }
+.github [data-stars] { color: var(--hint); }
+
 /* ---------- Hero ---------- */
 
 .hero { padding-block: clamp(.5rem, 3vw, 2rem) 2rem; }
@@ -232,10 +247,86 @@ kbd {
 .watch:hover { background: var(--surface-2); border-color: #4a4a6a; }
 .watch:active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--line); }
 
+/* Installation spans the hero; the quieter video link stays beside the introduction. */
 @media (min-width: 961px) {
   .hero-row { grid-template-columns: minmax(0, 36rem) auto; column-gap: .75rem; }
-  .hero-row .install-placeholder { grid-column: 1; grid-row: 2; margin: 0; }
-  .watch { grid-column: 2; grid-row: 2; align-self: start; margin-top: 0; }
+  .hero-row .installer { grid-column: 1 / -1; grid-row: 2; }
+  .watch { grid-column: 2; grid-row: 1; align-self: center; justify-self: end; margin-top: 0; }
+}
+
+/* ---------- Installation ---------- */
+.installer { min-width: 0; scroll-margin-top: 2rem; }
+.install-actions { display: flex; align-items: stretch; gap: 1rem; flex-wrap: wrap; }
+.brew {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  min-width: 0;
+  max-width: 100%;
+  padding: .35rem .5rem .35rem 1rem;
+  border: 2px solid var(--line);
+  background: var(--surface);
+}
+.shell-prompt { color: var(--hint); user-select: none; }
+.brew code { min-width: 0; overflow-wrap: anywhere; user-select: text; font: .875rem/1.6 var(--mono); }
+.brew button, .download-bar button {
+  flex: none;
+  min-height: 44px;
+  padding: .5rem .75rem;
+  border: 2px solid var(--line);
+  border-radius: 0;
+  background: var(--surface-2);
+  color: var(--text);
+  font: .875rem/1.3 var(--mono);
+  cursor: pointer;
+}
+.brew button:hover, .download-bar button:hover { border-color: var(--accent-text); }
+.download {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60px;
+  padding: .75rem 1.2rem;
+  background: var(--accent);
+  color: #fff;
+  font: 700 1rem/1.3 var(--pixel);
+  text-transform: uppercase;
+  text-decoration: none;
+  box-shadow: 4px 4px 0 var(--hint);
+}
+.download:hover { background: #7c6efb; }
+.download:active { transform: translate(4px, 4px); box-shadow: none; }
+.install-note, .copy-status { margin: 1rem 0 0; color: var(--muted); font-size: .8rem; }
+.copy-status { color: var(--hint); }
+.copy-status:empty { margin: 0; }
+.install-status { max-width: 42rem; margin: 0; padding: 1rem; border-left: 4px solid var(--hint); background: var(--surface); }
+.download-dialog {
+  width: min(38rem, 100% - 2rem);
+  max-height: calc(100svh - 2rem);
+  overflow-y: auto;
+  padding: 1.25rem;
+  border: 2px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 8px 8px 0 rgb(0 0 0 / .45);
+}
+.download-dialog::backdrop { background: rgb(10 10 16 / .85); }
+.download-bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.download-bar h2 { margin: 0; font: 700 1.25rem/1.4 var(--pixel); }
+.download-dialog > p { color: var(--muted); font-size: .875rem; }
+.chip-links { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.chip-links a { display: block; padding: 1rem; border: 2px solid var(--line); background: var(--surface); color: var(--text); font: 700 1rem/1.5 var(--pixel); text-decoration: none; }
+.chip-links a:hover { border-color: var(--accent-text); background: var(--surface-2); }
+.chip-links span { display: block; margin-top: .5rem; color: var(--muted); font: .8rem/1.5 var(--mono); }
+@media (max-width: 720px) {
+  .install-actions { flex-direction: column; }
+  .brew code { flex: 1; }
+  .download { align-self: stretch; }
+}
+@media (max-width: 520px) {
+  .chip-links { grid-template-columns: 1fr; }
+  .download-bar { align-items: start; }
+  .brew { gap: .5rem; padding-left: .5rem; }
 }
 
 /* As wide as the window allows, but never taller than it: 16:9 frame plus the bar above it. */
