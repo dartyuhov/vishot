@@ -107,7 +107,7 @@ test('applicable release tooling includes real Homebrew validation', async () =>
 });
 
 test('path selection skips unrelated expensive jobs and covers shared inputs', () => {
-  assert.deepEqual(affected(['README.md', 'docs/homebrew.md']), { app: false, package: false, release: false, site: false });
+  assert.deepEqual(affected(['README.md', 'docs/homebrew.md', 'scripts/release/README.md']), { app: false, package: false, release: false, site: false });
   assert.deepEqual(affected(['site/index.html']), { app: false, package: false, release: false, site: true });
   assert.deepEqual(affected(['Sources/Vishot/Overlay.swift']), { app: true, package: true, release: false, site: false });
   assert.equal(affected(['Package.resolved']).package, true);

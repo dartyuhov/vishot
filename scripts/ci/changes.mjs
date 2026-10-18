@@ -3,6 +3,7 @@ import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 export function affected(paths) {
+  paths = paths.filter(p => !/\.md$/i.test(p));
   const workflow = p => p.startsWith('.github/');
   const ci = p => p.startsWith('scripts/ci/');
   const app = paths.some(p => /^(Sources\/|Tests\/|Resources\/|Package\.(swift|resolved)$|version\.txt$)/.test(p));
