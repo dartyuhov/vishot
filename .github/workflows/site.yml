@@ -6,16 +6,21 @@ on:
     branches: [main]
     paths: ['site/**', '.github/workflows/site.yml']
   pull_request:
-    paths: ['site/**', '.github/workflows/site.yml']
+
+permissions:
+  contents: read
 
 jobs:
   test:
+    name: Site tests
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: site
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: site/.node-version

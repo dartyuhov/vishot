@@ -30,7 +30,8 @@ jobs:
           cache-dependency-path: scripts/release/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm test
-      # App-authored PR events trigger normal CI; GITHUB_TOKEN events do not.
+      # App-authored PR events trigger automatic CI. GITHUB_TOKEN PR runs can
+      # require approval and edited events don't trigger runs with that token.
       # Install the App on this repository and configure the variable/secret.
       - uses: actions/create-github-app-token@v3
         id: app-token

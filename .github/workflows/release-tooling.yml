@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   contracts:
+    name: Release tooling
     runs-on: ubuntu-latest
     defaults:
       run:
