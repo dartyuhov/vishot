@@ -1,0 +1,33 @@
+name: Homebrew tooling
+
+on:
+  pull_request:
+    paths:
+      - scripts/homebrew/**
+      - scripts/package.py
+      - docs/homebrew.md
+      - .github/workflows/homebrew.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/homebrew/**
+      - scripts/package.py
+      - docs/homebrew.md
+      - .github/workflows/homebrew.yml
+
+permissions:
+  contents: read
+
+jobs:
+  cask:
+    runs-on: macos-15
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
+      VISHOT_TEST_HOMEBREW: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: brew --version
+      - run: python3 -B -m unittest discover -s scripts/homebrew -p 'test_*.py' -v

@@ -6,7 +6,7 @@
   <title>Vishot: keyboard-first screenshots for macOS</title>
   <meta name="description" content="A Vim-inspired screenshot tool for macOS. Pick a window or a single element with the keyboard, mark it up, and copy or save it without touching the mouse.">
   <meta property="og:title" content="Vishot: the keyboard-first screenshot tool">
-  <meta property="og:description" content="A keyboard-first, Vim-inspired screenshot tool for macOS. Join the waitlist.">
+  <meta property="og:description" content="A keyboard-first, Vim-inspired screenshot tool for macOS. Pick, annotate, and copy without leaving the keyboard.">
   <link rel="canonical" href="https://vishot.dev/">
   <meta property="og:url" content="https://vishot.dev">
   <meta property="og:image" content="https://vishot.dev/og.png">
@@ -19,17 +19,17 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <a class="skip" href="#waitlist">Skip to the waitlist</a>
+  <a class="skip" href="#content">Skip to content</a>
 
   <header class="top">
     <a class="brand" href="/" aria-label="Vishot home">
       <img src="favicon.svg" alt="" width="32" height="32">
       <span>vishot</span>
     </a>
-    <p class="top-note">macOS Sonoma or later · coming soon</p>
+    <a class="github" href="https://github.com/dartyuhov/vishot">GitHub <span data-stars hidden></span></a>
   </header>
 
-  <main>
+  <main id="content" tabindex="-1">
     <section id="intro" class="hero" aria-labelledby="headline">
       <h1 id="headline" class="headline">
         <span class="line">The <span class="accent">keyboard-first</span></span>
@@ -48,39 +48,17 @@
           Watch the demo <time datetime="PT1M4S">1:04</time>
         </a>
 
-        <form id="waitlist" class="waitlist" action="/api/subscribe" method="post" novalidate>
-          <label for="email">Get early access</label>
-          <div class="field">
-            <input id="email" name="email" type="email" inputmode="email" autocomplete="email"
-                   placeholder="you@example.com" required aria-describedby="email-error privacy">
-            <p id="email-error" class="error" role="alert"></p>
-            <div class="use">
-              <label class="visually-hidden" for="use">What do you screenshot most? (optional)</label>
-              <select id="use" name="use" aria-describedby="privacy">
-                <option value="">I mostly screenshot…</option>
-                <option>Whole screen</option>
-                <option>Bugs and errors</option>
-                <option>Parts of a window</option>
-                <option>Code and terminals</option>
-                <option>Web pages</option>
-                <option>Other</option>
-              </select>
-              <input id="use-other" name="use_other" type="text" maxlength="120"
-                     placeholder="Tell us what" aria-label="What else do you screenshot?" autocomplete="off" hidden>
+        <div id="install" class="installer" aria-label="Get Vishot">
+          <p class="install-status" data-install-status{{INSTALL_STATUS}}>Public installation is not enabled. Release and Homebrew availability are being verified.</p>
+          <div data-install-controls{{INSTALL_CONTROLS}}>
+            <div class="install-actions">
+              <div class="brew"><span class="shell-prompt" aria-hidden="true">$</span><code tabindex="0" aria-label="Homebrew install command" data-brew-command>{{BREW_COMMAND}}</code><button type="button" data-copy-command hidden>Copy</button></div>
+              <a class="download" data-download href="/download">Download for Mac</a>
             </div>
-            <button type="submit">Join waitlist</button>
+            <p class="copy-status" data-copy-status role="status" aria-live="polite"></p>
           </div>
-          <div class="trap" aria-hidden="true">
-            <label for="website">Leave this empty</label>
-            <input id="website" name="website" type="text" tabindex="-1" autocomplete="off">
-          </div>
-          <p class="status" role="status" aria-live="polite"></p>
-          <p id="privacy" class="privacy">
-            We will notify you once the early build is available. Your email, the link that brought
-            you here, and your answer if you give one will be stored by Vishot, used only to send you
-            Vishot news and to decide what to build first, never shared, and deleted on request.
-          </p>
-        </form>
+          <p class="install-note">macOS 14+ <span aria-hidden="true">·</span> <a href="#faq">Installation help</a></p>
+        </div>
       </div>
     </section>
 
@@ -90,7 +68,7 @@
       <figure class="screen">
         <div class="monitor">
           <canvas id="scene" width="192" height="120" role="img"
-                  aria-label="Animated pixel-art demo: the picker opens on a window, moves to another with j and h, labels the elements with f, selects a chart by typing its label, an agent captures the chat window from a terminal, the chart is frozen in the editor, draws an arrow on it, and copies it with y."></canvas>
+                  aria-label="Pixel-art demo: open the picker, move between windows with j and h, label elements with f, select a chart, draw an arrow in the editor, and copy with y. History preview, not yet verified in a public release: open Capture History from the menu bar, browse earlier screenshots with l and h, and copy the selected screenshot with y."></canvas>
         </div>
         <figcaption class="keycast">
           <span class="keycast-keys" aria-hidden="true"></span>
@@ -124,14 +102,18 @@
           <span class="progress" aria-hidden="true"></span>
         </li>
         <li class="feature" data-seg="4">
-          <button type="button" class="feature-head"><span class="hint">05</span>Let your agent take the shot</button>
-          <p><code>vishot capture --app Chat</code> saves a PNG and prints its path, so a coding agent can look at the app it's building. A bundled skill teaches the agent the commands.</p>
+          <button type="button" class="feature-head"><span class="hint">05</span>Capture history <span class="feature-note">Preview</span></button>
+          <p><span id="history-availability">History preview: release availability is not yet verified.</span> Open Capture History from Vishot’s menu bar. <kbd>h</kbd><kbd>l</kbd> or Left/Right selects an earlier screenshot; <kbd>y</kbd> copies it again and closes history.</p>
           <span class="progress" aria-hidden="true"></span>
         </li>
         <li class="feature" data-seg="5">
           <button type="button" class="feature-head"><span class="hint">06</span>Copy, save, or both</button>
           <p><kbd>y</kbd> copies it, <kbd>s</kbd> saves a PNG to your screenshot folder, <kbd>S</kbd> does both. Nothing is uploaded: Vishot makes no network requests.</p>
           <span class="progress" aria-hidden="true"></span>
+        </li>
+        <li class="feature planned">
+          <div class="feature-head"><span class="hint">—</span>CLI <span class="feature-note">Coming soon</span></div>
+          <p>Planned command-line capture for scripts and coding agents. Not available yet.</p>
         </li>
       </ol>
     </section>
@@ -145,9 +127,17 @@
           <summary>Is it free?</summary>
           <p>Yes. Every feature on this page is free: picking, labels, markup, copy and save. There may be optional paid extras later, but nothing here will move behind a paywall.</p>
         </details>
+        <details id="installation-help">
+          <summary>How do I install Vishot?</summary>
+          <p>Vishot requires macOS 14 or later. In Apple menu → About This Mac, “Chip” with an Apple M-series name means Apple Silicon; “Processor” with an Intel name means Intel. Choose the matching DMG, open it, drag Vishot into Applications, then eject the disk image and launch Vishot from Applications.</p>
+        </details>
         <details>
-          <summary>When can I try it?</summary>
-          <p>No date yet. <a href="#waitlist">Join the waitlist</a> and you'll get one email when the beta opens.</p>
+          <summary>macOS says it can’t verify the app. What now?</summary>
+          <p>After trying to open Vishot, open System Settings → Privacy &amp; Security, find the message about Vishot and choose Open Anyway. Confirm Open and authenticate if asked. This approves Vishot individually; normal macOS security checks still apply to both DMG and Homebrew installs.</p>
+        </details>
+        <details>
+          <summary>How do I update it?</summary>
+          <p>For a direct install, quit Vishot, download the newer DMG for your chip and replace Vishot in Applications, then eject the image and reopen the app. For a Homebrew install, run <code>brew update</code> then <code>brew upgrade --cask vishot</code>. There is no automatic in-app updater.</p>
         </details>
         <details>
           <summary>How is it different from the built-in screenshots?</summary>
@@ -159,11 +149,11 @@
         </details>
         <details>
           <summary>Can I change the keys?</summary>
-          <p>Yes. By release every key will be remappable in Settings, the <kbd>Shift</kbd><kbd>⌘</kbd><kbd>S</kbd> shortcut included, so you can make it feel like Vim, like Emacs, or like neither.</p>
+          <p>You can change the global capture shortcut in Vishot’s Settings; the default is <kbd>Shift</kbd><kbd>⌘</kbd><kbd>S</kbd>. The picker and editor’s internal keys are fixed, not individually remappable.</p>
         </details>
         <details>
           <summary>What permissions does it need?</summary>
-          <p>Screen Recording, to take the screenshot. Accessibility is optional: it powers the <kbd>f</kbd> labels, and Vishot asks for it the first time you press <kbd>f</kbd>, never at launch.</p>
+          <p>Allow Screen Recording in System Settings → Privacy &amp; Security so Vishot can capture your screen. Accessibility is optional: it powers the <kbd>f</kbd> labels and bringing selected windows forward. Enable it there when you want those features. If macOS asks you to quit and reopen Vishot after a permission change, do so.</p>
         </details>
         <details>
           <summary>Does it work in Chrome, Slack and Electron apps?</summary>
@@ -181,45 +171,13 @@
     </section>
 
     <section class="closing" aria-labelledby="closing-title">
-      <h2 id="closing-title" class="closing-title">Get Vishot when it's ready.</h2>
-      <form class="waitlist" action="/api/subscribe" method="post" novalidate>
-        <label for="email-2">Get early access</label>
-        <div class="field">
-          <input id="email-2" name="email" type="email" inputmode="email" autocomplete="email"
-                 placeholder="you@example.com" required aria-describedby="email-error-2 privacy-2">
-          <p id="email-error-2" class="error" role="alert"></p>
-          <div class="use">
-            <label class="visually-hidden" for="use-2">What do you screenshot most? (optional)</label>
-            <select id="use-2" name="use" aria-describedby="privacy-2">
-              <option value="">I mostly screenshot…</option>
-              <option>Whole screen</option>
-              <option>Bugs and errors</option>
-              <option>Parts of a window</option>
-              <option>Code and terminals</option>
-              <option>Web pages</option>
-              <option>Other</option>
-            </select>
-            <input id="use-other-2" name="use_other" type="text" maxlength="120"
-                   placeholder="Tell us what" aria-label="What else do you screenshot?" autocomplete="off" hidden>
-          </div>
-          <button type="submit">Join waitlist</button>
-        </div>
-        <div class="trap" aria-hidden="true">
-          <label for="website-2">Leave this empty</label>
-          <input id="website-2" name="website" type="text" tabindex="-1" autocomplete="off">
-        </div>
-        <p class="status" role="status" aria-live="polite"></p>
-        <p id="privacy-2" class="privacy">
-          We will notify you once the early build is available. Your email, the link that brought
-          you here, and your answer if you give one will be stored by Vishot, used only to send you
-          Vishot news and to decide what to build first, never shared, and deleted on request.
-        </p>
-      </form>
+      <h2 id="closing-title" class="closing-title">Keep your hands on the keys.</h2>
+      <a href="#intro">Back to Vishot ↑</a>
     </section>
 
     <footer class="bottom">
       <span>© 2026 Vishot</span>
-      <a href="#waitlist">Join the waitlist ↑</a>
+      <a href="#intro">Back to top ↑</a>
     </footer>
     </div>
   </main>
@@ -236,9 +194,19 @@
   <nav class="dots" aria-label="Sections">
     <a href="#intro" aria-label="Intro"></a>
     <a href="#guide" aria-label="How it works"></a>
-    <a href="#faq" aria-label="FAQ and sign-up"></a>
+    <a href="#faq" aria-label="FAQ"></a>
   </nav>
 
+  <dialog id="download-chooser" class="download-dialog" aria-labelledby="download-title" aria-describedby="chip-help">
+    <div class="download-bar"><h2 id="download-title">Choose your Mac</h2><button type="button" data-close-download autofocus>Close <kbd>Esc</kbd></button></div>
+    <p id="chip-help">Find your chip in Apple menu → About This Mac. “Chip” means Apple Silicon; “Processor” with Intel means Intel.</p>
+    <div class="chip-links">
+      <a data-arm64 href="{{ARM64_URL}}">Apple Silicon <span>M1, M2, M3, M4 and later</span></a>
+      <a data-x86-64 href="{{X86_64_URL}}">Intel <span>Intel-based Macs</span></a>
+    </div>
+    <p class="install-note">Requires macOS 14 or later.</p>
+  </dialog>
+  <script src="install.js" defer></script>
   <script src="main.js" defer></script>
 </body>
 </html>

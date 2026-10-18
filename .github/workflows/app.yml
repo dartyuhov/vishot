@@ -6,12 +6,19 @@ on:
     branches: [main]
     paths: ['Sources/**', 'Tests/**', 'Package.swift', '.github/workflows/app.yml']
   pull_request:
-    paths: ['Sources/**', 'Tests/**', 'Package.swift', '.github/workflows/app.yml']
+
+permissions:
+  contents: read
 
 jobs:
   test:
-    runs-on: macos-latest
+    name: App tests
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - run: swift --version
-      - run: swift test
+      - run: swift test --force-resolved-versions

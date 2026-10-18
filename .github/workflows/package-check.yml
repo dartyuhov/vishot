@@ -1,0 +1,25 @@
+name: Package
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  installers:
+    uses: ./.github/workflows/package.yml
+    with:
+      source_sha: ${{ github.sha }}
+  required:
+    name: Package checks
+    if: ${{ always() }}
+    needs: installers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both native installers to pass
+        env:
+          RESULT: ${{ needs.installers.result }}
+        run: test "$RESULT" = success

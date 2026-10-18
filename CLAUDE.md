@@ -22,16 +22,15 @@ swift test                     # XCTest unit tests (VishotTests)
 
 ## Landing site
 
-`site/` is vishot.dev: a static page (`index.html`, `main.js`, `style.css`) plus `server.js`, a dependency-free Node 24 server that serves only those files and the fonts, and stores waitlist signups in SQLite (`node:sqlite`).
+`site/` is vishot.dev: a static landing page plus a dependency-free Node 24 server with allowlisted assets and cached public GitHub metadata. It has no database, signup intake, or subscriber export.
 
 ```sh
-cd site && npm test            # node:test suite; spawns server.js against a temp database
-cd site && npm start           # http://localhost:3000, database at site/waitlist.db (git-ignored)
+cd site && npm test            # node:test suite; exercises served routes and metadata
+cd site && npm start           # http://localhost:3000; no storage required
 ```
 
-- Deploys are Railway's GitHub autodeploy (project `vishot`, service `site`): a push to `main` that touches `site/**` deploys once the `Site` workflow passes ("Wait for CI"). The service is configured in Railway, not in the repo: root directory `site`, start `node server.js`, health check `/healthz`, watch path `/site/**`, a volume at `/data`, and the `EXPORT_TOKEN` variable. Node's version is in `site/.node-version`, which CI reads too.
-- The database is `waitlist.db` on a Railway volume (`RAILWAY_VOLUME_MOUNT_PATH`). A service with a volume is down for a few seconds per deploy, so `main.js` retries a signup that gets no answer or a 502/503.
-- `POST /api/subscribe` takes form fields `email`, `website` (a honeypot; filled means a bot, answered as success and dropped) the optional `use` and `use_other`, and `ref` (the `?ref=` the page was opened with, sent by `main.js`), and is rate limited per IP. `use` is what the sign-up's dropdown asked ("What do you screenshot most?"); it must be one of `USES` in `server.js`, which mirrors the `<option>`s in `index.html` (a test checks they agree), or it's dropped. `main.js` draws its own list in place of the `<select>` (a system list can't be styled) and writes the choice back to the hidden `<select>`, which is the value that's sent. "Other" keeps `use_other` as `Other: …` (120 characters). `ref` can be any short text (`source()` in `server.js` lowercases it, makes it one line and cuts it at 64 characters; the export defuses a leading `=`, `+`, `-` or `@`), so a link like `vishot.dev/?ref=reddit` tells you where a sign-up came from; it's not visitor tracking. The answer and the source live in the nullable `use_case` and `source` columns, which `server.js` adds to databases that predate them, and someone already on the list can fill each once but never overwrite it. `GET /api/export.csv` with `Authorization: Bearer $EXPORT_TOKEN` downloads the list (`email,created_at,use_case,source`); without the variable it's off.
+- Deploys are Railway's GitHub autodeploy (project `vishot`, service `site`): a push to `main` that touches `site/**` deploys once the `Site` workflow passes ("Wait for CI"). The service uses root directory `site`, start `node server.js`, health check `/healthz`, and watch path `/site/**`. Node's version is in `site/.node-version`, which CI reads too.
+- Installation controls require `VISHOT_INSTALL_READY=true` and verified complete public release/tap metadata. For metadata contracts and storage archival/hosting cleanup, read `docs/site-operations.md`. Archived subscriber files remain untouched; the runtime needs no volume or export credentials.
 - The `App` workflow runs `swift test` on macOS for changes under `Sources/`, `Tests/` or `Package.swift`.
 
 ## Architecture
