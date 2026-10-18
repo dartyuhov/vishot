@@ -9,17 +9,26 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    uses: ./.github/workflows/changes.yml
   installers:
+    needs: changes
+    if: needs.changes.outputs.package == 'true'
     uses: ./.github/workflows/package.yml
     with:
       source_sha: ${{ github.sha }}
   required:
     name: Package checks
     if: ${{ always() }}
-    needs: installers
+    needs: [changes, installers]
     runs-on: ubuntu-latest
     steps:
-      - name: Require both native installers to pass
+      - name: Require applicable native installers
         env:
+          DETECTION: ${{ needs.changes.result }}
+          NEEDED: ${{ needs.changes.outputs.package }}
           RESULT: ${{ needs.installers.result }}
-        run: test "$RESULT" = success
+        run: |
+          test "$DETECTION" = success || exit 1
+          if [ "$NEEDED" = true ]; then test "$RESULT" = success;
+          else test "$NEEDED" = false && test "$RESULT" = skipped; fi

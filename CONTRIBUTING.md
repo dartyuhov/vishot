@@ -86,8 +86,15 @@ Identify unavailable hardware coverage explicitly.
 
 ## Land a validated PR
 
-All PRs, including docs-only, site-only, forks, and bot release PRs, run the same
-five required check names:
+All PRs, including docs-only, site-only, forks, and bot release PRs, report the
+same five required check names. Read-only change detection selects applicable
+work; lightweight gates pass when work is not applicable and fail if detection
+fails. Documentation-only PRs skip the expensive jobs; site-only PRs run site
+tests without Swift tests or DMG builds. App inputs, packaging scripts, bundled
+fonts, and workflow changes trigger the relevant native checks. Release tooling
+and shared release metadata changes trigger contract tests. Workflow changes
+exercise all checks. Approved release publication always builds both native
+installers independently of these PR filters.
 
 - `App tests`: locked Swift tests.
 - `Site tests`: the site suite, in the `Site` workflow.
@@ -95,7 +102,8 @@ five required check names:
 - `Release tooling`: title, version, workflow, and settings contracts, plus
   Homebrew package and real cask DSL validation on macOS.
 - `Package checks`: an always-running gate that requires both native DMG jobs
-  to succeed; failure, cancellation, or skipping cannot pass the gate.
+  when packaging is applicable; unexpected skipping, failure, or cancellation
+  cannot pass the gate.
 
 These workflows use read-only repository permissions and no release secrets.
 GitHub can require approval before running fork workflows. Don't add skip-CI

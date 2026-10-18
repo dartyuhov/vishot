@@ -4,15 +4,17 @@ name: App
 on:
   push:
     branches: [main]
-    paths: ['Sources/**', 'Tests/**', 'Package.swift', '.github/workflows/app.yml']
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  test:
-    name: App tests
+  changes:
+    uses: ./.github/workflows/changes.yml
+  swift:
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
     runs-on: macos-15
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
@@ -22,3 +24,18 @@ jobs:
           persist-credentials: false
       - run: swift --version
       - run: swift test --force-resolved-versions
+  test:
+    name: App tests
+    needs: [changes, swift]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require applicable app tests
+        env:
+          DETECTION: ${{ needs.changes.result }}
+          NEEDED: ${{ needs.changes.outputs.app }}
+          RESULT: ${{ needs.swift.result }}
+        run: |
+          test "$DETECTION" = success || exit 1
+          if [ "$NEEDED" = true ]; then test "$RESULT" = success;
+          else test "$NEEDED" = false && test "$RESULT" = skipped; fi

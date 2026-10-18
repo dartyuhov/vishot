@@ -1,0 +1,37 @@
+name: Detect affected checks
+
+on:
+  workflow_call:
+    outputs:
+      app:
+        value: ${{ jobs.detect.outputs.app }}
+      package:
+        value: ${{ jobs.detect.outputs.package }}
+      release:
+        value: ${{ jobs.detect.outputs.release }}
+      site:
+        value: ${{ jobs.detect.outputs.site }}
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.paths.outputs.app }}
+      package: ${{ steps.paths.outputs.package }}
+      release: ${{ steps.paths.outputs.release }}
+      site: ${{ steps.paths.outputs.site }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Classify changed paths
+        id: paths
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/ci/changes.mjs

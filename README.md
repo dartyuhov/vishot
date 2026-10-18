@@ -69,7 +69,7 @@ When you have the matching DMG, install the app in Applications:
 5. If macOS blocks launch, after trying to open the installed app, open
    **System Settings → Privacy & Security**, find the message about Vishot,
    and choose **Open Anyway**. Confirm **Open** and authenticate if asked.
-    The packages are ad-hoc signed, not Developer ID signed or
+   The packages are ad-hoc signed, not Developer ID signed or
    notarized by Apple. This approval applies to Vishot individually; it
    doesn't require changing global security settings or running Terminal
    commands.
