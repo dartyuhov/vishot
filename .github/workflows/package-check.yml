@@ -1,0 +1,15 @@
+name: Package
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  installers:
+    uses: ./.github/workflows/package.yml
+    with:
+      source_sha: ${{ github.sha }}

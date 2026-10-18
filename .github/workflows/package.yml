@@ -1,0 +1,83 @@
+name: Package native installers
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact full commit SHA shared by both architectures
+        required: true
+        type: string
+      version:
+        description: Expected release version; empty reads the checked-out Info.plist
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      VISHOT_SIGN_IDENTITY: '-'
+      VISHOT_ARCH: ${{ matrix.arch }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      EXPECTED_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Check native host, exact source, and toolchain
+        shell: bash
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(uname -m)" = "$VISHOT_ARCH"
+          xcodebuild -version
+          swift --version
+          xcodebuild -version | /usr/bin/grep -Fx 'Xcode 16.4'
+          swift --version | /usr/bin/grep -F 'Apple Swift version 6.1.2'
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          test -z "$EXPECTED_VERSION" || test "$version" = "$EXPECTED_VERSION"
+          echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.10'
+      - name: Install locked packaging tools
+        run: |
+          python3 -m pip install --require-hashes --only-binary=:all: -r scripts/packaging-requirements.txt
+      - name: Run existing tests natively with locked dependencies
+        run: swift test --force-resolved-versions --triple "$VISHOT_ARCH-apple-macosx14.0"
+      - name: Build and sign native app
+        run: bash scripts/build.sh
+      - name: Exercise actual app and mounted-DMG rejection gates
+        run: python3 scripts/test-package.py
+      - name: Package and revalidate distributable bytes
+        run: |
+          git diff --exit-code
+          python3 scripts/package.py package build/packages \
+            --arch "$VISHOT_ARCH" --version "$PACKAGE_VERSION" --build "$PACKAGE_VERSION" \
+            --commit "$SOURCE_SHA" --adhoc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vishot-package-${{ matrix.arch }}
+          path: |
+            build/packages/*.dmg
+            build/packages/*.dmg.sha256
+            build/packages/*.dmg.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
