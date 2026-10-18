@@ -52,6 +52,18 @@ test('package required check fails closed when either native build fails, skips,
   assert.doesNotMatch(JSON.stringify(packaging), /secrets\.|write/);
 });
 
+test('required release tooling includes real Homebrew validation on every PR', async () => {
+  const flow = await workflow('release-tooling');
+  assert.equal(flow.jobs.contracts['runs-on'], 'macos-15');
+  const step = flow.jobs.contracts.steps.find(step => step.env?.VISHOT_TEST_HOMEBREW);
+  assert.equal(step.env.VISHOT_TEST_HOMEBREW, '1');
+  assert.equal(step['working-directory'], '${{ github.workspace }}');
+  assert.equal(step['continue-on-error'], undefined);
+  assert.equal(step.if, undefined);
+  const standalone = await workflow('homebrew');
+  assert.equal(step.run, standalone.jobs.cask.steps.find(step => step.run?.includes('unittest')).run);
+});
+
 test('fork PR checks need no credentials, always run, and revalidate edited titles', async () => {
   const title = await workflow('pr-title');
   assert.ok(title.on.pull_request.types.includes('edited'));

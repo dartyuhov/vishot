@@ -91,7 +91,8 @@ five required check names:
 - `App tests`: locked Swift tests.
 - `Site tests`: the site suite, in the `Site` workflow.
 - `PR title`: Conventional Commit title validation, including title edits.
-- `Release tooling`: title, version, workflow, and settings contracts.
+- `Release tooling`: title, version, workflow, and settings contracts, plus
+  Homebrew package and real cask DSL validation on macOS.
 - `Package checks`: an always-running gate that requires both native DMG jobs
   to succeed; failure, cancellation, or skipping cannot pass the gate.
 

@@ -11,7 +11,7 @@ permissions:
 jobs:
   contracts:
     name: Release tooling
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     defaults:
       run:
         working-directory: scripts/release
@@ -26,3 +26,10 @@ jobs:
           cache-dependency-path: scripts/release/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm test
+      - name: Validate Homebrew release tooling
+        working-directory: ${{ github.workspace }}
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_ANALYTICS: "1"
+          VISHOT_TEST_HOMEBREW: "1"
+        run: python3 -B -m unittest discover -s scripts/homebrew -p 'test_*.py' -v
