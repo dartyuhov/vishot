@@ -44,6 +44,20 @@ When you have the matching DMG, install the app in Applications:
    doesn't require changing global security settings or running Terminal
    commands.
 
+### Homebrew (pending public availability)
+
+Once the owned public tap and complete release are verified, the prepared
+installation command is:
+
+```sh
+brew install --cask dartyuhov/tap/vishot
+```
+
+Homebrew selects Apple Silicon or Intel automatically and verifies the matching
+DMG checksum. Open the installed app from Applications and use the same per-app
+**Open Anyway** and permission steps. The tap isn't publicly verified yet;
+see [Homebrew setup and verification](docs/homebrew.md) for the launch gates.
+
 ### Permissions and your first screenshot
 
 Vishot requests Screen Recording at launch if access isn't already granted.
@@ -82,9 +96,21 @@ available; bring the desired window forward yourself before capturing it.
 
 ### Update
 
-Updates use manual replacement; there is no automatic in-app updater. When a
-new complete regular release is available, use the same processor choice as
-above:
+There is no automatic in-app updater. For a Homebrew installation, once the
+public tap is available, quit Vishot and run:
+
+```sh
+brew update
+brew upgrade --cask dartyuhov/tap/vishot
+```
+
+Reopen Vishot and check the permissions and capture behavior described below.
+The tap advances automatically only after a complete public regular release
+passes validation; a tap-update failure can temporarily leave the prior cask
+available while direct downloads remain independent.
+
+For a direct DMG installation, use manual replacement with the same processor
+choice as above:
 
 1. Download the new DMG, then choose **Quit Vishot** from the menu-bar menu.
 2. Open the new DMG and drag **Vishot.app** to **Applications**. Choose

@@ -1,0 +1,73 @@
+name: Update Homebrew tap
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Exact completed public regular release tag
+        required: true
+        type: string
+    secrets:
+      TAP_APP_PRIVATE_KEY:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Completed public regular release tag to retry (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homebrew-tap-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: github.ref == 'refs/heads/main' && github.repository == 'dartyuhov/vishot'
+    runs-on: macos-15
+    steps:
+      # Always use trusted main tooling, never the release tag or an input ref.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/create-github-app-token@v3
+        id: tap-token
+        with:
+          client-id: ${{ vars.TAP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.TAP_APP_PRIVATE_KEY }}
+          owner: dartyuhov
+          repositories: homebrew-tap
+          permission-contents: write
+      - name: Verify public release and advance tap
+        env:
+          TAG: ${{ inputs.tag }}
+          TAP_TOKEN: ${{ steps.tap-token.outputs.token }}
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_ANALYTICS: '1'
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          # Ephemeral Git config: no token in URLs, files, or global config.
+          # Match only the owned tap; public release requests are unauthenticated.
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0=credential.helper
+          export GIT_CONFIG_VALUE_0=''
+          export GIT_CONFIG_KEY_1=http.https://github.com/dartyuhov/homebrew-tap.git.extraheader
+          export GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $(python3 -c 'import base64, os; print(base64.b64encode(("x-access-token:" + os.environ["TAP_TOKEN"]).encode()).decode())')"
+          python3 -B scripts/homebrew/update.py "$TAG"
+      - name: Report recovery path
+        if: failure()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          ## Homebrew tap update failed
+          The app release is independent and was not modified by this workflow.
+          Inspect the failed step and tap main. After fixing access or validation,
+          dispatch **Update Homebrew tap** on **main** with the same release tag.
+          A retry validates public assets and never rebuilds or republishes the app.
+          SUMMARY

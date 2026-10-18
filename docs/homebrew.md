@@ -1,4 +1,4 @@
-# Homebrew cask generation
+# Homebrew distribution
 
 Use `scripts/homebrew/cask.py` to generate the owned-tap cask from the same
 complete release package used for direct downloads. It emits real Homebrew
@@ -96,13 +96,106 @@ Homebrew metadata as JSON keyed by `arm` and `intel`. It never downloads or
 installs the generated cask. The helper evaluates Ruby: don't use it to
 inspect arbitrary untrusted casks.
 
-For the later automatic tap updater, import `generate_cask` and
-`validate_cask`, or invoke the same CLI. Stage output outside the tap's
-working `Casks/vishot.rb`; shell redirection truncates its target before the
-generator runs. Replace the working cask only after successful generation
-and validation. The updater must separately enforce trusted publication,
-tap-only credentials, serialization, monotonic versions, and recoverable
-retries. This generator performs no network calls or tap mutations.
+The automatic updater uses these same `generate_cask` and `validate_cask`
+interfaces. It stages the candidate outside the tap and validates it before
+cloning or changing the tap. The generator itself performs no network calls
+or tap mutations.
+
+## Configure automatic updates
+
+The local machinery is ready for setup; these prerequisites have not been
+configured or verified against a public remote:
+
+1. Separately authorize and establish public `dartyuhov/homebrew-tap`, confirm
+   ownership, and initialize its default branch as `main` with a README.
+   `Casks/vishot.rb` can be absent for the first update. Don't seed it with
+   invented checksums or a bootstrap version.
+2. Create a **separate tap GitHub App** with only **Contents: read and write**
+   and implicit metadata access. Install it only on `homebrew-tap`, using
+   selected repositories. It needs no app-repository installation, Actions,
+   Issues, Pull requests, organization, or administration permissions.
+3. In the app repository's Actions configuration, set variable
+   `TAP_APP_CLIENT_ID` and secret `TAP_APP_PRIVATE_KEY`. Keep these separate
+   from the release App credentials. The workflow mints a short-lived token
+   scoped explicitly to owner `dartyuhov`, repository `homebrew-tap`, and
+   Contents write; the token action revokes it after the job.
+4. Permit this App to push normal fast-forward commits to tap `main` without
+   recurring PR approval. Keep other writers controlled, prohibit force
+   pushes, and don't delete or manually downgrade the cask. If tap rules
+   prohibit direct bot commits, configure a narrowly scoped rule for this
+   App under separate settings authorization. No settings change is automated.
+5. Make the app repository public under separate authorization, configure
+   the [publication prerequisites](release-operations.md#configure-publication),
+   and publish a complete regular release through that gate. Land both
+   workflows on app `main` before testing hosted delivery.
+
+`Publish release` calls `Update Homebrew tap` directly after its publication
+job succeeds, passing the approved exact `vVERSION`. It doesn't depend on
+`release.published` delivery, so `GITHUB_TOKEN` event suppression cannot skip
+this handoff. An app publication failure prevents the tap job from running.
+A tap failure marks the workflow failed but leaves the completed app release
+available. Ordinary PR checks receive neither App secret.
+
+The updater runs only in `dartyuhov/vishot` on `main`, checks out trusted
+`main` tooling, and accepts only a regular version tag as data. Public release
+API and download requests are unauthenticated; a private release cannot pass
+using a privileged token. The tap token is supplied only through ephemeral,
+tap-URL-scoped Git configuration, not persisted checkout credentials or URLs.
+
+## Automatic validation and atomic advancement
+
+The updater re-fetches repository metadata, the exact release, all paginated
+assets, the tag's resolved commit, and `Package.resolved` at that commit.
+It downloads both DMGs and four sidecars from their exact versioned public
+URLs, then uses the generator's complete checksum/provenance contract and
+Homebrew's real ARM/Intel DSL validation. It rechecks release identity, source,
+and asset metadata after validation. It never trusts workflow artifacts or
+`target_commitish` as the public download evidence.
+
+All automatic and dispatched updates share `homebrew-tap-update` concurrency
+with active-run cancellation disabled. GitHub doesn't guarantee queue order
+and can replace a pending run; explicit dispatch recovers such a run. Each
+attempt fetches tap `main` again and compares numeric major/minor/patch
+versions. Older candidates fail as stale. Equal versions succeed without a
+commit only if the whole cask matches; conflicting equal-version metadata
+fails for investigation. Unparseable versions and symlink paths fail closed.
+
+Only `Casks/vishot.rb` is committed. One normal, non-force Git push advances
+the branch atomically. A concurrent branch update rejects that push; the
+updater retries from fresh remote state and repeats version checks, preserving
+unrelated changes. There are at most three pushes and a final readback to
+reconcile a lost successful response. No error path rolls the tap back or
+modifies an app release, tag, asset, or latest pointer.
+
+## Recover a tap update
+
+Use the independent workflow after fixing access, service, or tooling errors:
+
+1. Inspect the failed step, its recovery summary, and tap `main`. If Git
+   disconnected after a push, the cask may already be current; don't revert it.
+2. Open **Actions → Update Homebrew tap → Run workflow**, select **main**,
+   and enter the exact completed release tag, for example, `v1.2.3`.
+3. Confirm the tap cask version and both checksums after the run. A repeated
+   successful update is a no-op. A newer installed cask causes an older retry
+   to fail as stale; don't force it backward.
+
+Dispatching this workflow doesn't build, package, or republish Vishot. Don't
+rerun app publication solely to repair the tap. Fix corrupt or incomplete
+public app assets by publishing a new approved app version, rather than
+replacing completed release assets. Resolve conflicting same-version tap
+metadata through an investigated correction; the updater refuses to overwrite
+it silently.
+
+After public availability is verified, users can run:
+
+```sh
+brew install --cask dartyuhov/tap/vishot
+brew update
+brew upgrade --cask dartyuhov/tap/vishot
+```
+
+These are prepared commands, not evidence that the tap exists today. Quit
+Vishot before upgrading and follow the README's permission checks afterward.
 
 ## Controlled verification
 
@@ -127,6 +220,16 @@ bytes, mismatched provenance, draft/private releases, duplicate assets, and
 wrong download URLs. Fixture source is never committed as a usable cask or
 represented as a published installer. Architecture simulation verifies
 metadata selection, not native execution.
+
+Updater tests additionally exercise the production public HTTP adapter with
+controlled responses and real local bare Git repositories. They cover missing
+assets, checksum mismatch, paginated assets, moving source identity, public
+visibility, download failure, rejected pushes, monotonic versions, conflicting
+same-version content, a paused old writer losing to a newer writer, lost push
+responses, and idempotent recovery. The end-to-end controlled path runs the
+real generator and Homebrew parser before pushing the cask. Its app HTTP
+boundary rejects every non-GET request. These fixtures don't establish hosted
+event delivery, real App access, or public tap installation.
 
 ## Launch gate
 

@@ -25,9 +25,11 @@ Configure these prerequisites before approving a release:
 
 The App token is repository-scoped, short-lived, and created only after both
 package jobs succeed. Read-only approval and packaging jobs receive no App
-secret. PR workflows never receive publishing credentials. App-authenticated
-publication emits GitHub release events for downstream distribution workflows;
-events created with `GITHUB_TOKEN` don't trigger ordinary workflows.
+secret. PR workflows never receive publishing credentials. After publication
+succeeds, a dependent job directly calls `Update Homebrew tap` with the approved
+version. This handoff doesn't rely on a release event, including when
+`GITHUB_TOKEN` suppresses downstream events. The tap has its own minimally scoped
+App and [setup prerequisites](homebrew.md#configure-automatic-updates).
 
 ## Approve and observe a release
 
@@ -45,6 +47,10 @@ Review the bot-managed PR before merging it:
    the same source commit. Publication consumes artifacts only from this run.
 5. Confirm the regular release contains the six assets listed below and the
    release PR has `autorelease: tagged` instead of `autorelease: pending`.
+6. Observe the dependent tap update and confirm `Casks/vishot.rb` advances to
+   that release with both checksums. It downloads and validates the public
+   assets independently. A tap failure leaves the app release available and
+   reports an independent recovery path.
 
 For each of `arm64` and `x86_64`, the release contains:
 
@@ -102,6 +108,13 @@ public regular release versions and source ancestry before staging and again
 before publication so an older queued run can't move latest backward. Keep
 manual/API publication outside this serialized workflow disabled operationally;
 GitHub's release API doesn't offer a compare-and-swap visibility update.
+
+If only the tap update failed, dispatch **Update Homebrew tap** on **main**
+with the completed `vVERSION` instead of rerunning publication. The updater
+never rebuilds or modifies app releases, and a retry already matching the tap
+is a no-op. Its separate concurrency group, fresh version checks, and normal
+Git pushes prevent stale or competing runs from downgrading the cask. See
+[tap recovery](homebrew.md#recover-a-tap-update) for access setup and failures.
 
 ## Verify the boundary locally
 

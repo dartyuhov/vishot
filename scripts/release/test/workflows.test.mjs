@@ -133,3 +133,35 @@ test('publication is trusted, serialized, gated by both native packages, and exp
   assert.equal(command.env.RELEASE_PR, '${{ needs.approval.outputs.release_pr }}');
   assert.equal(command.env.GH_TOKEN, '${{ steps.publisher.outputs.token }}');
 });
+
+test('tap update follows publication directly and recovers independently with tap-only credentials', async () => {
+  const publish = await workflow('publish-release');
+  const call = publish.jobs['update-tap'];
+  assert.deepEqual(call.needs, ['approval', 'publish']);
+  assert.equal(call.uses, './.github/workflows/update-tap.yml');
+  assert.equal(call.with.tag, 'v${{ needs.approval.outputs.version }}');
+  assert.deepEqual(call.secrets, { TAP_APP_PRIVATE_KEY: '${{ secrets.TAP_APP_PRIVATE_KEY }}' });
+  const flow = await workflow('update-tap');
+  assert.ok(flow.on.workflow_call);
+  assert.equal(flow.on.workflow_dispatch.inputs.tag.required, true);
+  assert.deepEqual(Object.keys(flow.on).sort(), ['workflow_call', 'workflow_dispatch']);
+  assert.deepEqual(flow.permissions, { contents: 'read' });
+  assert.equal(flow.concurrency.group, 'homebrew-tap-update');
+  assert.equal(flow.concurrency['cancel-in-progress'], false);
+  const job = flow.jobs.update;
+  assert.equal(job.if, "github.ref == 'refs/heads/main' && github.repository == 'dartyuhov/vishot'");
+  const checkout = job.steps.find(step => step.uses?.startsWith('actions/checkout@'));
+  assert.equal(checkout.with.ref, 'main');
+  assert.equal(checkout.with['persist-credentials'], false);
+  const token = job.steps.find(step => step.uses?.startsWith('actions/create-github-app-token@'));
+  assert.equal(token.with.owner, 'dartyuhov');
+  assert.equal(token.with.repositories, 'homebrew-tap');
+  assert.equal(token.with['permission-contents'], 'write');
+  assert.deepEqual(Object.keys(token.with).filter(key => key.startsWith('permission-')), ['permission-contents']);
+  assert.equal(token.with['private-key'], '${{ secrets.TAP_APP_PRIVATE_KEY }}');
+  const command = job.steps.find(step => step.env?.TAP_TOKEN);
+  assert.equal(command.env.TAG, '${{ inputs.tag }}');
+  assert.equal(command.env.TAP_TOKEN, '${{ steps.tap-token.outputs.token }}');
+  assert.match(command.run, /python3 -B scripts\/homebrew\/update.py "\$TAG"/);
+  assert.doesNotMatch(JSON.stringify(flow), /release\.published|RELEASE_APP_PRIVATE_KEY|publish\.mjs|package\.yml|secrets: inherit/);
+});
