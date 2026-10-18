@@ -1,11 +1,56 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
+import { spawnSync } from 'node:child_process';
 import { parse } from 'yaml';
 
 async function workflow(name) {
   return parse(await readFile(new URL(`../../../.github/workflows/${name}.yml`, import.meta.url), 'utf8'));
 }
+
+test('every required PR check is delivered for app, docs, site, and bot PRs without secrets', async () => {
+  for (const [file, job, name] of [
+    ['app', 'test', 'App tests'],
+    ['site', 'test', 'Site tests'],
+    ['pr-title', 'title', 'PR title'],
+    ['release-tooling', 'contracts', 'Release tooling'],
+    ['package-check', 'required', 'Package checks'],
+  ]) {
+    const value = await workflow(file);
+    assert.ok('pull_request' in value.on, file);
+    for (const filter of ['paths', 'paths-ignore', 'branches', 'branches-ignore']) {
+      assert.equal(value.on.pull_request?.[filter], undefined, `${file}: ${filter}`);
+    }
+    assert.equal(value.on.pull_request_target, undefined);
+    assert.equal(value.jobs[job]?.name, name);
+    assert.equal(value.jobs[job]?.if, file === 'package-check' ? '${{ always() }}' : undefined);
+    assert.deepEqual(value.permissions, { contents: 'read' });
+    assert.doesNotMatch(JSON.stringify(value), /secrets\.|write|github\.actor/);
+  }
+  const app = await workflow('app');
+  assert.ok(app.jobs.test.steps.some(step => step.run?.includes('swift test')));
+  const site = await workflow('site');
+  assert.equal(site.name, 'Site');
+  assert.deepEqual(site.on.push.branches, ['main']);
+  assert.deepEqual(site.on.push.paths, ['site/**', '.github/workflows/site.yml']);
+  assert.ok(site.jobs.test.steps.some(step => step.run === 'npm test'));
+});
+
+test('package required check fails closed when either native build fails, skips, or cancels', async () => {
+  const value = await workflow('package-check');
+  const gate = value.jobs.required;
+  assert.equal(gate.needs, 'installers');
+  const step = gate.steps.find(step => step.env?.RESULT);
+  assert.equal(step.env.RESULT, '${{ needs.installers.result }}');
+  for (const result of ['success', 'failure', 'cancelled', 'skipped', '']) {
+    const run = spawnSync('bash', ['-c', step.run], { env: { ...process.env, RESULT: result } });
+    assert.equal(run.status === 0, result === 'success', result);
+  }
+  const packaging = await workflow('package');
+  assert.deepEqual(packaging.jobs.package.strategy.matrix.include.map(item => item.arch), ['arm64', 'x86_64']);
+  assert.equal(packaging.jobs.package.strategy['fail-fast'], false);
+  assert.doesNotMatch(JSON.stringify(packaging), /secrets\.|write/);
+});
 
 test('fork PR checks need no credentials, always run, and revalidate edited titles', async () => {
   const title = await workflow('pr-title');

@@ -45,10 +45,20 @@ Install a GitHub App on this repository with **Contents**, **Pull requests**, an
 workflow requests only those permissions and scopes its short-lived installation
 token to this repository. The action revokes the token after the job.
 
-The App token is required: PRs created with `GITHUB_TOKEN` do not trigger ordinary
-PR workflows. App-authored release PRs trigger the title and tooling checks, plus
-the App/Site checks once their required-check workflow gates are integrated.
-Fork PR title/tooling validation uses read-only permissions and no App secret.
+The App token delivers automatic release-PR checks without the `GITHUB_TOKEN`
+approval restriction. Current GitHub behavior permits approval-required runs for
+`GITHUB_TOKEN`-authored PR `opened`, `synchronize`, and `reopened` events; a writer
+must approve those runs. Other PR events, including `edited`, don't trigger runs
+with that token. `workflow_dispatch` and `repository_dispatch` are exceptions to
+the general recursive-event restriction. See GitHub's
+[workflow triggering documentation](https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-when-your-workflow-runs/triggering-a-workflow).
+App-authored release PRs trigger all five required checks automatically.
+Fork PR validation uses read-only permissions and no App secret; GitHub can still
+require maintainer approval before running a fork contributor's workflows.
+
+The exact required names and the explicit repository-settings procedure are in
+[CONTRIBUTING.md](../../CONTRIBUTING.md). The settings CLI prints its plan without
+calling GitHub unless you pass `--apply OWNER/REPO PR_NUMBER`.
 
 ## Verification and publication integration
 
