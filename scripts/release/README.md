@@ -2,7 +2,7 @@
 
 Release Please owns app version selection, `version.txt`,
 `.release-please-manifest.json`, and the generated `CHANGELOG.md`. The workflow
-uses the same locked Release Please CLI package as the contract tests.
+uses the same locked Release Please package as the contract tests.
 
 ## Release intent
 
@@ -19,7 +19,8 @@ Accepted types are `feat`, `fix`, `docs`, `chore`, `refactor`, `perf`, `test`,
   also recognizes `perf` as a patch and breaking markers on maintenance commits.
 - `fix(deps): update an app dependency`, `fix(packaging): include missing fonts`,
   and `fix(release): repair publication` explicitly request app patches.
-- Changes confined to `site/` or `docs/` are excluded by Release Please, even
+- Changes confined to `site/`, `docs/`, or Markdown documentation anywhere in
+  the repository are excluded before version selection, even
   with `feat` or breaking titles. Use `feat(site): add a download chooser` for a
   site feature. Keep site and app changes in separate PRs when their release
   intent differs. A PR touching app files is evaluated as one squash commit.
@@ -33,9 +34,19 @@ release setup. After launch, `fix` advances `0.1.0` to `0.1.1`, `feat` advances
 
 Main-branch merges accumulate in one managed release PR. The highest-impact
 unreleased app change wins. Contributors don't edit versions or create tags.
-The `Release PR` workflow runs only `release-please release-pr`; it creates no
+The `Release PR` workflow runs `node release-pr.mjs`; it creates no
 tag or GitHub release. Merging the release PR supplies the version and changelog
 for the separate, validated publication workflow.
+
+Release Please 17.11.2's `exclude-paths` accepts directory prefixes, not exact
+files or glob patterns. The adapter removes Markdown paths (`.md`,
+`.markdown`, `.mdown`, `.mkd`, and `.mdx`, case-insensitively) from the SCM file
+lists before Release Please applies its all-files exclusion. It uses each
+historical commit's file list, so new and deleted documentation is covered
+without maintaining a filename list.
+It preserves commit identities and titles; Release Please still owns version
+selection, bootstrap boundaries, and PR updates. Mixed app changes remain
+eligible for release.
 
 ## GitHub App prerequisite
 
@@ -73,6 +84,18 @@ Tests invoke the actual Release Please manifest API with only the external SCM
 boundary substituted. They verify generated PR versions, changelog/version
 updates, path exclusion, aggregation, first-launch behavior, and updating one
 existing PR. Workflow contracts check title-edit events and credential scope.
+
+Publication and site readiness share `site/release-contract.js` for the six asset
+names and manifest identity checks. The site reads only small sidecars and the
+source lockfile, checks their contents against GitHub's asset digests, and
+requires cask checksums to match the DMG digests. Missing GitHub digest metadata
+fails closed. Public requests carry no credentials, and optional star requests
+use a separate cache. DMG bytes are hashed by publication and Homebrew tooling.
+
+Python packaging and Homebrew keep independent validation because they run
+without Node. The cross-boundary test sends one controlled package through the
+actual Python cask CLI, JavaScript publication validator, and site readiness
+boundary, then changes each provenance field to check that all reject it.
 
 The publication workflow must build the merged release PR's exact source commit,
 read `version.txt`, and validate both architecture assets before publication.

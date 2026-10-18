@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { PullRequestBody } from 'release-please/build/src/util/pull-request-body.js';
 import { PullRequestTitle } from 'release-please/build/src/util/pull-request-title.js';
+import contract from '../../site/release-contract.js';
+const { names, validateManifest } = contract;
 
 const check = (condition, message) => { if (!condition) throw new Error(message); };
 const regular = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -103,13 +105,6 @@ export async function approve(api, { sourceSha, prNumber, bot }) {
     lockHash: hash(await api.file('Package.resolved', sha)) };
 }
 
-function names(version) {
-  return ['arm64', 'x86_64'].flatMap(arch => {
-    const name = `Vishot-${version}-${arch}.dmg`;
-    return [name, `${name}.sha256`, `${name}.json`];
-  });
-}
-
 export function validatePackages(files, approval) {
   const expected = names(approval.version);
   check(files.size === expected.length && expected.every(name => files.has(name)), 'Incomplete or unexpected asset set');
@@ -120,11 +115,8 @@ export function validatePackages(files, approval) {
     const digest = hash(bytes);
     check(files.get(`${asset}.sha256`).toString() === `${digest}  ${asset}\n`, `Checksum mismatch: ${asset}`);
     const manifest = JSON.parse(files.get(`${asset}.json`));
-    for (const [key, value] of Object.entries({ asset, sha256: digest, architecture,
-      version: approval.version, build: approval.version, source_commit: approval.sha,
-      package_resolved_sha256: approval.lockHash })) {
-      check(manifest[key] === value, `Source manifest ${key} mismatch: ${asset}`);
-    }
+    validateManifest(manifest, { asset, digest, architecture, version: approval.version,
+      source: approval.sha, lockHash: approval.lockHash });
   }
 }
 

@@ -64,6 +64,16 @@ class CaskTests(unittest.TestCase):
         for bypass in ("quarantine", "xattr", "spctl", "installer", "preflight", "postflight", "auto_updates", ":latest", ":no_check"):
             self.assertNotIn(bypass, cask)
 
+    def test_matching_architecture_builds_must_still_match_release_version(self):
+        for arch in ("arm64", "x86_64"):
+            path = self.packages / f"Vishot-1.2.3-{arch}.dmg.json"
+            manifest = json.loads(path.read_text())
+            manifest["build"] = "2"
+            path.write_text(json.dumps(manifest))
+            next(a for a in self.release["assets"] if a["name"] == path.name)["size"] = path.stat().st_size
+        with self.assertRaises(ValueError):
+            self.generate()
+
     def test_only_complete_public_regular_releases_from_owned_repository(self):
         original_release = copy.deepcopy(self.release)
         original_repository = self.repository.copy()
