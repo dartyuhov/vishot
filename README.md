@@ -2,6 +2,104 @@
 
 Keyboard-first screenshots for macOS. Press a hotkey, pick a window or a whole display with `hjkl` (or a UI element by its label, or any region), and the image is on the clipboard. Or press `⇧Return` to add arrows, boxes and labels first.
 
+## Install
+
+Vishot requires **macOS 14 or later**. Distribution is being prepared: the
+repository is currently private, and no public release downloads or Homebrew
+tap are available. The instructions below describe the prepared DMG flow;
+first-install and update permission checks are still launch blockers. See the
+[installation verification record](docs/installation-verification.md) for the
+evidence and remaining checks.
+
+### Choose a download
+
+Once public downloads are available, use the newest complete, published regular
+release on the [Vishot releases page](https://github.com/dartyuhov/vishot/releases).
+Skip drafts, prereleases, and releases missing either processor's DMG. Both DMGs
+must have matching version numbers and their accompanying `.sha256` and `.json`
+files. Don't construct an asset URL or assume that a draft is installable.
+
+Open **Apple menu → About This Mac** to identify your processor:
+
+| Your Mac | Download asset (`<version>` is the release number) |
+|---|---|
+| **Chip** shows an Apple M-series name (Apple Silicon) | `Vishot-<version>-arm64.dmg` |
+| **Processor** shows an Intel name | `Vishot-<version>-x86_64.dmg` |
+
+### Install and open
+
+When you have the matching DMG, install the app in Applications:
+
+1. Open the downloaded `.dmg` in Finder.
+2. Drag **Vishot.app** onto the **Applications** shortcut in the disk image.
+3. Wait for copying to finish, then eject the **Vishot** disk image in Finder.
+4. Open **Vishot** from **Applications**, rather than from the disk image.
+   Vishot runs in the menu bar; it doesn't open a normal main window or appear
+   in the Dock.
+5. If macOS blocks launch, after trying to open the installed app, open
+   **System Settings → Privacy & Security**, find the message about Vishot,
+   and choose **Open Anyway**. Confirm **Open** and authenticate if asked.
+   The prepared packages are ad-hoc signed, not Developer ID signed or
+   notarized by Apple. This approval applies to Vishot individually; it
+   doesn't require changing global security settings or running Terminal
+   commands.
+
+### Permissions and your first screenshot
+
+Vishot requests Screen Recording at launch if access isn't already granted.
+Accessibility is optional and enables element hints and bringing selected
+windows forward. To take your first screenshot:
+
+1. Allow Vishot in **System Settings → Privacy & Security → Screen Recording**
+   (called **Screen & System Audio Recording** on newer macOS versions).
+   If macOS asks you to quit and reopen Vishot, follow that prompt and reopen
+   the installed app from **Applications**. Restart requirements for the
+   quarantined release package have not yet been observed; Vishot doesn't
+   restart itself after a permission change.
+2. Put a window you want to capture in view. Press `⇧⌘S` (Shift-Command-S),
+   the default capture shortcut, or choose **Capture Window** from Vishot's
+   menu-bar menu. If you've changed the shortcut, the menu shows your active
+   one, and **Settings…** lets you change it.
+3. Select a target with `h` `j` `k` `l`, the arrow keys, or `Tab`. Press `Return`
+   to copy it. You can also use `G` for a display or `v` for a region; see
+   [Usage](#usage) below.
+4. Switch to an app that accepts pasted images, such as a Notes note, and
+   press `⌘V`. Confirm the screenshot appears.
+5. To try annotations, capture again and press `⇧Return` or `e` instead of
+   `Return`. Press `a` for an arrow or `r` for a rectangle, move with the arrow
+   keys, and press `Return` to finish the shape. Press `y` to copy and close,
+   then paste again to check the annotation.
+6. To save a file, open the editor again and press `⌘S` to choose a location
+   in **Save As**. Open the saved PNG to check it. In the editor, `s` saves to
+   your screenshot folder and `S` saves and copies.
+
+For optional element hints, press `f` in the picker. Vishot requests
+Accessibility the first time you do this in a session. Enable Vishot in
+**System Settings → Privacy & Security → Accessibility**, then open the picker
+and try `f` again. Follow any macOS quit-and-reopen prompt. Without this access,
+you can still use basic capture, but hints and automatic window raising aren't
+available; bring the desired window forward yourself before capturing it.
+
+### Update
+
+Updates use manual replacement; there is no automatic in-app updater. When a
+new complete regular release is available, use the same processor choice as
+above:
+
+1. Download the new DMG, then choose **Quit Vishot** from the menu-bar menu.
+2. Open the new DMG and drag **Vishot.app** to **Applications**. Choose
+   **Replace** when Finder asks about the existing copy. If your older copy is
+   in a different folder, replace that copy rather than keeping two versions.
+3. Eject the disk image and open the installed **Vishot** again.
+4. If blocked, follow the per-app **Open Anyway** steps above. Check Screen
+   Recording and, if you use it, Accessibility. Follow any macOS prompt to
+   quit and reopen the app, then repeat capture, annotation, paste, and save.
+
+Permission retention and exact restart behavior across ad-hoc-signed updates
+are **not yet verified**. Don't assume an older approval carries over to a new
+build. The verification record must resolve these checks before the public
+installation flow is advertised.
+
 ## Usage
 
 `⇧⌘S` opens the picker in Window mode (press it again to cancel). A HUD at the bottom of the screen shows the current mode and its keys.
@@ -47,13 +145,19 @@ Labels need the Accessibility permission. Vishot asks for it the first time you 
 
 ## Build
 
+For local development, build with Xcode and Swift 6 or later:
+
 ```sh
 ./scripts/build.sh           # build/Vishot.app
 ./scripts/build.sh install   # copy to ~/Applications and relaunch
 swift test                   # unit tests for navigation, element filtering, crop math, region selection, and the editor model
 ```
 
-Builds are signed with your `Apple Development` certificate (override with `VISHOT_SIGN_IDENTITY`), so the Screen Recording and Accessibility permissions survive rebuilds.
+Local builds default to your `Apple Development` certificate; override it with
+`VISHOT_SIGN_IDENTITY`. A stable development identity is intended to retain
+permission identity across rebuilds, but it doesn't establish permission
+retention for the ad-hoc-signed distribution packages. See
+[native installer packaging](docs/packaging.md) for package validation commands.
 
 ## Settings
 
