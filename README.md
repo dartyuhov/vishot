@@ -1,20 +1,50 @@
+<p align="center">
+  <a href="https://vishot.dev/">
+    <img src="Resources/logo/vishot-mark.svg" alt="Vishot app logo" width="128">
+  </a>
+</p>
+
 # Vishot
+
+[![App tests](https://github.com/dartyuhov/vishot/actions/workflows/app.yml/badge.svg?branch=main)](https://github.com/dartyuhov/vishot/actions/workflows/app.yml)
+[![Site tests](https://github.com/dartyuhov/vishot/actions/workflows/site.yml/badge.svg?branch=main)](https://github.com/dartyuhov/vishot/actions/workflows/site.yml)
+[![DMG packaging](https://github.com/dartyuhov/vishot/actions/workflows/package-check.yml/badge.svg?branch=main)](https://github.com/dartyuhov/vishot/actions/workflows/package-check.yml)
+[![Release tooling](https://github.com/dartyuhov/vishot/actions/workflows/release-tooling.yml/badge.svg?branch=main)](https://github.com/dartyuhov/vishot/actions/workflows/release-tooling.yml)
+
+**[Website](https://vishot.dev/)** ·
+**[Downloads](https://github.com/dartyuhov/vishot/releases/latest)** ·
+**[Homebrew tap](https://github.com/dartyuhov/homebrew-tap)**
 
 Keyboard-first screenshots for macOS. Press a hotkey, pick a window or a whole display with `hjkl` (or a UI element by its label, or any region), and the image is on the clipboard. Or press `⇧Return` to add arrows, boxes and labels first.
 
 ## Install
 
-Vishot requires **macOS 14 or later**. Distribution is being prepared: the
-repository is currently private, and no public release downloads or Homebrew
-tap are available. The instructions below describe the prepared DMG flow;
-first-install and update permission checks are still launch blockers. See the
-[installation verification record](docs/installation-verification.md) for the
-evidence and remaining checks.
+Vishot requires **macOS 14 Sonoma or later**. Install with Homebrew:
+
+```sh
+brew install --cask dartyuhov/tap/vishot
+```
+
+Homebrew selects Apple Silicon or Intel automatically, verifies the DMG checksum,
+and installs Vishot into Applications. Open **Vishot** from **Applications**,
+then follow the launch approval and permission instructions below.
+
+To update an existing Homebrew installation, quit Vishot and run:
+
+```sh
+brew update
+brew upgrade --cask dartyuhov/tap/vishot
+```
+
+The [public cask](https://github.com/dartyuhov/homebrew-tap/blob/main/Casks/vishot.rb)
+is generated from the published release. Broader first-install and upgrade
+permission verification remains recorded in the
+[installation verification record](docs/installation-verification.md).
 
 ### Choose a download
 
-Once public downloads are available, use the newest complete, published regular
-release on the [Vishot releases page](https://github.com/dartyuhov/vishot/releases).
+For a manual installation, download the matching DMG from the
+[latest Vishot release](https://github.com/dartyuhov/vishot/releases/latest).
 Skip drafts, prereleases, and releases missing either processor's DMG. Both DMGs
 must have matching version numbers and their accompanying `.sha256` and `.json`
 files. Don't construct an asset URL or assume that a draft is installable.
@@ -39,24 +69,10 @@ When you have the matching DMG, install the app in Applications:
 5. If macOS blocks launch, after trying to open the installed app, open
    **System Settings → Privacy & Security**, find the message about Vishot,
    and choose **Open Anyway**. Confirm **Open** and authenticate if asked.
-   The prepared packages are ad-hoc signed, not Developer ID signed or
+   The packages are ad-hoc signed, not Developer ID signed or
    notarized by Apple. This approval applies to Vishot individually; it
    doesn't require changing global security settings or running Terminal
    commands.
-
-### Homebrew (pending public availability)
-
-Once the owned public tap and complete release are verified, the prepared
-installation command is:
-
-```sh
-brew install --cask dartyuhov/tap/vishot
-```
-
-Homebrew selects Apple Silicon or Intel automatically and verifies the matching
-DMG checksum. Open the installed app from Applications and use the same per-app
-**Open Anyway** and permission steps. The tap isn't publicly verified yet;
-see [Homebrew setup and verification](docs/homebrew.md) for the launch gates.
 
 ### Permissions and your first screenshot
 
