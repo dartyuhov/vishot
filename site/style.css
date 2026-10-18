@@ -102,14 +102,6 @@ a { color: var(--accent-text); }
   white-space: nowrap;
 }
 
-/* Honeypot: off-screen rather than display:none, which some bots skip. */
-.trap {
-  position: absolute;
-  left: -10000px;
-  width: 1px; height: 1px;
-  overflow: hidden;
-}
-
 .skip {
   position: absolute;
   left: 1rem; top: -3rem;
@@ -215,8 +207,7 @@ kbd {
 
 /* ---------- Demo video ---------- */
 
-/* Under the text on narrow screens, pulled up out of the grid's gap. Wide ones put it beside the
-   sign-up button; see the media query below. */
+/* Under the text on narrow screens, beside the hero link on wide screens. */
 .watch {
   display: inline-flex;
   align-items: center;
@@ -226,8 +217,7 @@ kbd {
   box-sizing: border-box;
   min-height: 48px;
   padding: 0 1.2rem;
-  /* Cut like the sign-up button (size, type, a hard shadow it presses into), but in the page's
-     neutrals, so it doesn't compete with it. */
+  /* Square edges, pixel type, and a hard shadow it presses into. */
   border: 2px solid var(--line);
   background: var(--surface);
   color: var(--text);
@@ -242,12 +232,10 @@ kbd {
 .watch:hover { background: var(--surface-2); border-color: #4a4a6a; }
 .watch:active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--line); }
 
-/* Beside the sign-up button: the second column starts where the form ends, and the margin skips
-   the form's label so the two buttons line up. */
 @media (min-width: 961px) {
   .hero-row { grid-template-columns: minmax(0, 36rem) auto; column-gap: .75rem; }
-  .hero-row .waitlist { grid-column: 1; grid-row: 2; }
-  .watch { grid-column: 2; grid-row: 2; align-self: start; margin-top: 1.45rem; }
+  .hero-row .install-placeholder { grid-column: 1; grid-row: 2; margin: 0; }
+  .watch { grid-column: 2; grid-row: 2; align-self: start; margin-top: 0; }
 }
 
 /* As wide as the window allows, but never taller than it: 16:9 frame plus the bar above it. */
@@ -282,190 +270,6 @@ kbd {
 .watch-close:hover { color: var(--text); }
 .watch-frame { aspect-ratio: 16 / 9; background: #000; }
 .watch-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
-
-/* ---------- Waitlist ---------- */
-
-.waitlist label {
-  display: block;
-  margin-bottom: .5rem;
-  font: 700 .95rem/1 var(--pixel);
-  text-transform: uppercase;
-  letter-spacing: .04em;
-}
-
-.field {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: .75rem;
-}
-/* The button sits beside the email, and the optional question under it, as wide as the email is. */
-.field > button { grid-column: 2; grid-row: 1; }
-/* Everything else stacks in the first column, in order: the email, its error when there is one,
-   then the question. */
-.field > input, .field > .error, .field > .use { grid-column: 1; }
-.field > .error { margin: 0; }
-
-.field input {
-  flex: 1;
-  min-width: 0;
-  min-height: 48px;
-  padding: 0 .9rem;
-  border: 2px solid var(--line);
-  border-radius: 0;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  caret-color: var(--hint);
-  transition: border-color .15s;
-}
-.field input::placeholder { color: #75758f; }
-.field input:hover { border-color: #4a4a6a; }
-.field input:focus-visible { outline: none; border-color: var(--accent); }
-.field input[aria-invalid="true"] { border-color: var(--danger); }
-
-/* The optional question under the sign-up row. */
-.use { display: grid; gap: .5rem; }
-.use input {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 48px;
-}
-.use input[hidden] { display: none; }
-/* Beside the dropdown where there's room, so choosing "Other" doesn't make the form taller. */
-@media (min-width: 521px) {
-  .use:has(input:not([hidden])) { grid-template-columns: 1fr 1fr; }
-}
-
-/* The dropdown the script draws in place of the <select>: the email field's look, and a list in
-   the page's own panel style. */
-.dd { position: relative; min-width: 0; }
-.dd-trigger {
-  box-sizing: border-box;
-  display: block;
-  width: 100%;
-  min-height: 48px;
-  padding: 0 2.5rem 0 .9rem;
-  border: 2px solid var(--line);
-  border-radius: 0;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  transition: border-color .15s;
-  /* A pixel chevron, in --muted. */
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23a3a3bd' d='M1 2h1v1H1zM6 2h1v1H6zM2 3h1v1H2zM5 3h1v1H5zM3 4h2v1H3z'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right .9rem center;
-  background-size: 16px 16px;
-}
-.dd-trigger.placeholder { color: #75758f; }
-.dd-trigger:hover { border-color: #4a4a6a; }
-.dd-trigger:focus-visible, .dd-trigger[aria-expanded="true"] { outline: none; border-color: var(--accent); }
-.dd-list {
-  position: absolute;
-  z-index: 5;
-  left: 0;
-  right: 0;
-  top: calc(100% + 6px);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  border: 2px solid var(--line);
-  background: var(--surface);
-  box-shadow: 4px 4px 0 var(--line);
-}
-.dd-list.up { top: auto; bottom: calc(100% + 6px); }
-.dd-list[hidden] { display: none; }
-.dd-list li {
-  padding: .55rem .9rem;
-  cursor: pointer;
-  /* The bar that marks the row you're on, drawn in the pixels of the border. */
-  box-shadow: inset 0 0 0 0 var(--accent);
-}
-.dd-list li.active { background: var(--surface-2); box-shadow: inset 4px 0 0 0 var(--accent); }
-.dd-list li[aria-selected="true"] { color: var(--accent-text); }
-.dd-list li:first-child { color: var(--muted); }
-
-.field > button {
-  position: relative;
-  min-height: 48px;
-  padding: 0 1.2rem;
-  border: 0;
-  border-radius: 0;
-  background: var(--accent);
-  color: #fff;
-  font: 700 .95rem/1 var(--pixel);
-  text-transform: uppercase;
-  cursor: pointer;
-  /* A hard pixel shadow that the button presses into. */
-  box-shadow: 4px 4px 0 var(--hint);
-  transition: transform .1s var(--step), box-shadow .1s var(--step), background-color .15s;
-}
-.field > button:hover { background: #7c6efb; }
-.field > button:active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--hint); }
-.field > button[disabled] { cursor: progress; background: #4f45b8; }
-
-.error, .status { margin: .5rem 0 0; font-size: .875rem; }
-.error { color: var(--danger); }
-.error:empty, .status:empty { display: none; }
-.status { color: var(--hint); }
-
-.privacy {
-  margin: .9rem 0 0;
-  color: var(--muted);
-  font-size: .75rem;
-  line-height: 1.5;
-}
-
-.waitlist.done .field, .waitlist.done .use { display: none; }
-.waitlist.done label { color: var(--hint); }
-
-/* Joining takes a screenshot of the form, the way Vishot does: the selection ring snaps onto it,
-   the shutter flashes, and the shot shrinks into the corner with its watermark. See shoot() in
-   main.js, which positions and animates these. */
-.shot-ring, .shot-flash, .shot {
-  position: fixed;
-  z-index: 20;
-  pointer-events: none;
-}
-.shot-flash { background: #fff; }
-.shot {
-  /* With the border, 1rem around the form. */
-  padding: calc(1rem - 2px);
-  border: 2px solid var(--line);
-  background: var(--bg);
-  box-shadow: 8px 8px 0 rgb(0 0 0 / 0.45);
-  transform-origin: 0 0;
-}
-.shot .waitlist { margin: 0; }
-/* Like Watermark.swift: the pixel font on a dark plate with a hard amber shadow. */
-.shot-mark {
-  position: absolute;
-  right: .5rem;
-  bottom: .5rem;
-  padding: .15rem .4rem;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  box-shadow: 2px 2px 0 var(--hint);
-  color: var(--text);
-  font: 700 .7rem/1 var(--pixel);
-  text-transform: uppercase;
-}
-.shot-tag {
-  position: fixed;
-  z-index: 21;
-  padding: .3rem .55rem;
-  background: var(--accent);
-  box-shadow: 3px 3px 0 var(--hint);
-  color: #fff;
-  font: 700 .85rem/1 var(--pixel);
-  text-transform: uppercase;
-  pointer-events: none;
-}
 
 /* ---------- Demo ---------- */
 
@@ -559,7 +363,7 @@ kbd {
 /* The active feature gets the demo's selection border: one of its pixels wide (--px, measured
    from the canvas in main.js), corner pixels left out, just outside the card. The card's own edge
    goes, so the ring is the edge, as when the demo selects a window. */
-.feature::after, .faq details::after, .shot-ring {
+.feature::after, .faq details::after {
   background:
     linear-gradient(var(--accent), var(--accent)) top / calc(100% - 2 * var(--px, 3px)) var(--px, 3px) no-repeat,
     linear-gradient(var(--accent), var(--accent)) bottom / calc(100% - 2 * var(--px, 3px)) var(--px, 3px) no-repeat,
@@ -725,7 +529,7 @@ kbd {
   to { opacity: 1; clip-path: inset(-2rem); }
 }
 
-/* ---------- Closing sign-up ---------- */
+/* ---------- Closing ---------- */
 
 .closing {
   display: grid;
@@ -763,9 +567,7 @@ kbd {
 }
 
 @media (max-width: 520px) {
-  .field { grid-template-columns: 1fr; }
-  .field > button, .field > .use { grid-column: 1; grid-row: auto; }
-  .field > button, .watch { min-height: 52px; }
+  .watch { min-height: 52px; }
   .top-note { display: none; }
   .headline .line { display: inline; }
   .feature p { margin-left: 0; }
@@ -800,7 +602,7 @@ kbd {
   .finale { display: flex; flex-direction: column; justify-content: center; width: 100%; }
   /* The last section has to fit in one window, or the snap lets you scroll inside it. */
   .finale { padding-top: 3.5rem; padding-bottom: 0; justify-content: flex-start; }
-  /* The FAQ sits near the top; auto margins centre the sign-up between it and the footer. */
+  /* The FAQ sits near the top; auto margins center the closing between it and the footer. */
   .finale .faq { gap: 1.25rem; padding-block: 0 .5rem; }
   .finale .faq-list { gap: .35rem; }
   /* Minus the 2px border, so the list is no taller than it was without one. */
@@ -833,11 +635,9 @@ kbd {
 }
 
 @media (min-width: 961px) and (min-height: 640px) and (max-height: 800px) {
-  /* The question under the sign-up row adds a line; take it back from the spacing so the hero
-     still fits at 640. */
+  /* Tighter hero spacing keeps the content within a short desktop window. */
   .hero { padding-top: 4.5rem; padding-bottom: 2rem; }
   .hero-row { gap: 1.5rem .75rem; }
-  .field { row-gap: .5rem; }
   .finale { padding-top: 3rem; }
   .finale .faq { gap: .75rem; }
   .finale .faq summary { padding-block: calc(.4rem - 2px); }

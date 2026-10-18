@@ -6,7 +6,7 @@
   <title>Vishot: keyboard-first screenshots for macOS</title>
   <meta name="description" content="A Vim-inspired screenshot tool for macOS. Pick a window or a single element with the keyboard, mark it up, and copy or save it without touching the mouse.">
   <meta property="og:title" content="Vishot: the keyboard-first screenshot tool">
-  <meta property="og:description" content="A keyboard-first, Vim-inspired screenshot tool for macOS. Join the waitlist.">
+  <meta property="og:description" content="A keyboard-first, Vim-inspired screenshot tool for macOS. Pick, annotate, and copy without leaving the keyboard.">
   <link rel="canonical" href="https://vishot.dev/">
   <meta property="og:url" content="https://vishot.dev">
   <meta property="og:image" content="https://vishot.dev/og.png">
@@ -19,17 +19,17 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <a class="skip" href="#waitlist">Skip to the waitlist</a>
+  <a class="skip" href="#content">Skip to content</a>
 
   <header class="top">
     <a class="brand" href="/" aria-label="Vishot home">
       <img src="favicon.svg" alt="" width="32" height="32">
       <span>vishot</span>
     </a>
-    <p class="top-note">macOS Sonoma or later · coming soon</p>
+    <p class="top-note">macOS Sonoma or later</p>
   </header>
 
-  <main>
+  <main id="content" tabindex="-1">
     <section id="intro" class="hero" aria-labelledby="headline">
       <h1 id="headline" class="headline">
         <span class="line">The <span class="accent">keyboard-first</span></span>
@@ -48,39 +48,7 @@
           Watch the demo <time datetime="PT1M4S">1:04</time>
         </a>
 
-        <form id="waitlist" class="waitlist" action="/api/subscribe" method="post" novalidate>
-          <label for="email">Get early access</label>
-          <div class="field">
-            <input id="email" name="email" type="email" inputmode="email" autocomplete="email"
-                   placeholder="you@example.com" required aria-describedby="email-error privacy">
-            <p id="email-error" class="error" role="alert"></p>
-            <div class="use">
-              <label class="visually-hidden" for="use">What do you screenshot most? (optional)</label>
-              <select id="use" name="use" aria-describedby="privacy">
-                <option value="">I mostly screenshot…</option>
-                <option>Whole screen</option>
-                <option>Bugs and errors</option>
-                <option>Parts of a window</option>
-                <option>Code and terminals</option>
-                <option>Web pages</option>
-                <option>Other</option>
-              </select>
-              <input id="use-other" name="use_other" type="text" maxlength="120"
-                     placeholder="Tell us what" aria-label="What else do you screenshot?" autocomplete="off" hidden>
-            </div>
-            <button type="submit">Join waitlist</button>
-          </div>
-          <div class="trap" aria-hidden="true">
-            <label for="website">Leave this empty</label>
-            <input id="website" name="website" type="text" tabindex="-1" autocomplete="off">
-          </div>
-          <p class="status" role="status" aria-live="polite"></p>
-          <p id="privacy" class="privacy">
-            We will notify you once the early build is available. Your email, the link that brought
-            you here, and your answer if you give one will be stored by Vishot, used only to send you
-            Vishot news and to decide what to build first, never shared, and deleted on request.
-          </p>
-        </form>
+        <p id="install" class="install-placeholder"><a href="#guide">Explore Vishot</a></p>
       </div>
     </section>
 
@@ -146,10 +114,6 @@
           <p>Yes. Every feature on this page is free: picking, labels, markup, copy and save. There may be optional paid extras later, but nothing here will move behind a paywall.</p>
         </details>
         <details>
-          <summary>When can I try it?</summary>
-          <p>No date yet. <a href="#waitlist">Join the waitlist</a> and you'll get one email when the beta opens.</p>
-        </details>
-        <details>
           <summary>How is it different from the built-in screenshots?</summary>
           <p>The built-in tool makes you click a window or drag a box around what you want. Vishot picks windows, single buttons and panes, or whole displays from the keyboard, and lets you mark the shot up before it's copied.</p>
         </details>
@@ -181,45 +145,13 @@
     </section>
 
     <section class="closing" aria-labelledby="closing-title">
-      <h2 id="closing-title" class="closing-title">Get Vishot when it's ready.</h2>
-      <form class="waitlist" action="/api/subscribe" method="post" novalidate>
-        <label for="email-2">Get early access</label>
-        <div class="field">
-          <input id="email-2" name="email" type="email" inputmode="email" autocomplete="email"
-                 placeholder="you@example.com" required aria-describedby="email-error-2 privacy-2">
-          <p id="email-error-2" class="error" role="alert"></p>
-          <div class="use">
-            <label class="visually-hidden" for="use-2">What do you screenshot most? (optional)</label>
-            <select id="use-2" name="use" aria-describedby="privacy-2">
-              <option value="">I mostly screenshot…</option>
-              <option>Whole screen</option>
-              <option>Bugs and errors</option>
-              <option>Parts of a window</option>
-              <option>Code and terminals</option>
-              <option>Web pages</option>
-              <option>Other</option>
-            </select>
-            <input id="use-other-2" name="use_other" type="text" maxlength="120"
-                   placeholder="Tell us what" aria-label="What else do you screenshot?" autocomplete="off" hidden>
-          </div>
-          <button type="submit">Join waitlist</button>
-        </div>
-        <div class="trap" aria-hidden="true">
-          <label for="website-2">Leave this empty</label>
-          <input id="website-2" name="website" type="text" tabindex="-1" autocomplete="off">
-        </div>
-        <p class="status" role="status" aria-live="polite"></p>
-        <p id="privacy-2" class="privacy">
-          We will notify you once the early build is available. Your email, the link that brought
-          you here, and your answer if you give one will be stored by Vishot, used only to send you
-          Vishot news and to decide what to build first, never shared, and deleted on request.
-        </p>
-      </form>
+      <h2 id="closing-title" class="closing-title">Keep your hands on the keys.</h2>
+      <a href="#intro">Back to Vishot ↑</a>
     </section>
 
     <footer class="bottom">
       <span>© 2026 Vishot</span>
-      <a href="#waitlist">Join the waitlist ↑</a>
+      <a href="#intro">Back to top ↑</a>
     </footer>
     </div>
   </main>
@@ -236,7 +168,7 @@
   <nav class="dots" aria-label="Sections">
     <a href="#intro" aria-label="Intro"></a>
     <a href="#guide" aria-label="How it works"></a>
-    <a href="#faq" aria-label="FAQ and sign-up"></a>
+    <a href="#faq" aria-label="FAQ"></a>
   </nav>
 
   <script src="main.js" defer></script>
