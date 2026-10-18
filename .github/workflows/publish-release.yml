@@ -1,0 +1,100 @@
+name: Publish release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_pr:
+        description: Merged Release Please PR number to resume or verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# One visibility transition at a time, including manual retries. Actions does
+# not promise FIFO ordering; the publisher also rejects stale versions/history.
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
+jobs:
+  approval:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      approved: ${{ steps.prepare.outputs.approved }}
+      source_sha: ${{ steps.prepare.outputs.source_sha }}
+      version: ${{ steps.prepare.outputs.version }}
+      release_pr: ${{ steps.prepare.outputs.release_pr }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix scripts/release --ignore-scripts
+      - name: Resolve exact release PR approval
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_APP_BOT_LOGIN: ${{ vars.RELEASE_APP_BOT_LOGIN }}
+          SOURCE_SHA: ${{ github.event_name == 'push' && github.sha || '' }}
+          RELEASE_PR: ${{ inputs.release_pr }}
+        run: node scripts/release/publish.mjs prepare
+
+  package:
+    needs: approval
+    if: needs.approval.outputs.approved == 'true'
+    uses: ./.github/workflows/package.yml
+    with:
+      source_sha: ${{ needs.approval.outputs.source_sha }}
+      version: ${{ needs.approval.outputs.version }}
+    permissions:
+      contents: read
+
+  publish:
+    needs: [approval, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Tooling is from this trusted main workflow, never a dispatch input ref.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix scripts/release --ignore-scripts
+      - run: npm test --prefix scripts/release
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: vishot-package-*
+          path: release-packages
+          merge-multiple: false
+      # App-authenticated publication emits release events for downstream
+      # distribution integrations; GITHUB_TOKEN-created events don't.
+      - uses: actions/create-github-app-token@v3
+        id: publisher
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: read
+      - name: Validate, stage, and atomically publish
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_APP_BOT_LOGIN: ${{ vars.RELEASE_APP_BOT_LOGIN }}
+          SOURCE_SHA: ${{ needs.approval.outputs.source_sha }}
+          RELEASE_PR: ${{ needs.approval.outputs.release_pr }}
+        run: node scripts/release/publish.mjs publish release-packages
