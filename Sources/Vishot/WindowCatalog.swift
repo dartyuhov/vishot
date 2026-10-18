@@ -22,6 +22,21 @@ enum WindowCatalog {
     private static let samplesPerSide = 12
     private static let minVisibleSamples = 4
 
+    /// Temporary browser windows can precede their parent in the CG list. Prefer the first
+    /// containing window from the same app when the initial target is at most a quarter its area.
+    /// Keep the catalog itself front to back so the smaller target stays selectable.
+    static func initialSelection(in windows: [WindowInfo], frontPID: pid_t?) -> Int? {
+        guard let initial = windows.firstIndex(where: { $0.pid == frontPID }) ?? windows.indices.first else { return nil }
+        let window = windows[initial]
+        let area = window.frame.width * window.frame.height
+        return windows.indices.dropFirst(initial + 1).first { index in
+            let candidate = windows[index]
+            return candidate.pid == window.pid
+                && candidate.frame.contains(window.frame)
+                && area <= candidate.frame.width * candidate.frame.height * 0.25
+        } ?? initial
+    }
+
     /// Visible windows across all screens, ordered front to back.
     /// Uses CGWindowList (a few ms) instead of Accessibility or ScreenCaptureKit, which are much slower.
     static func visibleWindows() -> [WindowInfo] {
