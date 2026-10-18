@@ -1,0 +1,11 @@
+Install Vishot
+
+Drag Vishot.app to Applications, then eject this disk image.
+Open Vishot from Applications. Vishot runs in the menu bar.
+
+This app is ad-hoc signed, not notarized by Apple. If macOS blocks it,
+open System Settings > Privacy & Security and use Open Anyway after
+trying to open the installed app.
+
+Allow Screen Recording when prompted. Accessibility is optional for
+element hints and bringing selected windows forward.
