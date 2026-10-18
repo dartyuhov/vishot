@@ -31,6 +31,10 @@ caller must require both artifacts, matching source/version/build/lockfile
 identity, and matching checksums before exposing a release. Manifests provide
 traceability; they aren't cryptographic source attestations.
 
+The [Homebrew generator](homebrew.md) consumes this complete two-architecture
+package contract, checks downloaded bytes and sidecars, and emits a versioned
+cask. It doesn't rebuild installers or establish public release availability.
+
 ## Reusable workflow
 
 Call the workflow with one full commit SHA and the expected release version:
