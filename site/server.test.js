@@ -77,6 +77,25 @@ test('loads nothing from YouTube until the demo video is asked for', async () =>
   assert.ok(!/<iframe|youtube-nocookie|<(script|img)[^>]+src="https?:|<link(?![^>]*rel="canonical")[^>]+href="https?:/i.test(html));
 });
 
+test('describes history as a release-gated preview and CLI as planned', async () => {
+  const html = await (await fetch(base + '/')).text();
+  assert.match(html, /Capture history/);
+  assert.match(html, /History preview: release availability is not yet verified/);
+  assert.match(html, /CLI[^<]*<span[^>]*>Coming soon/);
+  assert.doesNotMatch(html, /vishot capture --app|agent captures the chat|every key will be remappable/);
+  assert.match(html, /Capture History[^]*?<kbd>h<\/kbd><kbd>l<\/kbd>[^]*?<kbd>y<\/kbd>/);
+});
+
+test('FAQ explains chip-specific installation, per-app approval and real shortcut configuration', async () => {
+  const html = await (await fetch(base + '/')).text();
+  const faq = html.split('<div class="faq-list">')[1].split('</section>')[0];
+  for (const text of ['Apple Silicon', 'Intel', 'About This Mac', 'Applications', 'eject', 'Open Anyway',
+    'Privacy &amp; Security', 'Screen Recording', 'Accessibility', 'brew upgrade --cask', 'capture shortcut']) {
+    assert.ok(faq.includes(text), `FAQ missing ${text}`);
+  }
+  assert.doesNotMatch(faq, /every key will|xattr|spctl|--no-quarantine|disable Gatekeeper/);
+});
+
 test('keeps server files and the database private', async () => {
   for (const url of ['/server.js', '/server.test.js', '/package.json', '/waitlist.db', '/../server.js', '/node_modules/']) {
     assert.equal((await fetch(base + url)).status, 404, url);

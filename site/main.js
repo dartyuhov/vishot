@@ -39,6 +39,7 @@
     F: '111100110100100', I: '111010010010111', L: '100100100100111', M: '101111111101101',
     N: '110101101101101', O: '010101101101010', P: '110101110100100', S: '011100010001110',
     T: '111010010010010', W: '101101111111101', '!': '010010010000010',
+    H: '101101111101101', R: '110101110101101', Y: '101101010010010',
   };
 
   const W1 = { x: 6, y: 9, w: 100, h: 104 };    // chat
@@ -80,15 +81,26 @@
     { at: 9700, keys: ['a'], text: 'starts an arrow', seg: 3, run: (s, at) => { s.arrow = { start: cursorAt(s, at), end: null }; } },
     { at: 10300, keys: ['k', 'h'], text: 'held together, glides', seg: 3, run: (s, at) => glide(s, { x: 72, y: 51 }, at, 900) },
     { at: 11500, keys: ['a'], text: 'finishes it', seg: 3, run: (s, at) => { s.arrow.end = cursorAt(s, at); } },
-    { at: 12600, keys: [], text: 'Agents can take the shot too.', seg: 4,
-      run: (s, at) => { s.mode = 'cli'; s.cli = { at, ranAt: Infinity }; } },
-    { at: 13800, keys: [], text: 'vishot capture --app Chat', seg: 4, run: (s, at) => { s.cli.ranAt = at; } },
-    { at: 14800, keys: [], text: 'and read the PNG it prints', seg: 4, run: () => {} },
-    { at: 15600, keys: ['y'], text: 'copies it. s saves a PNG instead.', seg: 5, run: (s, at) => { s.mode = 'copied'; s.copiedAt = at; } },
+    { at: 12600, keys: ['y'], text: 'copies it. s saves a PNG instead.', seg: 5,
+      run: (s, at) => { s.mode = 'copied'; s.copiedAt = at; } },
+    { at: 15000, keys: [], text: 'Menu bar → Capture History (preview)', seg: 4,
+      run: s => { s.mode = 'history-menu'; } },
+    { at: 16200, keys: [], text: 'opens previous screenshots, newest first', seg: 4,
+      run: s => { s.mode = 'history'; s.historyIndex = 0; } },
+    { at: 17500, keys: ['l'], text: 'selects an earlier screenshot', seg: 4,
+      run: s => { s.historyIndex = 1; } },
+    { at: 18800, keys: ['l'], text: 'browses another saved capture', seg: 4,
+      run: s => { s.historyIndex = 2; } },
+    { at: 20100, keys: ['h'], text: 'returns to the screenshot to reuse', seg: 4,
+      run: s => { s.historyIndex = 1; } },
+    { at: 21400, keys: ['y'], text: 'copies the selected screenshot and closes history', seg: 4,
+      run: (s, at) => { s.mode = 'history-copied'; s.copiedAt = at; } },
   ];
-  const LOOP = 19000;
-  const SEG_START = Array.from({ length: EVENTS[EVENTS.length - 1].seg + 1 }, (_, i) => EVENTS.find(e => e.seg === i).at);
-  const segEnd = i => (i + 1 < SEG_START.length ? SEG_START[i + 1] : LOOP);
+  const LOOP = 24500;
+  // Playback order differs from card order: finish the new capture before opening history.
+  const SEG_ORDER = [...new Set(EVENTS.map(e => e.seg))];
+  const SEG_START = Array.from({ length: SEG_ORDER.length }, (_, i) => EVENTS.find(e => e.seg === i).at);
+  const segEnd = i => SEG_START[SEG_ORDER[SEG_ORDER.indexOf(i) + 1]] ?? LOOP;
 
   const clamp01 = v => Math.max(0, Math.min(1, v));
   const ease = p => 1 - Math.pow(1 - p, 3);
@@ -314,48 +326,55 @@
     p.outline({ x: tb.x + 30, y: tb.y + 3, w: 5, h: 5 }, '#fff');
   }
 
-  // The agent's terminal, over the code editor. No overlay: the shot just happens.
-  function drawTerminal(p, s, t) {
-    const x = W2.x, y = W2.y + 6;
-    p.rect(x, y, W2.w, W2.h - 7, C.chrome);
-
-    // The agent says what it'll check, then types the command.
-    const say = (sy, widths) => {
-      p.rect(x + 3, sy, 2, 2, C.pink);
-      widths.forEach((w, i) => p.rect(x + 8, sy + i * 3, w, 1, C.textLo));
-    };
-    say(y + 3, [44, 30]);
-    const py = y + 12;
-    p.px(x + 3, py - 1, C.accent); p.px(x + 4, py, C.accent); p.px(x + 3, py + 1, C.accent);
-    const typed = Math.floor(clamp01((t - s.cli.at - 300) / 800) * 22) * 2;
-    p.rect(x + 8, py, Math.min(typed, 12), 1, C.green);
-    if (typed > 14) p.rect(x + 22, py, typed - 14, 1, C.textHi);
-    if (t < s.cli.ranAt && Math.floor(t / 400) % 2 === 0) p.rect(x + 9 + typed, py - 1, 2, 3, C.textHi);
-
-    const dt = t - s.cli.ranAt;
-    if (dt < 0) return;
-    // The chat window flashes as it's captured.
-    if (dt < 200) {
-      p.ctx.fillStyle = `rgba(255, 255, 255, ${0.6 * (1 - dt / 200)})`;
-      p.ctx.fillRect(W1.x, W1.y, W1.w, W1.h);
+  // History mirrors the app: a large preview, a horizontal thumbnail strip and a HUD.
+  // These are flattened captures. No historical annotation is changed in this demo.
+  function historyImage(p, index, r) {
+    p.rect(r.x, r.y, r.w, r.h, C.window);
+    if (index === 0) {
+      p.rect(r.x + 3, r.y + 3, r.w - 6, r.h - 6, C.code);
+      [0.25, 0.4, 0.3, 0.75, 0.45, 0.35].forEach((h, i) => {
+        p.rect(r.x + 5 + i * Math.floor((r.w - 10) / 6), r.y + r.h - 4 - Math.floor(h * (r.h - 8)),
+          Math.max(1, Math.floor(r.w / 12)), Math.floor(h * (r.h - 8)), i === 3 ? C.red : C.cyan);
+      });
+    } else if (index === 1) {
+      p.rect(r.x + 2, r.y + 2, Math.floor(r.w / 4), r.h - 4, C.sidebar);
+      for (let i = 0; i < 4; i++) {
+        p.rect(r.x + Math.floor(r.w / 3), r.y + 3 + i * Math.floor((r.h - 6) / 4), Math.floor(r.w / 2), 1, i % 2 ? C.pink : C.cyan);
+      }
+    } else {
+      p.rect(r.x + 2, r.y + 2, r.w - 4, 2, C.titlebar);
+      p.rect(r.x + 3, r.y + 6, Math.floor(r.w / 3), r.h - 9, '#24305a');
+      p.rect(r.x + Math.floor(r.w / 2), r.y + 7, Math.floor(r.w / 3), 2, C.textHi);
     }
-    if (dt > 250) p.rect(x + 8, py + 4, 48, 1, C.textDim);
-    // A thumbnail of the PNG, which the agent reads back.
-    if (dt > 500) {
-      const th = { x: x + 8, y: py + 8, w: 26, h: 16 };
-      p.rect(th.x, th.y, th.w, th.h, C.window);
-      p.rect(th.x, th.y, th.w, 2, C.titlebar);
-      p.rect(th.x, th.y + 2, 6, th.h - 2, C.sidebar);
-      p.rect(th.x + 8, th.y + 4, 2, 2, C.cyan); p.rect(th.x + 11, th.y + 4, 10, 1, C.textLo);
-      p.rect(th.x + 8, th.y + 8, 2, 2, C.pink); p.rect(th.x + 11, th.y + 8, 12, 5, '#1a1a2a');
-      p.rect(th.x + 16, th.y + 9, 1, 4, C.red);
-      p.outline(grow(th), C.line);
+  }
+
+  function drawHistory(p, s) {
+    if (s.mode === 'history-menu') {
+      p.rect(114, 6, 70, 23, C.chrome);
+      p.outline({ x: 114, y: 6, w: 70, h: 23 }, C.line);
+      p.rect(116, 9, 66, 8, C.accent);
+      p.text('CAPTURE HISTORY', 118, 10, C.textHi);
+      p.rect(118, 22, 30, 1, C.textLo);
+      return;
     }
-    if (dt > 1000) say(py + 28, [38]);
+    p.ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
+    p.ctx.fillRect(0, 0, 192, 120);
+    historyImage(p, s.historyIndex, { x: 44, y: 8, w: 104, h: 48 });
+    for (let i = 0; i < 3; i++) {
+      const tile = { x: 37 + i * 41, y: 63, w: 36, h: 24 };
+      historyImage(p, i, tile);
+      p.outline(grow(tile), i === s.historyIndex ? C.accent : C.line);
+    }
+    p.rect(32, 94, 128, 23, C.chrome);
+    p.outline({ x: 32, y: 94, w: 128, h: 23 }, C.line);
+    p.text('HISTORY', 37, 98, C.textHi);
+    p.text('H L', 37, 108, C.hint);
+    p.text('Y', 85, 108, C.hint);
+    p.text('ESC', 133, 108, C.textLo);
   }
 
   function drawCopied(p, s, t) {
-    const dt = t - s.copiedAt;
+    const dt = reducedMotion ? 1000 : t - s.copiedAt;
     if (dt < 140) {
       p.ctx.fillStyle = `rgba(255, 255, 255, ${0.7 * (1 - dt / 140)})`;
       p.ctx.fillRect(0, 0, 192, 120);
@@ -366,6 +385,11 @@
     p.rect(x, y, 68, 12, C.chrome);
     p.outline({ x, y, w: 68, h: 12 }, C.accent);
     // A thumbnail of the capture: the chart with its red spike and the arrow.
+    if (s.mode === 'history-copied') {
+      historyImage(p, s.historyIndex, { x: x + 3, y: y + 3, w: 11, h: 6 });
+      p.text('COPIED!', x + 18, y + 4, C.textHi);
+      return;
+    }
     p.rect(x + 3, y + 3, 11, 6, '#1a1a2a');
     p.rect(x + 7, y + 4, 1, 4, C.red);
     p.rect(x + 5, y + 6, 1, 2, C.cyan); p.rect(x + 10, y + 5, 1, 3, C.cyan);
@@ -404,13 +428,15 @@
           drawHints(p, s.typed);
           drawHUD(p, 'ELEMENT');
           break;
-        case 'cli':
-          drawTerminal(p, s, t);
+        case 'history-menu':
+        case 'history':
+          drawHistory(p, s);
           break;
         case 'editor':
           drawEditor(p, s, t);
           break;
         case 'copied':
+        case 'history-copied':
           drawCopied(p, s, t);
           break;
       }
@@ -423,7 +449,7 @@
   // ---------- Playback, keycast and the feature list ----------
 
   const render = setupScene();
-  const features = [...document.querySelectorAll('.feature')];
+  const features = [...document.querySelectorAll('.feature[data-seg]')];
   const keycastKeys = document.querySelector('.keycast-keys');
   const keycastText = document.querySelector('.keycast-text');
   const playButton = document.querySelector('.playpause');
@@ -456,11 +482,14 @@
     }
     if (seg !== shownSeg) {
       shownSeg = seg;
-      features.forEach((f, i) => f.classList.toggle('active', i === seg));
+      features.forEach((f, i) => {
+        f.classList.toggle('active', i === seg);
+        f.querySelector('.feature-head').setAttribute('aria-pressed', String(i === seg));
+      });
     }
     const done = clamp01((t - SEG_START[seg]) / (segEnd(seg) - SEG_START[seg]));
     // Stepped, like everything else on the page.
-    features[seg].querySelector('.progress').style.transform = `scaleX(${Math.floor(done * 16) / 16})`;
+    features[seg].querySelector('.progress').style.transform = `scaleX(${t === segEnd(seg) - 1 ? 1 : Math.floor(done * 16) / 16})`;
     features.forEach((f, i) => { if (i !== seg) f.querySelector('.progress').style.transform = 'scaleX(0)'; });
   }
 
@@ -493,6 +522,8 @@
 
   function setPlaying(on) {
     if (on === playing) return;
+    // A still feature selection shows its final frame; Play replays that feature from its start.
+    if (on && pausedAt === segEnd(shownSeg) - 1) pausedAt = SEG_START[shownSeg];
     if (on) origin = performance.now() - pausedAt * SPEED;
     else pausedAt = now();
     playing = on;
