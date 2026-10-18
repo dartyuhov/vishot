@@ -108,6 +108,25 @@ test('serves a signup-free page and browser bundle with working local navigation
   }
 });
 
+test('describes history as a release-gated preview and CLI as planned', async () => {
+  const html = await (await fetch(base + '/')).text();
+  assert.match(html, /Capture history/);
+  assert.match(html, /History preview: release availability is not yet verified/);
+  assert.match(html, /CLI[^<]*<span[^>]*>Coming soon/);
+  assert.doesNotMatch(html, /vishot capture --app|agent captures the chat|every key will be remappable/);
+  assert.match(html, /Capture History[^]*?<kbd>h<\/kbd><kbd>l<\/kbd>[^]*?<kbd>y<\/kbd>/);
+});
+
+test('FAQ explains chip-specific installation, per-app approval and real shortcut configuration', async () => {
+  const html = await (await fetch(base + '/')).text();
+  const faq = html.split('<div class="faq-list">')[1].split('</section>')[0];
+  for (const text of ['Apple Silicon', 'Intel', 'About This Mac', 'Applications', 'eject', 'Open Anyway',
+    'Privacy &amp; Security', 'Screen Recording', 'Accessibility', 'brew upgrade --cask', 'capture shortcut']) {
+    assert.ok(faq.includes(text), `FAQ missing ${text}`);
+  }
+  assert.doesNotMatch(faq, /every key will|xattr|spctl|--no-quarantine|disable Gatekeeper/);
+});
+
 test('keeps server files and subscriber storage private, even with export credentials', async () => {
   for (const url of ['/server.js', '/server.test.js', '/package.json', '/package-lock.json',
     '/waitlist.db', '/waitlist.db-wal', '/waitlist.db-shm', '/../server.js', '/node_modules/',

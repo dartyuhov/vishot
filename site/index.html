@@ -58,7 +58,7 @@
       <figure class="screen">
         <div class="monitor">
           <canvas id="scene" width="192" height="120" role="img"
-                  aria-label="Animated pixel-art demo: the picker opens on a window, moves to another with j and h, labels the elements with f, selects a chart by typing its label, an agent captures the chat window from a terminal, the chart is frozen in the editor, draws an arrow on it, and copies it with y."></canvas>
+                  aria-label="Pixel-art demo: open the picker, move between windows with j and h, label elements with f, select a chart, draw an arrow in the editor, and copy with y. History preview, not yet verified in a public release: open Capture History from the menu bar, browse earlier screenshots with l and h, and copy the selected screenshot with y."></canvas>
         </div>
         <figcaption class="keycast">
           <span class="keycast-keys" aria-hidden="true"></span>
@@ -92,14 +92,18 @@
           <span class="progress" aria-hidden="true"></span>
         </li>
         <li class="feature" data-seg="4">
-          <button type="button" class="feature-head"><span class="hint">05</span>Let your agent take the shot</button>
-          <p><code>vishot capture --app Chat</code> saves a PNG and prints its path, so a coding agent can look at the app it's building. A bundled skill teaches the agent the commands.</p>
+          <button type="button" class="feature-head"><span class="hint">05</span>Capture history <span class="feature-note">Preview</span></button>
+          <p><span id="history-availability">History preview: release availability is not yet verified.</span> Open Capture History from Vishot’s menu bar. <kbd>h</kbd><kbd>l</kbd> or Left/Right selects an earlier screenshot; <kbd>y</kbd> copies it again and closes history.</p>
           <span class="progress" aria-hidden="true"></span>
         </li>
         <li class="feature" data-seg="5">
           <button type="button" class="feature-head"><span class="hint">06</span>Copy, save, or both</button>
           <p><kbd>y</kbd> copies it, <kbd>s</kbd> saves a PNG to your screenshot folder, <kbd>S</kbd> does both. Nothing is uploaded: Vishot makes no network requests.</p>
           <span class="progress" aria-hidden="true"></span>
+        </li>
+        <li class="feature planned">
+          <div class="feature-head"><span class="hint">—</span>CLI <span class="feature-note">Coming soon</span></div>
+          <p>Planned command-line capture for scripts and coding agents. Not available yet.</p>
         </li>
       </ol>
     </section>
@@ -113,6 +117,18 @@
           <summary>Is it free?</summary>
           <p>Yes. Every feature on this page is free: picking, labels, markup, copy and save. There may be optional paid extras later, but nothing here will move behind a paywall.</p>
         </details>
+        <details id="installation-help">
+          <summary>How do I install Vishot?</summary>
+          <p>Vishot requires macOS 14 or later. In Apple menu → About This Mac, “Chip” with an Apple M-series name means Apple Silicon; “Processor” with an Intel name means Intel. Choose the matching DMG, open it, drag Vishot into Applications, then eject the disk image and launch Vishot from Applications.</p>
+        </details>
+        <details>
+          <summary>macOS says it can’t verify the app. What now?</summary>
+          <p>After trying to open Vishot, open System Settings → Privacy &amp; Security, find the message about Vishot and choose Open Anyway. Confirm Open and authenticate if asked. This approves Vishot individually; normal macOS security checks still apply to both DMG and Homebrew installs.</p>
+        </details>
+        <details>
+          <summary>How do I update it?</summary>
+          <p>For a direct install, quit Vishot, download the newer DMG for your chip and replace Vishot in Applications, then eject the image and reopen the app. For a Homebrew install, run <code>brew update</code> then <code>brew upgrade --cask vishot</code>. There is no automatic in-app updater.</p>
+        </details>
         <details>
           <summary>How is it different from the built-in screenshots?</summary>
           <p>The built-in tool makes you click a window or drag a box around what you want. Vishot picks windows, single buttons and panes, or whole displays from the keyboard, and lets you mark the shot up before it's copied.</p>
@@ -123,11 +139,11 @@
         </details>
         <details>
           <summary>Can I change the keys?</summary>
-          <p>Yes. By release every key will be remappable in Settings, the <kbd>Shift</kbd><kbd>⌘</kbd><kbd>S</kbd> shortcut included, so you can make it feel like Vim, like Emacs, or like neither.</p>
+          <p>You can change the global capture shortcut in Vishot’s Settings; the default is <kbd>Shift</kbd><kbd>⌘</kbd><kbd>S</kbd>. The picker and editor’s internal keys are fixed, not individually remappable.</p>
         </details>
         <details>
           <summary>What permissions does it need?</summary>
-          <p>Screen Recording, to take the screenshot. Accessibility is optional: it powers the <kbd>f</kbd> labels, and Vishot asks for it the first time you press <kbd>f</kbd>, never at launch.</p>
+          <p>Allow Screen Recording in System Settings → Privacy &amp; Security so Vishot can capture your screen. Accessibility is optional: it powers the <kbd>f</kbd> labels and bringing selected windows forward. Enable it there when you want those features. If macOS asks you to quit and reopen Vishot after a permission change, do so.</p>
         </details>
         <details>
           <summary>Does it work in Chrome, Slack and Electron apps?</summary>
