@@ -221,7 +221,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         capturer.prefetch()
         raiser.begin(windows)
         let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        currentWindow = windows.firstIndex { $0.pid == frontPID } ?? 0
+        currentWindow = WindowCatalog.initialSelection(in: windows, frontPID: frontPID) ?? 0
         status = ""
         enterWindowMode()
         isShowing = true
