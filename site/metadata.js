@@ -1,9 +1,10 @@
 'use strict';
 
-const { architectures, regular, hash, check, names, validateManifest } = require('./release-contract');
+const { architectures, regular, hash, names, validateManifest } = require('./release-contract');
 
 const REPOSITORY = 'https://github.com/dartyuhov/vishot';
 const COMMAND = 'brew install --cask dartyuhov/tap/vishot';
+class InvalidRelease extends Error {}
 
 // VISHOT_INSTALL_READY=true is an operator attestation that the launch/hardware checks
 // passed. It is necessary but never sufficient: public release and tap checks still apply.
@@ -20,6 +21,16 @@ function createMetadata({ enabled = process.env.VISHOT_INSTALL_READY === 'true',
 
   const isPublic = repo => repo.private === false && repo.visibility === 'public';
   async function verifyRelease(release, version) {
+    const check = (condition, message) => { if (!condition) throw new InvalidRelease(message); };
+    // Wait for all checks so a concurrent content defect cannot hide a request
+    // failure. Only verified content defects permit scanning older candidates.
+    async function checkedAll(promises) {
+      const results = await Promise.allSettled(promises);
+      const failures = results.filter(result => result.status === 'rejected');
+      const failure = failures.find(result => !(result.reason instanceof InvalidRelease)) || failures[0];
+      if (failure) throw failure.reason;
+      return results.map(result => result.value);
+    }
     const expected = names(version);
     const assets = release.assets;
     if (!Array.isArray(assets) || assets.length !== expected.length || !expected.every(name =>
@@ -34,7 +45,7 @@ function createMetadata({ enabled = process.env.VISHOT_INSTALL_READY === 'true',
     async function sidecar(asset) {
       check(asset.size <= 16384, 'Oversized sidecar');
       const response = await request(asset.browser_download_url, { signal: AbortSignal.timeout(4000) });
-      check(response.ok, 'Sidecar unavailable');
+      if (!response.ok) throw new Error('Sidecar unavailable');
       // Bound reads as well as declared metadata; never buffer a DMG here.
       const chunks = [];
       let size = 0;
@@ -48,14 +59,18 @@ function createMetadata({ enabled = process.env.VISHOT_INSTALL_READY === 'true',
       return bytes.toString('utf8');
     }
     const links = {}, digests = {};
-    await Promise.all(architectures.map(async architecture => {
+    await checkedAll(architectures.map(async architecture => {
       const asset = `Vishot-${version}-${architecture}.dmg`;
       const dmg = assets.find(a => a.name === asset);
       const digest = dmg.digest.slice(7);
-      const [checksum, manifest] = await Promise.all(['.sha256', '.json'].map(suffix =>
+      const [checksum, manifest] = await checkedAll(['.sha256', '.json'].map(suffix =>
         sidecar(assets.find(a => a.name === asset + suffix))));
       check(checksum === `${digest}  ${asset}\n`, 'Checksum mismatch');
-      validateManifest(JSON.parse(manifest), { asset, architecture, version, digest, source: commit.sha, lockHash });
+      try {
+        validateManifest(JSON.parse(manifest), { asset, architecture, version, digest, source: commit.sha, lockHash });
+      } catch (error) {
+        throw new InvalidRelease(error.message);
+      }
       links[architecture] = dmg.browser_download_url;
       digests[architecture] = digest;
     }));
@@ -76,7 +91,12 @@ function createMetadata({ enabled = process.env.VISHOT_INSTALL_READY === 'true',
         const version = typeof release.tag_name === 'string' && release.tag_name.startsWith('v') ? release.tag_name.slice(1) : '';
         if (!regular.test(version) || release.draft !== false || release.prerelease !== false || !release.published_at ||
           release.html_url !== `${REPOSITORY}/releases/tag/${release.tag_name}`) continue;
-        const verified = await verifyRelease(release, version);
+        let verified;
+        try { verified = await verifyRelease(release, version); }
+        catch (error) {
+          if (error instanceof InvalidRelease) continue;
+          throw error; // Request failures invalidate readiness, including cached success.
+        }
         if (verified) {
           complete = { ready: true, version, command: COMMAND, release: release.html_url, ...verified.links };
           complete.digests = verified.digests;

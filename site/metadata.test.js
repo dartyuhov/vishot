@@ -105,6 +105,54 @@ test('serves the latest complete regular release and chip assets, skipping incom
   assert.ok(site.calls.every(call => !call.url.endsWith('.dmg')), 'never download installers for metadata');
 });
 
+test('skips a newer malformed release and selects the older complete release matching the cask', async t => {
+  for (const defect of ['provenance', 'checksum', 'json', 'digest']) {
+    const newer = release('0.3.0');
+    const responses = publicResponses([newer, release('0.2.0')]);
+    const suffix = defect === 'checksum' ? '.sha256' : '.json';
+    const name = `Vishot-0.3.0-arm64.dmg${suffix}`;
+    const route = `/dartyuhov/vishot/releases/download/v0.3.0/${name}`;
+    responses[route] = defect === 'provenance'
+      ? responses[route].replace(source, 'd'.repeat(40))
+      : defect === 'checksum' ? `${'f'.repeat(64)}  Vishot-0.3.0-arm64.dmg\n` : '{';
+    const metadata = newer.assets.find(a => a.name === name);
+    metadata.size = Buffer.byteLength(responses[route]);
+    if (defect !== 'digest') metadata.digest = `sha256:${hash(responses[route])}`;
+    const site = await served(t, { enabled: true, responses });
+    const value = await site.get('/api/install');
+    assert.equal(value.ready, true, defect);
+    assert.equal(value.version, '0.2.0', defect);
+    assert.equal(value.arm64, 'https://github.com/dartyuhov/vishot/releases/download/v0.2.0/Vishot-0.2.0-arm64.dmg');
+    assert.equal((await site.response('/download')).headers.get('location'), value.release);
+  }
+});
+
+test('candidate request failures fail closed and expire cached readiness even alongside malformed content', async t => {
+  for (const missing of ['commit', 'lockfile', 'sidecar']) {
+    const site = await served(t, { enabled: true, responses: publicResponses() });
+    assert.equal((await site.get('/api/install')).ready, true);
+    const newer = release('0.3.0');
+    const responses = publicResponses([newer, release('0.2.0')]);
+    // One concurrent branch has invalid bytes; the other request failure must
+    // still abort the scan rather than advertise the older cached release.
+    responses['/dartyuhov/vishot/releases/download/v0.3.0/Vishot-0.3.0-arm64.dmg.json'] = '{';
+    const route = missing === 'commit' ? '/repos/dartyuhov/vishot/commits/v0.3.0'
+      : missing === 'lockfile' ? `/repos/dartyuhov/vishot/contents/Package.resolved?ref=${source}`
+        : '/dartyuhov/vishot/releases/download/v0.3.0/Vishot-0.3.0-x86_64.dmg.json';
+    delete responses[route];
+    site.respond(responses);
+    site.advance(900001);
+    assert.deepEqual(await site.get('/api/install'), { ready: false }, missing);
+    assert.equal((await site.response('/download')).headers.get('location'), '/#install');
+    const count = site.calls.length;
+    site.respond(publicResponses());
+    assert.deepEqual(await site.get('/api/install'), { ready: false });
+    assert.equal(site.calls.length, count, 'request failures retain the retry backoff');
+    site.advance(60001);
+    assert.equal((await site.get('/api/install')).ready, true);
+  }
+});
+
 test('fails closed for missing public repositories, incomplete releases, or an absent/mismatched cask', async t => {
   for (const change of [
     { '/repos/dartyuhov/vishot': { private: true, visibility: 'private' } },
