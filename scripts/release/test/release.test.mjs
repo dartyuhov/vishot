@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { Manifest } from 'release-please';
+import { GitHub, approve } from '../publication.mjs';
 
 const root = new URL('../../../', import.meta.url);
 const quiet = { info() {}, warn() {}, error() {}, debug() {}, trace() {} };
@@ -201,4 +202,54 @@ test('a merged release PR blocks new release PRs until publication clears its pe
     },
   });
   assert.deepEqual(await manifest.createPullRequests(), []);
+});
+
+test('Release Please manages both bundle versions and delegates GitHub publication', async () => {
+  const config = JSON.parse(await readFile(new URL('release-please-config.json', root), 'utf8'));
+  assert.equal(config.packages['.']['skip-github-release'], true);
+  const [pr] = await candidate(['fix: repair copy'], { version: '0.1.2' });
+  const update = pr.updates.find(update => update.path === 'Resources/Info.plist');
+  assert.ok(update, 'release PR must update the packaged bundle');
+  const plist = update.updater.updateContent(await readFile(new URL('Resources/Info.plist', root), 'utf8'));
+  for (const key of ['CFBundleShortVersionString', 'CFBundleVersion']) {
+    assert.match(plist, new RegExp(`<key>${key}</key>\\s*<string>0\\.1\\.3</string>`));
+  }
+});
+
+test('publication consumes the real Release Please PR body and updated files at its exact merge', async () => {
+  const [candidatePR] = await candidate(['feat: add region capture']);
+  const sha = 'a'.repeat(40);
+  const repo = 'owner/vishot';
+  const bot = 'release-app[bot]';
+  const pr = { number: 42, merged: true, merged_at: '2026-10-18T10:00:00Z',
+    merge_commit_sha: sha, user: { login: bot }, title: candidatePR.title.toString(),
+    body: candidatePR.body.toString(), labels: [{ name: 'autorelease: pending' }],
+    head: { ref: candidatePR.headRefName, repo: { full_name: repo } },
+    base: { ref: 'main', repo: { full_name: repo } } };
+  const files = {};
+  for (const update of candidatePR.updates) {
+    let original = '';
+    try { original = await readFile(new URL(update.path, root), 'utf8'); } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    files[update.path] = update.updater.updateContent(original);
+  }
+  const api = new GitHub({ repo, token: 'test', fetch: async url => {
+    const { pathname, searchParams } = new URL(url);
+    let data;
+    if (pathname.endsWith('/pulls/42')) data = pr;
+    else if (pathname.includes('/compare/')) data = { status: 'ahead' };
+    else if (pathname.includes('/contents/')) {
+      assert.equal(searchParams.get('ref'), sha);
+      const path = pathname.split('/contents/')[1];
+      const content = files[path] ?? await readFile(new URL(path, root), 'utf8');
+      data = { encoding: 'base64', content: Buffer.from(content).toString('base64') };
+    } else assert.fail(`Unexpected URL: ${url}`);
+    return new Response(JSON.stringify(data));
+  } });
+  const approval = await approve(api, { prNumber: 42, bot });
+  assert.equal(approval.version, '0.1.0');
+  assert.equal(approval.tag, 'v0.1.0');
+  assert.equal(approval.sha, sha);
+  assert.match(approval.notes, /add region capture/);
 });

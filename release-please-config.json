@@ -4,6 +4,14 @@
   "packages": {
     ".": {
       "release-type": "simple",
+      "skip-github-release": true,
+      "extra-files": [
+        {
+          "type": "xml",
+          "path": "Resources/Info.plist",
+          "xpath": "/plist/dict/key[text()='CFBundleShortVersionString' or text()='CFBundleVersion']/following-sibling::string[1]"
+        }
+      ],
       "initial-version": "0.1.0",
       "version-file": "version.txt",
       "include-component-in-tag": false,

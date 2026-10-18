@@ -44,3 +44,35 @@ test('trusted main pushes generate PRs using a repository-scoped App token, neve
   assert.doesNotMatch(command.run, /github-release|gh release|git tag/);
   assert.ok(steps.some(step => step.run === 'npm ci --ignore-scripts'));
 });
+
+test('publication is trusted, serialized, gated by both native packages, and explicitly resumable', async () => {
+  const flow = await workflow('publish-release');
+  assert.deepEqual(flow.on.push.branches, ['main']);
+  assert.equal(flow.on.pull_request, undefined);
+  assert.equal(flow.on.pull_request_target, undefined);
+  assert.equal(flow.on.workflow_dispatch.inputs.release_pr.required, true);
+  assert.deepEqual(flow.permissions, { contents: 'read' });
+  assert.equal(flow.concurrency['cancel-in-progress'], false);
+  assert.equal(flow.concurrency.group, 'release-publication');
+  assert.equal(flow.jobs.approval.if, "github.ref == 'refs/heads/main'");
+  assert.equal(flow.jobs.package.uses, './.github/workflows/package.yml');
+  assert.equal(flow.jobs.package.with.source_sha, '${{ needs.approval.outputs.source_sha }}');
+  assert.equal(flow.jobs.package.with.version, '${{ needs.approval.outputs.version }}');
+  assert.equal(flow.jobs.package.secrets, undefined);
+  assert.deepEqual(flow.jobs.publish.needs, ['approval', 'package']);
+  assert.doesNotMatch(flow.jobs.publish.if ?? '', /always/);
+  assert.doesNotMatch(JSON.stringify(flow.jobs.approval), /secrets\./);
+  const steps = flow.jobs.publish.steps;
+  const token = steps.find(step => step.uses?.startsWith('actions/create-github-app-token@'));
+  assert.equal(token.with.repositories, '${{ github.event.repository.name }}');
+  assert.equal(token.with['permission-contents'], 'write');
+  assert.equal(token.with['permission-issues'], 'write');
+  assert.equal(token.with['permission-pull-requests'], 'read');
+  const download = steps.find(step => step.uses?.startsWith('actions/download-artifact@'));
+  assert.equal(download.with['merge-multiple'], false, 'duplicate files must not be overwritten');
+  assert.equal(download.with['run-id'], undefined, 'consume this successful package run only');
+  const command = steps.find(step => step.env?.GH_TOKEN);
+  assert.equal(command.env.SOURCE_SHA, '${{ needs.approval.outputs.source_sha }}');
+  assert.equal(command.env.RELEASE_PR, '${{ needs.approval.outputs.release_pr }}');
+  assert.equal(command.env.GH_TOKEN, '${{ steps.publisher.outputs.token }}');
+});
