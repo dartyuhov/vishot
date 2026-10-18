@@ -79,8 +79,7 @@ jobs:
           pattern: vishot-package-*
           path: release-packages
           merge-multiple: false
-      # App-authenticated publication emits release events for downstream
-      # distribution integrations; GITHUB_TOKEN-created events don't.
+      # Keep release App credentials separate from the tap-only updater App.
       - uses: actions/create-github-app-token@v3
         id: publisher
         with:
@@ -98,3 +97,15 @@ jobs:
           SOURCE_SHA: ${{ needs.approval.outputs.source_sha }}
           RELEASE_PR: ${{ needs.approval.outputs.release_pr }}
         run: node scripts/release/publish.mjs publish release-packages
+
+  # Direct dependency works even when publication events are suppressed by
+  # GITHUB_TOKEN. Tap recovery dispatch never enters the app/package flow.
+  update-tap:
+    needs: [approval, publish]
+    uses: ./.github/workflows/update-tap.yml
+    with:
+      tag: v${{ needs.approval.outputs.version }}
+    secrets:
+      TAP_APP_PRIVATE_KEY: ${{ secrets.TAP_APP_PRIVATE_KEY }}
+    permissions:
+      contents: read

@@ -55,6 +55,7 @@ npm ci --prefix site
 npm test --prefix site
 npm ci --prefix scripts/release --ignore-scripts
 npm test --prefix scripts/release
+VISHOT_TEST_HOMEBREW=1 python3 -B -m unittest discover -s scripts/homebrew -p 'test_*.py' -v
 ```
 
 For app changes, build and launch the installed bundle with
@@ -125,6 +126,21 @@ must build the exact merged source on both architectures, validate both DMGs and
 checksums, and only then publish one complete regular GitHub release. Packaging
 PR checks alone don't authorize publication. A failed publication must remain
 retryable without replacing an already completed release.
+
+Successful publication directly invokes the owned-tap updater for that exact
+release. It revalidates public DMGs, checksums, and source manifests, then pushes
+one cask-only commit with stale/concurrent-update protection. This does not rely
+on `release.published` events. Tap write access uses a separate App installed
+only on `dartyuhov/homebrew-tap` with Contents write, configured through
+`TAP_APP_CLIENT_ID` and `TAP_APP_PRIVATE_KEY`; PR jobs receive neither secret.
+The tap still needs separately authorized public setup and hosted verification.
+See [Homebrew operations](docs/homebrew.md) for the complete prerequisites.
+
+If publication completed but the tap failed, dispatch **Update Homebrew tap**
+on **main** with the completed `vVERSION`. That path only reads app releases and
+updates the tap; it never rebuilds or republishes the app. Don't create another
+release or replace public assets to retry Homebrew. A matching retry is a no-op,
+an older version fails as stale, and a rejected push preserves the remote cask.
 
 The `Release PR` workflow uses a repository-scoped GitHub App installation token.
 Install that App with **Contents**, **Pull requests**, and **Issues** read/write
