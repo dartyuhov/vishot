@@ -1,37 +1,15 @@
-// Serves the landing page and retains authenticated export of existing subscribers.
-// Railway runs this with `site/` as the service root and a volume attached; it sets
-// RAILWAY_VOLUME_MOUNT_PATH to where the volume is mounted. Locally the database sits next to this file.
+// Serves the landing page and cached public release metadata without persistent storage.
 
 'use strict';
 
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
-const { DatabaseSync } = require('node:sqlite');
 const { createMetadata } = require('./metadata');
 const metadata = createMetadata();
 
 // PORT=0 means "any free port", which the tests use, so don't treat it as unset.
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
-const EXPORT_TOKEN = process.env.EXPORT_TOKEN || '';
-
-// Keep the existing location and schema: signup retirement must not discard records.
-const db = new DatabaseSync(path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH || __dirname, 'waitlist.db'));
-db.exec(`
-  PRAGMA journal_mode = WAL;
-  CREATE TABLE IF NOT EXISTS subscribers (
-    email TEXT PRIMARY KEY,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-  );
-`);
-// Preserve export compatibility with databases predating these optional columns.
-for (const column of ['use_case', 'source']) {
-  if (!db.prepare("SELECT 1 FROM pragma_table_info('subscribers') WHERE name = ?").get(column)) {
-    db.exec(`ALTER TABLE subscribers ADD COLUMN ${column} TEXT`);
-  }
-}
-const all = db.prepare('SELECT email, created_at, use_case, source FROM subscribers ORDER BY created_at');
 
 // ---------- Static files ----------
 // Only these are public, so server.js, package.json and node_modules never are.
@@ -58,24 +36,6 @@ const files = new Map(PUBLIC.map(name => [
   },
 ]));
 
-// ---------- Retained subscriber export ----------
-// Off unless EXPORT_TOKEN is set. Public subscription intake has been retired.
-function exportCsv(req, res) {
-  const given = Buffer.from((req.headers.authorization || '').replace(/^Bearer /, ''));
-  const expected = Buffer.from(EXPORT_TOKEN);
-  if (!EXPORT_TOKEN || given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
-    res.writeHead(404, { 'Content-Type': 'text/plain' });
-    return res.end('Not found');
-  }
-  // Emails and answers may contain commas or quotes. Sources came from arbitrary
-  // referral links, so defuse leading spreadsheet formula characters as well.
-  const quote = s => `"${s.replaceAll('"', '""')}"`;
-  const safe = s => (/^[=+\-@]/.test(s) ? `'${s}` : s);
-  const rows = all.all().map(r => `${quote(r.email)},${r.created_at},${r.use_case ? quote(r.use_case) : ''},${r.source ? quote(safe(r.source)) : ''}`);
-  res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Cache-Control': 'no-store' });
-  res.end(['email,created_at,use_case,source', ...rows].join('\n') + '\n');
-}
-
 // ---------- Server ----------
 
 const server = http.createServer(async (req, res) => {
@@ -88,8 +48,6 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(301, { Location: `https://${host.slice(4)}${url.pathname}${url.search}` });
     return res.end();
   }
-
-  if (url.pathname === '/api/export.csv' && req.method === 'GET') return exportCsv(req, res);
 
   if (url.pathname === '/healthz') { res.writeHead(200); return res.end('ok'); }
 
@@ -107,7 +65,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => console.log(`listening on ${server.address().port}`));
 
-// Railway sends SIGTERM before swapping in a new deploy; close the database so the WAL is checkpointed.
+// Railway sends SIGTERM before swapping in a new deploy; finish active HTTP requests.
 process.on('SIGTERM', () => {
-  server.close(() => { db.close(); process.exit(0); });
+  server.close(() => process.exit(0));
 });

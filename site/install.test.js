@@ -3,19 +3,15 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
-const fs = require('node:fs');
 const path = require('node:path');
-const os = require('node:os');
 
 test('production server defaults to gated installation and serves only the installer client', async t => {
-  const volume = fs.mkdtempSync(path.join(os.tmpdir(), 'vishot-install-'));
   const child = spawn(process.execPath, [path.join(__dirname, 'server.js')], {
-    env: { ...process.env, PORT: '0', RAILWAY_VOLUME_MOUNT_PATH: volume, VISHOT_INSTALL_READY: '' },
+    env: { ...process.env, PORT: '0', VISHOT_INSTALL_READY: '' },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   t.after(async () => {
     if (child.exitCode === null) await new Promise(resolve => { child.once('exit', resolve); child.kill('SIGTERM'); });
-    fs.rmSync(volume, { recursive: true, force: true });
   });
   const base = await new Promise((resolve, reject) => {
     child.stdout.on('data', data => {

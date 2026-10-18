@@ -1,4 +1,4 @@
-// Runs server.js as Railway would, against throwaway volume directories. `npm test`.
+// Exercises the stateless server through HTTP. `npm test`.
 
 'use strict';
 
@@ -9,32 +9,14 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
 
 const TOKEN = 'test-export-token';
-const volume = fs.mkdtempSync(path.join(os.tmpdir(), 'vishot-waitlist-'));
-const records = [
-  ['survivor@example.com', '2026-10-01T12:00:00Z', 'Web pages', 'reddit'],
-  ['veteran@example.com', '2026-10-02T12:00:00Z', null, null],
-  ['"a,b"@example.com', '2026-10-03T12:00:00Z', 'Other: charts, "slides"', '=HYPERLINK("x")'],
-  ['plus@example.com', '2026-10-04T12:00:00Z', null, '+source'],
-  ['minus@example.com', '2026-10-05T12:00:00Z', null, '-source'],
-  ['at@example.com', '2026-10-06T12:00:00Z', null, '@source'],
-];
-const expectedCsv = `email,created_at,use_case,source
-"survivor@example.com",2026-10-01T12:00:00Z,"Web pages","reddit"
-"veteran@example.com",2026-10-02T12:00:00Z,,
-"""a,b""@example.com",2026-10-03T12:00:00Z,"Other: charts, ""slides""","'=HYPERLINK(""x"")"
-"plus@example.com",2026-10-04T12:00:00Z,,"'+source"
-"minus@example.com",2026-10-05T12:00:00Z,,"'-source"
-"at@example.com",2026-10-06T12:00:00Z,,"'@source"
-`;
 let server;
 let base;
 
-function start({ directory = volume, token = TOKEN } = {}) {
+function start(env = {}) {
   const child = spawn(process.execPath, [path.join(__dirname, 'server.js')], {
-    env: { ...process.env, PORT: '0', RAILWAY_VOLUME_MOUNT_PATH: directory, EXPORT_TOKEN: token },
+    env: { ...process.env, PORT: '0', VISHOT_INSTALL_READY: '', ...env },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   return new Promise((resolve, reject) => {
@@ -52,24 +34,11 @@ function stop(child) {
   return new Promise(resolve => { child.on('exit', resolve); child.kill('SIGTERM'); });
 }
 
-function exported(address = base) {
-  return fetch(`${address}/api/export.csv`, { headers: { Authorization: `Bearer ${TOKEN}` } });
-}
-
 before(async () => {
-  // Fixture setup only: verify records through the authenticated HTTP export, never SQL.
-  const db = new DatabaseSync(path.join(volume, 'waitlist.db'));
-  db.exec(`CREATE TABLE subscribers (email TEXT PRIMARY KEY,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    use_case TEXT, source TEXT);`);
-  const insert = db.prepare('INSERT INTO subscribers VALUES (?, ?, ?, ?)');
-  for (const record of records) insert.run(...record);
-  db.close();
   ({ child: server, base } = await start());
 });
 after(async () => {
   if (server) await stop(server);
-  fs.rmSync(volume, { recursive: true, force: true });
 });
 
 test('serves the landing page and its assets', async () => {
@@ -156,7 +125,7 @@ test('redirects www to the bare domain', async () => {
   assert.equal(location, 'https://vishot.dev/some/page?x=1');
 });
 
-test('retires public intake for old browsers and API clients without adding or updating records', async () => {
+test('retires public intake for old browsers and API clients', async () => {
   for (const accept of ['application/json', 'text/html']) {
     for (const email of ['new@example.com', 'veteran@example.com', 'survivor@example.com']) {
       const res = await fetch(`${base}/api/subscribe?ref=old-link`, {
@@ -165,7 +134,6 @@ test('retires public intake for old browsers and API clients without adding or u
       });
       assert.equal(res.status, 404);
       assert.equal(await res.text(), 'Not found');
-      assert.equal(await (await exported()).text(), expectedCsv);
     }
   }
   for (const method of ['GET', 'HEAD', 'PUT', 'OPTIONS']) {
@@ -173,61 +141,28 @@ test('retires public intake for old browsers and API clients without adding or u
   }
 });
 
-test('exports existing records with CSV escaping and spreadsheet-safe sources', async () => {
-  const res = await exported();
-  assert.equal(res.status, 200);
-  assert.equal(res.headers.get('content-type'), 'text/csv; charset=utf-8');
-  assert.equal(res.headers.get('cache-control'), 'no-store');
-  assert.equal(await res.text(), expectedCsv);
-});
-
-test('hides the export without the right token and never accepts writes', async () => {
-  for (const authorization of ['', 'Bearer wrong', `Bearer ${'x'.repeat(TOKEN.length)}`]) {
-    const res = await fetch(`${base}/api/export.csv`, { headers: { Authorization: authorization } });
-    assert.equal(res.status, 404);
-    assert.equal(await res.text(), 'Not found');
-  }
-  for (const method of ['POST', 'PUT', 'DELETE', 'HEAD']) {
-    const res = await fetch(`${base}/api/export.csv`, { method, headers: { Authorization: `Bearer ${TOKEN}` } });
-    assert.equal(res.status, 404, method);
-  }
-});
-
-test('disables export when EXPORT_TOKEN is unset', async () => {
-  const disabled = await start({ token: '' });
+test('ignores obsolete storage configuration and retires export even with credentials', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vishot-archive-'));
+  const archive = Buffer.from('Archived subscriber data: the server must never open or modify this file.');
+  fs.writeFileSync(path.join(directory, 'waitlist.db'), archive);
+  let instance;
   try {
-    const res = await exported(disabled.base);
-    assert.equal(res.status, 404);
-    assert.equal((await fetch(disabled.base + '/healthz')).status, 200);
-  } finally {
-    await stop(disabled.child);
-  }
-});
-
-// Start old schemas as Railway would, with people already on the list.
-test('preserves legacy records from before optional answer and source columns existed', async () => {
-  for (const columns of ['', ', use_case TEXT']) {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vishot-old-'));
-    let legacy;
-    try {
-      const db = new DatabaseSync(path.join(directory, 'waitlist.db'));
-      db.exec(`CREATE TABLE subscribers (email TEXT PRIMARY KEY, created_at TEXT NOT NULL${columns});`);
-      db.prepare('INSERT INTO subscribers (email, created_at) VALUES (?, ?)')
-        .run('veteran@example.com', '2026-10-01T12:00:00Z');
-      db.close();
-      legacy = await start({ directory });
-      const res = await exported(legacy.base);
-      assert.equal(res.status, 200);
-      assert.equal(await res.text(), 'email,created_at,use_case,source\n"veteran@example.com",2026-10-01T12:00:00Z,,\n');
-    } finally {
-      if (legacy) await stop(legacy.child);
-      fs.rmSync(directory, { recursive: true, force: true });
+    instance = await start({ RAILWAY_VOLUME_MOUNT_PATH: directory, EXPORT_TOKEN: TOKEN });
+    for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS']) {
+      const response = await fetch(instance.base + '/api/export.csv', {
+        method, headers: { Authorization: `Bearer ${TOKEN}` },
+      });
+      assert.equal(response.status, 404, method);
     }
+    assert.equal((await fetch(instance.base + '/healthz')).status, 200);
+    await stop(instance.child);
+    assert.deepEqual(fs.readdirSync(directory), ['waitlist.db']);
+    assert.deepEqual(fs.readFileSync(path.join(directory, 'waitlist.db')), archive);
+    instance = await start({ RAILWAY_VOLUME_MOUNT_PATH: path.join(directory, 'missing') });
+    assert.equal((await fetch(instance.base + '/healthz')).status, 200);
+    assert.deepEqual(fs.readdirSync(directory), ['waitlist.db']);
+  } finally {
+    if (instance) await stop(instance.child);
+    fs.rmSync(directory, { recursive: true, force: true });
   }
-});
-
-test('keeps existing records unchanged across a restart, as across a deploy', async () => {
-  await stop(server);
-  ({ child: server, base } = await start());
-  assert.equal(await (await exported()).text(), expectedCsv);
 });

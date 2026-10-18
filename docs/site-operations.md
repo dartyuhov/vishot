@@ -1,59 +1,42 @@
-# Site operations and retained subscriber export
+# Site operations
 
-The site serves the landing page and retains authenticated access to existing
-subscriber records. Public signup is retired: `/api/subscribe` returns `404`
-for all methods and doesn't add records or update existing answers or sources.
-The page no longer collects email addresses, usage answers, or referral labels.
+The site serves the landing page and caches public GitHub release and repository
+metadata in memory. It has no database, subscriber collection, or export service.
+Both `/api/subscribe` and `/api/export.csv` return `404`, including requests with
+old export credentials.
 
-## Storage
+## Runtime configuration
 
-Keep the existing Railway volume mounted at `/data`. The server opens
-`waitlist.db` under `RAILWAY_VOLUME_MOUNT_PATH`; without that variable, it uses
-`site/waitlist.db`. Signup retirement doesn't delete the database, subscriber
-rows, or the volume. A separate retention decision is required for deletion.
+Run the server with Node 24 from `site/` using `npm start`. `PORT` defaults to
+`3000`. Railway uses `site/` as the service root, `node server.js` as the start
+command, and `/healthz` as its health check. The existing GitHub autodeploy watches
+`site/**` on `main` and waits for the `Site` workflow.
 
-The server keeps the existing `subscribers` schema and adds missing nullable
-`use_case` and `source` columns for older databases. Existing email addresses,
-timestamps, answers, and sources remain available across restarts and deploys.
-SQLite uses WAL mode, and the server closes the database on `SIGTERM` after
-closing HTTP connections so the WAL is checkpointed.
+Installation controls remain gated unless `VISHOT_INSTALL_READY=true` and public
+release and tap metadata pass validation. Repository and release metadata use
+public requests without credentials. The server requires no persistent volume,
+export token, or database migrations.
 
-## Export existing records
+## Retire the old storage configuration
 
-Set a nonempty `EXPORT_TOKEN` on the server and use the same token in the
-`Authorization: Bearer` header. Keep this credential out of browser code and
-public links. With the token available in your shell, download the CSV:
+Existing subscriber data remains an archive outside the site's runtime. This
+change doesn't open, modify, or delete database files or the Railway volume.
+The server ignores `EXPORT_TOKEN` and `RAILWAY_VOLUME_MOUNT_PATH` if they're
+still configured.
 
-```sh
-curl --fail --show-error \
-  --header "Authorization: Bearer $EXPORT_TOKEN" \
-  https://vishot.dev/api/export.csv \
-  --output subscribers.csv
-```
-
-Only `GET /api/export.csv` exports records. An unset or empty server token,
-missing or incorrect credentials, and other methods return `404`. Export
-responses use `Cache-Control: no-store` and contain
-`email,created_at,use_case,source`, ordered by creation time. Optional values
-can be empty. CSV fields escape commas and quotes; sources starting with
-`=`, `+`, `-`, or `@` gain a leading apostrophe to prevent spreadsheet formulas.
-The export doesn't modify stored values.
+To finish the hosting cleanup, archive the existing subscriber database with a
+consistent SQLite backup, then remove the obsolete `EXPORT_TOKEN` variable and
+detach the `/data` volume from the Railway service. Preserve the archive; volume
+or subscriber-data deletion is a separate decision. No export endpoint remains
+after this version is deployed.
 
 ## Public serving and checks
 
-The server continues to answer `/healthz` with `200` and `ok`. Static serving
-accepts only `GET` and `HEAD` for `/`, `/main.js`, `/style.css`, `/favicon.svg`,
-`/og.png`, and the bundled files under `/fonts/`. It doesn't expose server
-source, package files, database files, WAL files, or arbitrary filesystem paths,
-even when you supply export credentials. Requests to `www` redirect to the
-canonical bare host.
+The server answers `/healthz` with `200` and `ok`. Static serving accepts only
+`GET` and `HEAD` for the page, browser scripts, styles, images, and bundled fonts.
+It doesn't expose server source, package files, archived database files, or
+arbitrary filesystem paths. Requests to `www` redirect to the canonical bare host.
 
-Run the served-site tests with Node 24 or later from `site/`:
-
-```sh
-npm test
-```
-
-Tests create temporary volume directories, seed synthetic subscriber records,
-and verify preservation through authenticated HTTP exports. Cleanup removes
-only those temporary fixtures, never the local or deployed subscriber database.
+Run `npm test` from `site/` to check static serving, retired routes, installation
+gating, and metadata validation. Tests also verify that obsolete storage settings
+don't prevent startup and archived files remain byte-for-byte unchanged.
