@@ -9,6 +9,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
+const { createMetadata } = require('./metadata');
+const metadata = createMetadata();
 
 // PORT=0 means "any free port", which the tests use, so don't treat it as unset.
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
@@ -46,7 +48,7 @@ const TYPES = {
   '.woff2': 'font/woff2',
 };
 
-const PUBLIC = ['index.html', 'main.js', 'style.css', 'favicon.svg', 'og.png',
+const PUBLIC = ['index.html', 'main.js', 'install.js', 'style.css', 'favicon.svg', 'og.png',
   ...fs.readdirSync(path.join(__dirname, 'fonts')).map(f => `fonts/${f}`)];
 
 const files = new Map(PUBLIC.map(name => [
@@ -203,13 +205,16 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/healthz') { res.writeHead(200); return res.end('ok'); }
 
+  if (await metadata.handle(req, res)) return;
+
   const file = files.get(url.pathname);
   if (!file || (req.method !== 'GET' && req.method !== 'HEAD')) {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     return res.end('Not found');
   }
   res.writeHead(200, { 'Content-Type': file.type, 'Cache-Control': file.cache });
-  res.end(req.method === 'HEAD' ? undefined : file.body);
+  const body = url.pathname === '/' && req.method === 'GET' ? await metadata.page(file.body.toString()) : file.body;
+  res.end(req.method === 'HEAD' ? undefined : body);
 });
 
 server.listen(PORT, () => console.log(`listening on ${server.address().port}`));

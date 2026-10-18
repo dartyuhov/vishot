@@ -1,0 +1,75 @@
+// With install-preview.cjs running, execute through playwright-cli run-code.
+async page => {
+  const check = (condition, message) => { if (!condition) throw new Error(message); };
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.unroute('**/api/github');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('http://127.0.0.1:3107');
+  await page.getByLabel('42 GitHub stars').waitFor();
+  await page.evaluate(() => {
+    window.copied = [];
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+      writeText: async text => window.copied.push(text),
+    } });
+  });
+  await page.getByRole('button', { name: 'Copy', exact: true }).click();
+  check(await page.getByRole('status').filter({ hasText: 'Command copied.' }).isVisible(), 'copy success feedback');
+  check(await page.evaluate(() => window.copied[0]) === 'brew install --cask dartyuhov/tap/vishot', 'copies only command');
+  await page.getByRole('button', { name: 'Copy', exact: true }).waitFor();
+  await page.evaluate(() => { navigator.clipboard.writeText = async () => { throw new Error('denied'); }; });
+  await page.getByRole('button', { name: 'Copy', exact: true }).click();
+  check(await page.getByRole('status').filter({ hasText: 'Could not copy.' }).isVisible(), 'honest clipboard failure');
+  check(await page.getByLabel('Homebrew install command').evaluate(el => getComputedStyle(el).userSelect) === 'text', 'command remains selectable');
+  const download = page.getByRole('link', { name: 'Download for Mac', exact: true });
+  await download.focus();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog', { name: 'Choose your Mac' });
+  await dialog.waitFor();
+  check(await page.getByRole('button', { name: 'Close Esc' }).evaluate(el => el === document.activeElement), 'initial focus on close');
+  await page.keyboard.press('Tab');
+  const apple = page.getByRole('link', { name: /Apple Silicon/ });
+  check(await apple.evaluate(el => el === document.activeElement), 'keyboard reaches Apple Silicon');
+  check(await apple.getAttribute('href') === 'https://github.com/dartyuhov/vishot/releases/download/v0.2.0/Vishot-0.2.0-arm64.dmg', 'ARM asset');
+  await page.keyboard.press('Tab');
+  const intel = page.getByRole('link', { name: /Intel Intel-based/ });
+  check(await intel.evaluate(el => el === document.activeElement), 'keyboard reaches Intel');
+  check(await intel.getAttribute('href') === 'https://github.com/dartyuhov/vishot/releases/download/v0.2.0/Vishot-0.2.0-x86_64.dmg', 'Intel asset');
+  await page.keyboard.press('Tab');
+  check(await page.getByRole('button', { name: 'Close Esc' }).evaluate(el => el === document.activeElement), 'modal traps keyboard focus');
+  await page.keyboard.press('Escape');
+  check(!await dialog.isVisible(), 'Escape closes');
+  check(await download.evaluate(el => el === document.activeElement), 'focus restored');
+  await download.click();
+  await page.getByRole('button', { name: 'Close Esc' }).click();
+  check(await download.evaluate(el => el === document.activeElement), 'visible close restores focus');
+  const brewBox = await page.getByLabel('Homebrew install command').boundingBox();
+  const downloadBox = await download.boundingBox();
+  check(Math.abs(brewBox.y - downloadBox.y) < 50, 'wide controls side by side');
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.goto('http://127.0.0.1:3107');
+  check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no narrow horizontal overflow');
+  check((await download.boundingBox()).y > (await page.getByLabel('Homebrew install command').boundingBox()).y, 'narrow controls stack');
+  await download.click();
+  check(await dialog.isVisible(), 'chooser opens on narrow screens');
+  check(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), 'chooser fits narrow screen');
+  await page.keyboard.press('Escape');
+  await page.getByRole('link', { name: 'Installation help', exact: true }).click();
+  check(page.url().endsWith('#faq'), 'help anchor');
+  check(await page.getByRole('heading', { name: 'FAQ', exact: true }).isVisible(), 'help reaches FAQ');
+  await page.route('**/api/github', route => route.fulfill({ status: 503, body: '{}' }));
+  await page.goto('http://127.0.0.1:3107');
+  check(await page.getByRole('link', { name: 'GitHub', exact: true }).isVisible(), 'GitHub fallback survives metadata failure');
+  check(!await page.locator('[data-stars]').isVisible(), 'no invented stars');
+  check(await download.isVisible(), 'metadata failure does not block installation');
+  const context = await page.context().browser().newContext({ javaScriptEnabled: false });
+  const plain = await context.newPage();
+  await plain.goto('http://127.0.0.1:3107');
+  const fallback = plain.getByRole('link', { name: 'Download for Mac', exact: true });
+  check(await fallback.isVisible() && await fallback.getAttribute('href') === '/download', 'no-JavaScript fallback link');
+  const response = await context.request.get('http://127.0.0.1:3107/download', { maxRedirects: 0 });
+  check(response.headers().location === 'https://github.com/dartyuhov/vishot/releases/tag/v0.2.0', 'no-JavaScript exact release redirect');
+  await context.close();
+  check(errors.length === 0, `browser errors: ${errors.join(', ')}`);
+  console.log('PASS: copy success/failure, command selection, chip links, keyboard/focus/Escape/close, wide/narrow layout, help, star failure and no-JavaScript fallback');
+}

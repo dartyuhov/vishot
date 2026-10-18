@@ -586,7 +586,7 @@
     // Each section's pieces appear one after another when it scrolls into view. The first
     // waits for the headline to dissolve.
     const groups = [
-      { items: [document.querySelector('.lede'), document.querySelector('.waitlist'),
+      { items: [document.querySelector('.lede'), document.querySelector('.installer'),
                 document.querySelector('.watch')], base: 450 },
       { items: [document.querySelector('.screen'), ...features], base: 100 },
       { items: [document.querySelector('.faq-title'), document.querySelector('.faq-list'),
