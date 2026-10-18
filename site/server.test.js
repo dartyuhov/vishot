@@ -1,4 +1,4 @@
-// Runs server.js as Railway would, against a throwaway volume directory. `npm test`.
+// Runs server.js as Railway would, against throwaway volume directories. `npm test`.
 
 'use strict';
 
@@ -9,15 +9,32 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
 
 const TOKEN = 'test-export-token';
 const volume = fs.mkdtempSync(path.join(os.tmpdir(), 'vishot-waitlist-'));
+const records = [
+  ['survivor@example.com', '2026-10-01T12:00:00Z', 'Web pages', 'reddit'],
+  ['veteran@example.com', '2026-10-02T12:00:00Z', null, null],
+  ['"a,b"@example.com', '2026-10-03T12:00:00Z', 'Other: charts, "slides"', '=HYPERLINK("x")'],
+  ['plus@example.com', '2026-10-04T12:00:00Z', null, '+source'],
+  ['minus@example.com', '2026-10-05T12:00:00Z', null, '-source'],
+  ['at@example.com', '2026-10-06T12:00:00Z', null, '@source'],
+];
+const expectedCsv = `email,created_at,use_case,source
+"survivor@example.com",2026-10-01T12:00:00Z,"Web pages","reddit"
+"veteran@example.com",2026-10-02T12:00:00Z,,
+"""a,b""@example.com",2026-10-03T12:00:00Z,"Other: charts, ""slides""","'=HYPERLINK(""x"")"
+"plus@example.com",2026-10-04T12:00:00Z,,"'+source"
+"minus@example.com",2026-10-05T12:00:00Z,,"'-source"
+"at@example.com",2026-10-06T12:00:00Z,,"'@source"
+`;
 let server;
 let base;
 
-function start() {
+function start({ directory = volume, token = TOKEN } = {}) {
   const child = spawn(process.execPath, [path.join(__dirname, 'server.js')], {
-    env: { ...process.env, PORT: '0', RAILWAY_VOLUME_MOUNT_PATH: volume, EXPORT_TOKEN: TOKEN },
+    env: { ...process.env, PORT: '0', RAILWAY_VOLUME_MOUNT_PATH: directory, EXPORT_TOKEN: token },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   return new Promise((resolve, reject) => {
@@ -25,6 +42,7 @@ function start() {
       const port = /listening on (\d+)/.exec(chunk)?.[1];
       if (port) resolve({ child, base: `http://127.0.0.1:${port}` });
     });
+    child.on('error', reject);
     child.on('exit', code => reject(new Error(`server exited with ${code}`)));
   });
 }
@@ -34,29 +52,21 @@ function stop(child) {
   return new Promise(resolve => { child.on('exit', resolve); child.kill('SIGTERM'); });
 }
 
-// Each call comes from its own address so the rate limit only bites where a test wants it to.
-let ip = 0;
-function subscribe(fields, { json = true, from = `10.0.0.${++ip}` } = {}) {
-  return fetch(`${base}/api/subscribe`, {
-    method: 'POST',
-    headers: { 'X-Forwarded-For': from, ...(json && { Accept: 'application/json' }) },
-    body: new URLSearchParams(fields),
-  });
+function exported(address = base) {
+  return fetch(`${address}/api/export.csv`, { headers: { Authorization: `Bearer ${TOKEN}` } });
 }
 
-async function exported() {
-  const res = await fetch(`${base}/api/export.csv`, { headers: { Authorization: `Bearer ${TOKEN}` } });
-  return (await res.text()).trim().split('\n').slice(1).map(row => row.split(',')[0]);
-}
-
-// The export row for one address, after the email: [created_at, use_case, source].
-async function rowFor(email) {
-  const res = await fetch(`${base}/api/export.csv`, { headers: { Authorization: `Bearer ${TOKEN}` } });
-  const line = (await res.text()).split('\n').find(l => l.startsWith(`"${email}"`));
-  return line && line.slice(email.length + 3).split(',').map(c => c.replace(/^"|"$/g, '').replaceAll('""', '"'));
-}
-
-before(async () => ({ child: server, base } = await start()));
+before(async () => {
+  // Fixture setup only: verify records through the authenticated HTTP export, never SQL.
+  const db = new DatabaseSync(path.join(volume, 'waitlist.db'));
+  db.exec(`CREATE TABLE subscribers (email TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    use_case TEXT, source TEXT);`);
+  const insert = db.prepare('INSERT INTO subscribers VALUES (?, ?, ?, ?)');
+  for (const record of records) insert.run(...record);
+  db.close();
+  ({ child: server, base } = await start());
+});
 after(async () => {
   if (server) await stop(server);
   fs.rmSync(volume, { recursive: true, force: true });
@@ -68,6 +78,13 @@ test('serves the landing page and its assets', async () => {
     const res = await fetch(base + url);
     assert.equal(res.status, 200, url);
     assert.ok(res.headers.get('content-type').startsWith(type), url);
+    assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(res.headers.get('cache-control'), url.startsWith('/fonts/')
+      ? 'public, max-age=31536000, immutable' : 'no-cache');
+    assert.ok((await res.arrayBuffer()).byteLength > 0, url);
+    const head = await fetch(base + url, { method: 'HEAD' });
+    assert.equal(head.status, 200, url);
+    assert.equal(await head.text(), '');
   }
 });
 
@@ -77,10 +94,36 @@ test('loads nothing from YouTube until the demo video is asked for', async () =>
   assert.ok(!/<iframe|youtube-nocookie|<(script|img)[^>]+src="https?:|<link(?![^>]*rel="canonical")[^>]+href="https?:/i.test(html));
 });
 
-test('keeps server files and the database private', async () => {
-  for (const url of ['/server.js', '/server.test.js', '/package.json', '/waitlist.db', '/../server.js', '/node_modules/']) {
-    assert.equal((await fetch(base + url)).status, 404, url);
+test('serves a signup-free page and browser bundle with working local navigation', async () => {
+  const html = await (await fetch(base + '/')).text();
+  assert.doesNotMatch(html, /<form\b|<input\b[^>]*(?:type="email"|name="(?:email|use_other|website)")|<select\b/i);
+  assert.doesNotMatch(html, /waitlist|sign[ -]?up|get early access|when the beta opens|notify you once/i);
+  const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]));
+  for (const [, id] of html.matchAll(/href="#([^"]+)"/g)) assert.ok(ids.has(id), `missing anchor ${id}`);
+  for (const [, src] of html.matchAll(/<script\b[^>]*src="([^"]+)"/g)) {
+    const res = await fetch(new URL(src, base));
+    assert.equal(res.status, 200);
+    const script = await res.text();
+    assert.doesNotMatch(script, /\/api\/subscribe|new FormData\b|name="email"|location\.search|waitlist/i);
   }
+});
+
+test('keeps server files and subscriber storage private, even with export credentials', async () => {
+  for (const url of ['/server.js', '/server.test.js', '/package.json', '/package-lock.json',
+    '/waitlist.db', '/waitlist.db-wal', '/waitlist.db-shm', '/../server.js', '/node_modules/',
+    '/fonts/../waitlist.db', '/fonts/%2e%2e%2fwaitlist.db', '/.env', '/not-public']) {
+    for (const method of ['GET', 'HEAD']) {
+      const res = await fetch(base + url, { method, headers: { Authorization: `Bearer ${TOKEN}` } });
+      assert.equal(res.status, 404, `${method} ${url}`);
+    }
+  }
+  assert.equal((await fetch(base + '/main.js', { method: 'POST', body: 'no' })).status, 404);
+});
+
+test('keeps the health check available', async () => {
+  const res = await fetch(base + '/healthz');
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), 'ok');
 });
 
 test('redirects www to the bare domain', async () => {
@@ -94,173 +137,78 @@ test('redirects www to the bare domain', async () => {
   assert.equal(location, 'https://vishot.dev/some/page?x=1');
 });
 
-test('subscribes a new address, normalized', async () => {
-  const res = await subscribe({ email: '  New.Person@Example.com ' });
-  assert.equal(res.status, 201);
-  assert.deepEqual(await res.json(), { status: 'subscribed' });
-  assert.ok((await exported()).includes('"new.person@example.com"'));
+test('retires public intake for old browsers and API clients without adding or updating records', async () => {
+  for (const accept of ['application/json', 'text/html']) {
+    for (const email of ['new@example.com', 'veteran@example.com', 'survivor@example.com']) {
+      const res = await fetch(`${base}/api/subscribe?ref=old-link`, {
+        method: 'POST', headers: { Accept: accept },
+        body: new URLSearchParams({ email, use: 'Whole screen', ref: 'new-source' }),
+      });
+      assert.equal(res.status, 404);
+      assert.equal(await res.text(), 'Not found');
+      assert.equal(await (await exported()).text(), expectedCsv);
+    }
+  }
+  for (const method of ['GET', 'HEAD', 'PUT', 'OPTIONS']) {
+    assert.equal((await fetch(`${base}/api/subscribe`, { method })).status, 404, method);
+  }
 });
 
-test('reports an address that is already on the list', async () => {
-  await subscribe({ email: 'twice@example.com' });
-  const res = await subscribe({ email: 'TWICE@example.com' });
+test('exports existing records with CSV escaping and spreadsheet-safe sources', async () => {
+  const res = await exported();
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { status: 'already' });
+  assert.equal(res.headers.get('content-type'), 'text/csv; charset=utf-8');
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+  assert.equal(await res.text(), expectedCsv);
 });
 
-test('stores what a new subscriber screenshots most', async () => {
-  const res = await subscribe({ email: 'uses-docs@example.com', use: 'Web pages' });
-  assert.equal(res.status, 201);
-  assert.equal((await rowFor('uses-docs@example.com'))[1], 'Web pages');
-});
-
-test('keeps what "Other" says, trimmed and prefixed', async () => {
-  await subscribe({ email: 'uses-other@example.com', use: 'Other', use_other: '  =HYPERLINK("x")\n  in   slides ' });
-  assert.equal((await rowFor('uses-other@example.com'))[1], 'Other: =HYPERLINK("x") in slides');
-  await subscribe({ email: 'uses-other-empty@example.com', use: 'Other', use_other: '   ' });
-  assert.equal((await rowFor('uses-other-empty@example.com'))[1], 'Other');
-});
-
-test('drops an answer that is not in the dropdown, without failing the sign-up', async () => {
-  const res = await subscribe({ email: 'uses-junk@example.com', use: '<script>alert(1)</script>' });
-  assert.equal(res.status, 201);
-  assert.equal((await rowFor('uses-junk@example.com'))[1], '');
-});
-
-test('lets someone already on the list answer once, but never replaces the answer', async () => {
-  await subscribe({ email: 'late@example.com' });
-  await subscribe({ email: 'late@example.com', use: 'Bugs and errors' });
-  await subscribe({ email: 'late@example.com', use: 'Web pages' });
-  assert.equal((await rowFor('late@example.com'))[1], 'Bugs and errors');
-});
-
-test('accepts every choice the form offers', async () => {
-  const html = await (await fetch(base + '/')).text();
-  const choices = [...new Set([...html.matchAll(/<option>([^<]+)<\/option>/g)].map(m => m[1]))];
-  assert.ok(choices.length >= 2);
-  for (const [i, use] of choices.entries()) {
-    await subscribe({ email: `choice-${i}@example.com`, use });
-    assert.equal((await rowFor(`choice-${i}@example.com`))[1].split(':')[0], use, use);
+test('hides the export without the right token and never accepts writes', async () => {
+  for (const authorization of ['', 'Bearer wrong', `Bearer ${'x'.repeat(TOKEN.length)}`]) {
+    const res = await fetch(`${base}/api/export.csv`, { headers: { Authorization: authorization } });
+    assert.equal(res.status, 404);
+    assert.equal(await res.text(), 'Not found');
+  }
+  for (const method of ['POST', 'PUT', 'DELETE', 'HEAD']) {
+    const res = await fetch(`${base}/api/export.csv`, { method, headers: { Authorization: `Bearer ${TOKEN}` } });
+    assert.equal(res.status, 404, method);
   }
 });
 
-test('stores which link a new subscriber came from', async () => {
-  await subscribe({ email: 'from-reddit@example.com', ref: '  Reddit-MacApps ' });
-  assert.equal((await rowFor('from-reddit@example.com'))[2], 'reddit-macapps');
-});
-
-test('keeps any short text as the source, tidied', async () => {
-  const cases = [['r/macapps post', 'R/MacApps   post'], ['show hn', 'Show HN'], ['reddit_macapps.v2', 'reddit_macapps.v2'],
-    ['two lines', 'two\nlines'], ['ü-ref', 'Ü-Ref'], ['a'.repeat(64), 'a'.repeat(100)]];
-  for (const [i, [expected, ref]] of cases.entries()) {
-    const res = await subscribe({ email: `any-ref-${i}@example.com`, ref });
-    assert.equal(res.status, 201, ref);
-    assert.equal((await rowFor(`any-ref-${i}@example.com`))[2], expected, ref);
-  }
-});
-
-test('stores no source for an empty or blank one, without failing the sign-up', async () => {
-  for (const [i, ref] of ['', '   ', '\n\t'].entries()) {
-    const res = await subscribe({ email: `blank-ref-${i}@example.com`, ref });
-    assert.equal(res.status, 201);
-    assert.equal((await rowFor(`blank-ref-${i}@example.com`))[2], '');
-  }
-});
-
-test('stops a source from reading as a formula, or breaking the export', async () => {
-  await subscribe({ email: 'formula@example.com', ref: '=HYPERLINK("x")' });
-  assert.equal((await rowFor('formula@example.com'))[2], "'=hyperlink(\"x\")");
-  await subscribe({ email: 'commas@example.com', ref: 'a, b "c"' });
-  const res = await fetch(`${base}/api/export.csv`, { headers: { Authorization: `Bearer ${TOKEN}` } });
-  assert.match(await res.text(), /^"commas@example.com",[^,]+,,"a, b ""c"""$/m);
-});
-
-test('lets someone already on the list get a source once, but never replaces it', async () => {
-  await subscribe({ email: 'again@example.com', use: 'Web pages' });
-  await subscribe({ email: 'again@example.com', ref: 'youtube' });
-  await subscribe({ email: 'again@example.com', ref: 'x', use: 'Whole screen' });
-  assert.deepEqual((await rowFor('again@example.com')).slice(1), ['Web pages', 'youtube']);
-});
-
-// A database from before the columns existed (or with only the first of them), started as Railway
-// would start it: the columns appear, and the people already on the list stay.
-async function exportFromLegacy(columns) {
-  const { DatabaseSync } = require('node:sqlite');
-  const old = fs.mkdtempSync(path.join(os.tmpdir(), 'vishot-old-'));
-  const legacy = new DatabaseSync(path.join(old, 'waitlist.db'));
-  legacy.exec(`CREATE TABLE subscribers (email TEXT PRIMARY KEY,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))${columns});
-    INSERT INTO subscribers (email) VALUES ('veteran@example.com');`);
-  legacy.close();
-  const child = spawn(process.execPath, [path.join(__dirname, 'server.js')], {
-    env: { ...process.env, PORT: '0', RAILWAY_VOLUME_MOUNT_PATH: old, EXPORT_TOKEN: TOKEN },
-    stdio: ['ignore', 'pipe', 'inherit'],
-  });
+test('disables export when EXPORT_TOKEN is unset', async () => {
+  const disabled = await start({ token: '' });
   try {
-    const port = await new Promise((resolve, reject) => {
-      child.stdout.on('data', c => { const p = /listening on (\d+)/.exec(c)?.[1]; if (p) resolve(p); });
-      child.on('exit', code => reject(new Error(`server exited with ${code}`)));
-    });
-    const res = await fetch(`http://127.0.0.1:${port}/api/export.csv`, { headers: { Authorization: `Bearer ${TOKEN}` } });
-    return await res.text();
+    const res = await exported(disabled.base);
+    assert.equal(res.status, 404);
+    assert.equal((await fetch(disabled.base + '/healthz')).status, 200);
   } finally {
-    await stop(child);
-    fs.rmSync(old, { recursive: true, force: true });
-  }
-}
-
-test('adds the answer and source columns to a database made before they existed', async () => {
-  const row = /^email,created_at,use_case,source\n"veteran@example.com",[^,]+,,\n$/;
-  assert.match(await exportFromLegacy(''), row);
-  assert.match(await exportFromLegacy(', use_case TEXT'), row);
-});
-
-test('rejects something that is not an email address', async () => {
-  for (const email of ['', 'nope', 'a@b', 'a b@example.com', `${'x'.repeat(250)}@example.com`]) {
-    const res = await subscribe({ email });
-    assert.equal(res.status, 400, email);
-    assert.deepEqual(await res.json(), { status: 'invalid' });
+    await stop(disabled.child);
   }
 });
 
-test('pretends to subscribe bots that fill the honeypot, but stores nothing', async () => {
-  const res = await subscribe({ email: 'bot@example.com', website: 'http://spam.example' });
-  assert.equal(res.status, 201);
-  assert.ok(!(await exported()).includes('"bot@example.com"'));
+// Start old schemas as Railway would, with people already on the list.
+test('preserves legacy records from before optional answer and source columns existed', async () => {
+  for (const columns of ['', ', use_case TEXT']) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vishot-old-'));
+    let legacy;
+    try {
+      const db = new DatabaseSync(path.join(directory, 'waitlist.db'));
+      db.exec(`CREATE TABLE subscribers (email TEXT PRIMARY KEY, created_at TEXT NOT NULL${columns});`);
+      db.prepare('INSERT INTO subscribers (email, created_at) VALUES (?, ?)')
+        .run('veteran@example.com', '2026-10-01T12:00:00Z');
+      db.close();
+      legacy = await start({ directory });
+      const res = await exported(legacy.base);
+      assert.equal(res.status, 200);
+      assert.equal(await res.text(), 'email,created_at,use_case,source\n"veteran@example.com",2026-10-01T12:00:00Z,,\n');
+    } finally {
+      if (legacy) await stop(legacy.child);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }
 });
 
-test('answers a form posted without JavaScript with a page', async () => {
-  const res = await subscribe({ email: 'nojs@example.com' }, { json: false });
-  assert.equal(res.status, 201);
-  assert.match(res.headers.get('content-type'), /text\/html/);
-  assert.match(await res.text(), /on the list/);
-});
-
-test('rate limits one address after five attempts', async () => {
-  const statuses = [];
-  for (let i = 0; i < 6; i++) statuses.push((await subscribe({ email: `burst${i}@example.com` }, { from: '10.9.9.9' })).status);
-  assert.deepEqual(statuses, [201, 201, 201, 201, 201, 429]);
-});
-
-test('only accepts POST on the subscribe endpoint', async () => {
-  assert.equal((await fetch(`${base}/api/subscribe`)).status, 405);
-});
-
-test('hides the export without the right token', async () => {
-  assert.equal((await fetch(`${base}/api/export.csv`)).status, 404);
-  const wrong = await fetch(`${base}/api/export.csv`, { headers: { Authorization: 'Bearer wrong' } });
-  assert.equal(wrong.status, 404);
-});
-
-test('escapes quotes and commas in the export', async () => {
-  await subscribe({ email: '"a,b"@example.com' });
-  const res = await fetch(`${base}/api/export.csv`, { headers: { Authorization: `Bearer ${TOKEN}` } });
-  assert.match(await res.text(), /^"""a,b""@example.com",/m);
-});
-
-test('keeps the list across a restart, as across a deploy', async () => {
-  await subscribe({ email: 'survivor@example.com' });
+test('keeps existing records unchanged across a restart, as across a deploy', async () => {
   await stop(server);
   ({ child: server, base } = await start());
-  assert.ok((await exported()).includes('"survivor@example.com"'));
+  assert.equal(await (await exported()).text(), expectedCsv);
 });

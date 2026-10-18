@@ -1,4 +1,4 @@
-// Serves the landing page and stores waitlist signups in SQLite.
+// Serves the landing page and retains authenticated export of existing subscribers.
 // Railway runs this with `site/` as the service root and a volume attached; it sets
 // RAILWAY_VOLUME_MOUNT_PATH to where the volume is mounted. Locally the database sits next to this file.
 
@@ -14,6 +14,7 @@ const { DatabaseSync } = require('node:sqlite');
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 const EXPORT_TOKEN = process.env.EXPORT_TOKEN || '';
 
+// Keep the existing location and schema: signup retirement must not discard records.
 const db = new DatabaseSync(path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH || __dirname, 'waitlist.db'));
 db.exec(`
   PRAGMA journal_mode = WAL;
@@ -22,16 +23,12 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
   );
 `);
-// Columns added after the first deploy, so existing databases get them here: what people
-// screenshot most (an optional answer), and which link brought them (`?ref=`).
+// Preserve export compatibility with databases predating these optional columns.
 for (const column of ['use_case', 'source']) {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('subscribers') WHERE name = ?").get(column)) {
     db.exec(`ALTER TABLE subscribers ADD COLUMN ${column} TEXT`);
   }
 }
-const insert = db.prepare('INSERT INTO subscribers (email, use_case, source) VALUES (?, ?, ?) ON CONFLICT (email) DO NOTHING');
-// Someone who was already on the list can still answer, once; a later answer never replaces it.
-const fill = db.prepare('UPDATE subscribers SET use_case = COALESCE(use_case, ?), source = COALESCE(source, ?) WHERE email = ?');
 const all = db.prepare('SELECT email, created_at, use_case, source FROM subscribers ORDER BY created_at');
 
 // ---------- Static files ----------
@@ -59,110 +56,8 @@ const files = new Map(PUBLIC.map(name => [
   },
 ]));
 
-// ---------- Waitlist ----------
-
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-// The choices in the form's dropdown (index.html), word for word. Anything else is dropped rather
-// than stored, and the answer is optional, so it never fails a sign-up.
-const USES = ['Whole screen', 'Bugs and errors', 'Parts of a window', 'Code and terminals', 'Web pages', 'Other'];
-
-// Which link brought someone here: the `ref` of vishot.dev/?ref=reddit, whatever it says. It is
-// only ever read back from the export, so it's kept short and tidy (lowercase, one line, 64
-// characters) rather than restricted; exportCsv() makes it safe to open in a spreadsheet.
-function source(fields) {
-  const ref = (fields.get('ref') || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-  return Array.from(ref).slice(0, 64).join('') || null;
-}
-
-function useCase(fields) {
-  const choice = fields.get('use');
-  if (!USES.includes(choice)) return null;
-  if (choice !== 'Other') return choice;
-  const text = (fields.get('use_other') || '').replace(/\s+/g, ' ').trim().slice(0, 120);
-  return text ? `Other: ${text}` : 'Other';
-}
-
-// Five attempts per address per ten minutes, kept in memory: one instance, and a restart
-// forgetting the counts is harmless.
-const WINDOW_MS = 10 * 60 * 1000;
-const MAX_ATTEMPTS = 5;
-const attempts = new Map();
-
-function limited(ip) {
-  const now = Date.now();
-  const recent = (attempts.get(ip) || []).filter(t => now - t < WINDOW_MS);
-  recent.push(now);
-  attempts.set(ip, recent);
-  return recent.length > MAX_ATTEMPTS;
-}
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, times] of attempts) {
-    if (times.every(t => now - t >= WINDOW_MS)) attempts.delete(ip);
-  }
-}, WINDOW_MS).unref();
-
-function readBody(req, limit = 2048) {
-  return new Promise((resolve, reject) => {
-    let body = '';
-    req.setEncoding('utf8');
-    req.on('data', chunk => {
-      body += chunk;
-      if (body.length > limit) { reject(new Error('too large')); req.destroy(); }
-    });
-    req.on('end', () => resolve(body));
-    req.on('error', reject);
-  });
-}
-
-async function subscribe(req, res) {
-  // Without JavaScript the browser posts the form and expects a page back, not JSON.
-  const wantsJson = (req.headers.accept || '').includes('application/json');
-  const reply = (code, status, message) => {
-    if (wantsJson) {
-      res.writeHead(code, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status }));
-    } else {
-      res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(`<!doctype html><meta charset="utf-8"><title>Vishot</title><p>${message}</p><p><a href="/">← Back to vishot.dev</a></p>`);
-    }
-  };
-
-  const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress;
-  if (limited(ip)) return reply(429, 'rate_limited', 'Too many attempts. Try again in a few minutes.');
-
-  let fields;
-  try {
-    fields = new URLSearchParams(await readBody(req));
-  } catch {
-    return reply(413, 'invalid', "That doesn't look like an email address.");
-  }
-
-  // Honeypot: people never see the `website` field, form-filling bots do. Pretend it worked.
-  if (fields.get('website')) return reply(201, 'subscribed', "You're on the list.");
-
-  const email = (fields.get('email') || '').trim().toLowerCase();
-  if (email.length > 254 || !EMAIL.test(email)) {
-    return reply(400, 'invalid', "That doesn't look like an email address.");
-  }
-
-  try {
-    const use = useCase(fields);
-    const from = source(fields);
-    if (insert.run(email, use, from).changes) reply(201, 'subscribed', "You're on the list. We'll write when the beta opens.");
-    else {
-      if (use || from) fill.run(use, from, email);
-      reply(200, 'already', "You're already on the list.");
-    }
-  } catch (err) {
-    console.error('subscribe failed:', err.message);
-    reply(500, 'error', "That didn't go through. Try again in a moment.");
-  }
-}
-
-// The whole list as CSV, for `curl -H "Authorization: Bearer $EXPORT_TOKEN"`. Off unless EXPORT_TOKEN is set.
+// ---------- Retained subscriber export ----------
+// Off unless EXPORT_TOKEN is set. Public subscription intake has been retired.
 function exportCsv(req, res) {
   const given = Buffer.from((req.headers.authorization || '').replace(/^Bearer /, ''));
   const expected = Buffer.from(EXPORT_TOKEN);
@@ -170,11 +65,9 @@ function exportCsv(req, res) {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     return res.end('Not found');
   }
-  // Emails were validated to have no whitespace, but may still contain commas or quotes.
+  // Emails and answers may contain commas or quotes. Sources came from arbitrary
+  // referral links, so defuse leading spreadsheet formula characters as well.
   const quote = s => `"${s.replaceAll('"', '""')}"`;
-  // The answer is one of USES or "Other: " and some text, so it can't start with =, + or @.
-  // The source is whatever the link said, so a spreadsheet must not read it as a formula: one
-  // that starts with = + - or @ gets a leading apostrophe. (The answer can't start with those.)
   const safe = s => (/^[=+\-@]/.test(s) ? `'${s}` : s);
   const rows = all.all().map(r => `${quote(r.email)},${r.created_at},${r.use_case ? quote(r.use_case) : ''},${r.source ? quote(safe(r.source)) : ''}`);
   res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -183,7 +76,7 @@ function exportCsv(req, res) {
 
 // ---------- Server ----------
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   res.setHeader('X-Content-Type-Options', 'nosniff');
 
@@ -192,11 +85,6 @@ const server = http.createServer(async (req, res) => {
   if (host.startsWith('www.')) {
     res.writeHead(301, { Location: `https://${host.slice(4)}${url.pathname}${url.search}` });
     return res.end();
-  }
-
-  if (url.pathname === '/api/subscribe') {
-    if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST' }); return res.end(); }
-    return subscribe(req, res);
   }
 
   if (url.pathname === '/api/export.csv' && req.method === 'GET') return exportCsv(req, res);
