@@ -48,6 +48,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
         # Use the same locked Release Please version as the contract tests.
         # release-pr never creates a tag or a GitHub release.
-        run: >-
-          ./node_modules/.bin/release-please release-pr
-          --token "$GH_TOKEN" --repo-url "$GH_REPO" --target-branch main
+        run: node release-pr.mjs

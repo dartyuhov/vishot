@@ -300,14 +300,22 @@ class PublicReleaseTests(unittest.TestCase):
     def test_paginated_assets_and_moving_source_revalidation(self):
         # The release object's embedded assets are deliberately absent. Required
         # files occur after 100 unrelated assets on the dedicated listing API.
+        # Read all pages, then reject the unexpected assets in the six-file contract.
         required = self.assets
         self.assets = [{"name": f"extra-{i}"} for i in range(100)]
         original_open = self.open_url
+        pages = []
         def paginated(request, timeout):
+            pages.append(request.full_url)
             if request.full_url.endswith("/assets?per_page=100&page=2"):
                 return io.BytesIO(json.dumps(required).encode())
             return original_open(request, timeout)
         self.api = self.module.PublicGitHub(paginated)
+        with self.assertRaisesRegex(ValueError, "unexpected release asset set"):
+            self.prepare()
+        self.assertTrue(any(url.endswith("/assets?per_page=100&page=2") for url in pages))
+        self.assets = required
+        self.api = self.module.PublicGitHub(original_open)
         self.assertIn('version "1.2.3"', self.prepare())
         self.mutate_after_download = lambda: setattr(self, "commit", "b" * 40)
         with self.assertRaisesRegex(ValueError, "identity changed"):

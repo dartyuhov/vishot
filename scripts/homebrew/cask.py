@@ -44,11 +44,14 @@ def generate_cask(packages, release, repository, source_commit, lockfile):
     require(all(isinstance(name, str) for name in names) and len(set(names)) == len(names),
             "Invalid or duplicate release asset names")
     assets = {a["name"]: a for a in assets}
+    require(set(assets) == {f"Vishot-{version}-{arch}.dmg{suffix}"
+                            for arch in ("arm64", "x86_64")
+                            for suffix in ("", ".sha256", ".json")},
+            "Incomplete or unexpected release asset set")
     require(isinstance(source_commit, str) and re.fullmatch(r"[0-9a-f]{40}", source_commit),
             "Expected the release tag's resolved full source commit SHA")
     lock_digest = sha256(lockfile)
     digests = {}
-    build = None
     for arch in ("arm64", "x86_64"):
         dmg = Path(packages) / f"Vishot-{version}-{arch}.dmg"
         for suffix in ("", ".sha256", ".json"):
@@ -69,15 +72,10 @@ def generate_cask(packages, release, repository, source_commit, lockfile):
                 f"DMG checksum mismatch: {dmg.name}")
         manifest = json.loads(dmg.with_suffix(".dmg.json").read_text())
         require(isinstance(manifest, dict), f"Invalid manifest: {dmg.name}")
-        for key, expected in {"asset": dmg.name, "sha256": digest, "architecture": arch,
+        for key, expected in {"asset": dmg.name, "sha256": digest, "architecture": arch, "build": version,
                               "version": version, "source_commit": source_commit,
                               "package_resolved_sha256": lock_digest}.items():
             require(manifest.get(key) == expected, f"Manifest {key} mismatch: {dmg.name}")
-        package_build = manifest.get("build")
-        require(isinstance(package_build, str) and
-                re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,2}", package_build), "Invalid build version")
-        require(build is None or build == package_build, "Architecture builds differ")
-        build = package_build
         for key in ("xcode", "swift"):
             require(isinstance(manifest.get(key), str) and manifest[key].strip(),
                     f"Missing manifest {key}: {dmg.name}")

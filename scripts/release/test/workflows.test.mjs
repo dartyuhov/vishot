@@ -96,8 +96,7 @@ test('trusted main pushes generate PRs using a repository-scoped App token, neve
   assert.equal(token.with['permission-issues'], 'write');
   const command = steps.find(step => step.env?.GH_TOKEN);
   assert.equal(command.env.GH_TOKEN, '${{ steps.app-token.outputs.token }}');
-  assert.match(command.run, /release-please release-pr/);
-  assert.match(command.run, /--target-branch main/);
+  assert.equal(command.run, 'node release-pr.mjs');
   assert.doesNotMatch(command.run, /github-release|gh release|git tag/);
   assert.ok(steps.some(step => step.run === 'npm ci --ignore-scripts'));
 });

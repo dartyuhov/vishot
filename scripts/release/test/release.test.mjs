@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
-import { Manifest } from 'release-please';
+import { releaseManifest } from '../release-pr.mjs';
 import { GitHub, approve } from '../publication.mjs';
 
 const root = new URL('../../../', import.meta.url);
@@ -32,7 +32,7 @@ async function releaseRepository(messages, { version, files = ['Sources/Vishot/C
     },
     ...scmOverrides,
   };
-  return Manifest.fromManifest(scm, 'main', undefined, undefined, { logger: quiet });
+  return releaseManifest(scm, 'main', { logger: quiet });
 }
 
 async function candidate(messages, options) {
@@ -91,6 +91,11 @@ test('docs and site changes cannot independently release the app, even with feat
   for (const version of [undefined, '0.1.2']) {
     for (const [message, files] of [
       ['docs: explain installation', ['README.md']],
+      ['feat(docs): improve root README', ['README.md']],
+      ['feat!: replace contribution instructions', ['CONTRIBUTING.md']],
+      ['fix!: revise root notes', ['NEW-GUIDE.MD', 'docs/guide.md', 'site/index.html']],
+      ['feat: revise nested guide', ['scripts/release/README.md']],
+      ['feat!: remove an old guide', ['removed-guide.md']],
       ['chore: update contributors', ['CONTRIBUTING.md']],
       ['feat: add release guide', ['docs/releases/guide.md']],
       ['feat(site): add download chooser', ['site/index.html', 'site/main.js']],
@@ -99,6 +104,13 @@ test('docs and site changes cannot independently release the app, even with feat
       assert.deepEqual(await candidate([message], { version, files }), [], message);
     }
   }
+});
+
+test('a mixed documentation and genuine app change still releases through Release Please', async () => {
+  const [pr] = await candidate(['feat: improve capture and its guide'], {
+    version: '0.1.2', files: ['README.md', 'site/index.html', 'Sources/Vishot/Capturer.swift'],
+  });
+  assert.equal(pr?.version.toString(), '0.2.0');
 });
 
 test('app dependency, packaging, and workflow fixes can explicitly request an app patch', async () => {

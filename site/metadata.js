@@ -1,5 +1,7 @@
 'use strict';
 
+const { architectures, regular, hash, check, names, validateManifest } = require('./release-contract');
+
 const REPOSITORY = 'https://github.com/dartyuhov/vishot';
 const COMMAND = 'brew install --cask dartyuhov/tap/vishot';
 
@@ -17,6 +19,48 @@ function createMetadata({ enabled = process.env.VISHOT_INSTALL_READY === 'true',
   }
 
   const isPublic = repo => repo.private === false && repo.visibility === 'public';
+  async function verifyRelease(release, version) {
+    const expected = names(version);
+    const assets = release.assets;
+    if (!Array.isArray(assets) || assets.length !== expected.length || !expected.every(name =>
+      assets.filter(a => a.name === name && a.state === 'uploaded' && Number.isSafeInteger(a.size) && a.size > 0 &&
+        a.browser_download_url === `${REPOSITORY}/releases/download/${release.tag_name}/${name}` &&
+        /^sha256:[a-f0-9]{64}$/.test(a.digest)).length === 1)) return;
+    const commit = await github(`vishot/commits/${release.tag_name}`);
+    check(/^[a-f0-9]{40}$/.test(commit.sha), 'Invalid source commit');
+    const lock = await github(`vishot/contents/Package.resolved?ref=${commit.sha}`);
+    check(lock.encoding === 'base64' && typeof lock.content === 'string', 'Missing lockfile');
+    const lockHash = hash(Buffer.from(lock.content, 'base64'));
+    async function sidecar(asset) {
+      check(asset.size <= 16384, 'Oversized sidecar');
+      const response = await request(asset.browser_download_url, { signal: AbortSignal.timeout(4000) });
+      check(response.ok, 'Sidecar unavailable');
+      // Bound reads as well as declared metadata; never buffer a DMG here.
+      const chunks = [];
+      let size = 0;
+      for await (const chunk of response.body) {
+        size += chunk.length;
+        check(size <= 16384, 'Oversized sidecar response');
+        chunks.push(chunk);
+      }
+      const bytes = Buffer.concat(chunks);
+      check(bytes.length === asset.size && `sha256:${hash(bytes)}` === asset.digest, 'Sidecar digest/size mismatch');
+      return bytes.toString('utf8');
+    }
+    const links = {}, digests = {};
+    await Promise.all(architectures.map(async architecture => {
+      const asset = `Vishot-${version}-${architecture}.dmg`;
+      const dmg = assets.find(a => a.name === asset);
+      const digest = dmg.digest.slice(7);
+      const [checksum, manifest] = await Promise.all(['.sha256', '.json'].map(suffix =>
+        sidecar(assets.find(a => a.name === asset + suffix))));
+      check(checksum === `${digest}  ${asset}\n`, 'Checksum mismatch');
+      validateManifest(JSON.parse(manifest), { asset, architecture, version, digest, source: commit.sha, lockHash });
+      links[architecture] = dmg.browser_download_url;
+      digests[architecture] = digest;
+    }));
+    return { links, digests };
+  }
   async function installation() {
     if (!enabled) return { ready: false };
     const [repo, tap, file] = await Promise.all([
@@ -29,18 +73,13 @@ function createMetadata({ enabled = process.env.VISHOT_INSTALL_READY === 'true',
       const releases = await github(`vishot/releases?per_page=100&page=${page}`);
       if (!Array.isArray(releases)) throw new Error('Invalid releases');
       for (const release of releases) {
-        const version = /^v?(\d+\.\d+\.\d+)$/.exec(release.tag_name)?.[1];
-        if (!version || release.draft !== false || release.prerelease !== false || !release.published_at ||
+        const version = typeof release.tag_name === 'string' && release.tag_name.startsWith('v') ? release.tag_name.slice(1) : '';
+        if (!regular.test(version) || release.draft !== false || release.prerelease !== false || !release.published_at ||
           release.html_url !== `${REPOSITORY}/releases/tag/${release.tag_name}`) continue;
-        const links = {};
-        for (const arch of ['arm64', 'x86_64']) {
-          const name = `Vishot-${version}-${arch}.dmg`;
-          const assets = (release.assets || []).filter(asset => asset.name === name && asset.state === 'uploaded' && asset.size > 0 &&
-            asset.browser_download_url === `${REPOSITORY}/releases/download/${release.tag_name}/${name}`);
-          if (assets.length === 1) links[arch] = assets[0].browser_download_url;
-        }
-        if (links.arm64 && links.x86_64) {
-          complete = { ready: true, version, command: COMMAND, release: release.html_url, ...links };
+        const verified = await verifyRelease(release, version);
+        if (verified) {
+          complete = { ready: true, version, command: COMMAND, release: release.html_url, ...verified.links };
+          complete.digests = verified.digests;
           break;
         }
       }
@@ -50,11 +89,13 @@ function createMetadata({ enabled = process.env.VISHOT_INSTALL_READY === 'true',
     const cask = Buffer.from(file.content, 'base64').toString('utf8');
     // Verify the owned public cask targets this exact release and both architectures. The
     // explicit launch switch still requires the installation/hardware checks in ticket .6.
-    if (!cask.includes(`version "${complete.version}"`) ||
+    const checksums = /^\s*sha256\s+arm:\s*"([a-f0-9]{64})",\s*intel:\s*"([a-f0-9]{64})"\s*$/m.exec(cask);
+    if (!checksums || checksums[1] !== complete.digests.arm64 || checksums[2] !== complete.digests.x86_64 ||
+      !cask.includes(`version "${complete.version}"`) ||
       !/arch\s+arm:\s*"arm64",\s*intel:\s*"x86_64"/.test(cask) ||
-      !/sha256\s+arm:\s*"[a-f0-9]{64}",\s*intel:\s*"[a-f0-9]{64}"/.test(cask) ||
       !cask.includes(`url "${REPOSITORY}/releases/download/v#{version}/Vishot-#{version}-#{arch}.dmg"`) ||
       !cask.includes('depends_on macos: ">= :sonoma"') || !cask.includes('app "Vishot.app"')) return { ready: false };
+    delete complete.digests;
     return complete;
   }
 
@@ -86,12 +127,21 @@ function createMetadata({ enabled = process.env.VISHOT_INSTALL_READY === 'true',
     install,
     async page(html) {
       const value = await install();
-      if (!value.ready) return html;
-      return html.replace('data-install-controls hidden', 'data-install-controls')
-        .replace('data-install-status>', 'data-install-status hidden>')
-        .replace('data-brew-command></code>', `data-brew-command>${COMMAND}</code>`)
-        .replace('data-arm64 href="/download"', `data-arm64 href="${value.arm64}"`)
-        .replace('data-x86-64 href="/download"', `data-x86-64 href="${value.x86_64}"`);
+      const slots = {
+        INSTALL_STATUS: value.ready ? ' hidden' : '',
+        INSTALL_CONTROLS: value.ready ? '' : ' hidden',
+        BREW_COMMAND: value.ready ? COMMAND : '',
+        ARM64_URL: value.ready ? value.arm64 : '/download',
+        X86_64_URL: value.ready ? value.x86_64 : '/download',
+      };
+      // Validate every slot before substituting anything. Template drift must
+      // never expose a half-enabled installer or leak unresolved placeholders.
+      if (Object.keys(slots).some(key => html.split(`{{${key}}}`).length !== 2) ||
+        [...html.matchAll(/{{([^{}]+)}}/g)].some(([, key]) => !Object.hasOwn(slots, key))) {
+        return '<!doctype html><html lang="en"><title>Vishot</title><p>Installation temporarily unavailable.</p></html>';
+      }
+      const escape = text => text.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+      return html.replace(/{{([^{}]+)}}/g, (_, key) => escape(slots[key]));
     },
     async handle(req, res) {
       const route = new URL(req.url, 'http://localhost').pathname;

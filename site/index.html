@@ -49,10 +49,10 @@
         </a>
 
         <div id="install" class="installer" aria-label="Get Vishot">
-          <p class="install-status" data-install-status>Public installation is not enabled. Release and Homebrew availability are being verified.</p>
-          <div data-install-controls hidden>
+          <p class="install-status" data-install-status{{INSTALL_STATUS}}>Public installation is not enabled. Release and Homebrew availability are being verified.</p>
+          <div data-install-controls{{INSTALL_CONTROLS}}>
             <div class="install-actions">
-              <div class="brew"><span class="shell-prompt" aria-hidden="true">$</span><code tabindex="0" aria-label="Homebrew install command" data-brew-command></code><button type="button" data-copy-command hidden>Copy</button></div>
+              <div class="brew"><span class="shell-prompt" aria-hidden="true">$</span><code tabindex="0" aria-label="Homebrew install command" data-brew-command>{{BREW_COMMAND}}</code><button type="button" data-copy-command hidden>Copy</button></div>
               <a class="download" data-download href="/download">Download for Mac</a>
             </div>
             <p class="copy-status" data-copy-status role="status" aria-live="polite"></p>
@@ -201,8 +201,8 @@
     <div class="download-bar"><h2 id="download-title">Choose your Mac</h2><button type="button" data-close-download autofocus>Close <kbd>Esc</kbd></button></div>
     <p id="chip-help">Find your chip in Apple menu → About This Mac. “Chip” means Apple Silicon; “Processor” with Intel means Intel.</p>
     <div class="chip-links">
-      <a data-arm64 href="/download">Apple Silicon <span>M1, M2, M3, M4 and later</span></a>
-      <a data-x86-64 href="/download">Intel <span>Intel-based Macs</span></a>
+      <a data-arm64 href="{{ARM64_URL}}">Apple Silicon <span>M1, M2, M3, M4 and later</span></a>
+      <a data-x86-64 href="{{X86_64_URL}}">Intel <span>Intel-based Macs</span></a>
     </div>
     <p class="install-note">Requires macOS 14 or later.</p>
   </dialog>

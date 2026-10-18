@@ -19,6 +19,7 @@ function packages(version = '0.1.0', commit = sha) {
     files.set(`${asset}.json`, Buffer.from(JSON.stringify({
       asset, sha256: digest(bytes), architecture, version, build: version,
       source_commit: commit, package_resolved_sha256: digest(lock),
+      xcode: 'Xcode 16.4', swift: 'Swift 6.1.2',
     })));
   }
   return files;

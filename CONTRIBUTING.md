@@ -37,8 +37,8 @@ ship an app patch, for example:
 - `fix(packaging): include missing fonts`
 - `fix(release): repair publication`
 
-Changes confined to `docs/` or `site/` are excluded from app releases even with
-feature or breaking titles. Root documentation uses a non-releasing `docs` title.
+Changes confined to `docs/`, `site/`, or Markdown documentation anywhere in the
+repository are excluded from app releases even with feature or breaking titles.
 Keep app and site changes in separate PRs when their release intent differs: a
 mixed PR is evaluated as one squash commit. Non-releasing work can accompany the
 next app release.
