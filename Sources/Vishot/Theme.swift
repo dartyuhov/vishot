@@ -146,6 +146,7 @@ struct EditorStyle {
 }
 
 struct HistoryStyle {
+    let backdrop: NSColor
     let background: NSColor
     let selected: NSColor
     let separator: NSColor
@@ -154,6 +155,9 @@ struct HistoryStyle {
     let font: NSFont
     let queryFont: NSFont
     let rowCornerRadius: CGFloat
+    let outline: OutlineTreatment
+    let selectedWidth: CGFloat
+    let borderWidth: CGFloat
 }
 
 struct SettingsStyle {
@@ -268,9 +272,12 @@ enum ThemeCatalog {
                 cropShadow: NSColor(white: 0, alpha: 0.35), cropShadowRadius: clean ? 3 : 0,
                 cropShadowOffset: CGSize(width: clean ? 0 : 3, height: -3),
                 caretBorder: NSColor(white: 1, alpha: 0.8), caretBorderWidth: 0.5, swatchRing: 2),
-            history: HistoryStyle(background: surface, selected: Palette.accent, separator: line,
+            history: HistoryStyle(backdrop: clean ? surface : NSColor(white: 0, alpha: 0.78),
+                background: clean ? raised : surface, selected: Palette.accent, separator: line,
                 text: .white, muted: muted, font: clean ? .systemFont(ofSize: 14) : Fonts.mono(14),
-                queryFont: clean ? .systemFont(ofSize: 13) : Fonts.mono(13), rowCornerRadius: clean ? 6 : 0),
+                queryFont: clean ? .systemFont(ofSize: 13) : Fonts.mono(13), rowCornerRadius: clean ? 6 : 0,
+                outline: clean ? .rounded(radius: 6) : .pixel(corner: 4), selectedWidth: clean ? 2 : 4,
+                borderWidth: clean ? 1 : 2),
             settings: SettingsStyle(usesNativeAppearance: !clean, background: surface, text: text,
                 muted: muted, accent: Palette.accent, font: .systemFont(ofSize: 13)),
             annotation: AnnotationStyle(treatment: clean ? .vector : .cells, font: font,
