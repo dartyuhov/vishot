@@ -15,7 +15,6 @@ final class Capturer {
     private var contentTask: Task<SCShareableContent, Error>?
     /// Must stay alive until the clipboard is taken over, so images can be encoded on paste.
     private var provider: ImageProvider?
-    var watermark = true
 
     /// SCShareableContent can take tens of milliseconds. Starting it when the overlay opens
     /// hides that cost behind the time you spend choosing a window.
@@ -56,10 +55,10 @@ final class Capturer {
     }
 
     /// Puts the image on the clipboard. Encoding waits until something pastes.
-    func copy(_ image: CGImage, scale: CGFloat, watermark: Bool? = nil) {
+    func copy(_ image: CGImage, scale: CGFloat, output: OutputStyle) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        let provider = ImageProvider(output: ImageOutput(image: image, scale: scale, watermark: watermark ?? self.watermark))
+        let provider = ImageProvider(output: ImageOutput(image: image, scale: scale, output: output))
         let item = NSPasteboardItem()
         item.setDataProvider(provider, forTypes: [.png, .tiff])
         pasteboard.writeObjects([item])
@@ -67,8 +66,8 @@ final class Capturer {
     }
 
     /// Writes a PNG in the background. If that fails the image goes to the clipboard, so it isn't lost.
-    func save(_ image: CGImage, scale: CGFloat, to url: URL, watermark: Bool? = nil, completion: (() -> Void)? = nil) {
-        let output = ImageOutput(image: image, scale: scale, watermark: watermark ?? self.watermark)
+    func save(_ image: CGImage, scale: CGFloat, to url: URL, output style: OutputStyle, completion: (() -> Void)? = nil) {
+        let output = ImageOutput(image: image, scale: scale, output: style)
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 guard let data = output.data(type: .png) else {
@@ -80,7 +79,7 @@ final class Capturer {
                 NSLog("Vishot save to \(url.path) failed: \(error)")
                 DispatchQueue.main.async {
                     NSSound.beep()
-                    self.copy(image, scale: scale, watermark: output.watermark)
+                    self.copy(image, scale: scale, output: style)
                     completion?()
                 }
             }
@@ -125,16 +124,21 @@ private final class ImageProvider: NSObject, NSPasteboardItemDataProvider {
 }
 
 /// Immutable output preferences, with pixels prepared only on paste/save.
+struct OutputStyle {
+    let watermark: Bool
+    let style: WatermarkStyle
+}
+
 final class ImageOutput {
     private let image: CGImage
     private let scale: CGFloat
-    let watermark: Bool
-    private lazy var marked = watermark ? Watermark.apply(to: image, scale: scale) : image
+    private let output: OutputStyle
+    private lazy var marked = output.watermark ? Watermark.apply(to: image, scale: scale, style: output.style) : image
 
-    init(image: CGImage, scale: CGFloat, watermark: Bool) {
+    init(image: CGImage, scale: CGFloat, output: OutputStyle) {
         self.image = image
         self.scale = scale
-        self.watermark = watermark
+        self.output = output
     }
 
     func data(type: UTType) -> Data? { ImageEncoding.data(marked, scale: scale, type: type) }

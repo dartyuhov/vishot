@@ -58,19 +58,34 @@ enum Watermark {
         else { return image }
 
         if case .systemText = style.treatment {
-            let plate = CGPath(roundedRect: badge, cornerWidth: style.plate.cornerRadius,
-                               cornerHeight: style.plate.cornerRadius, transform: nil)
+            // Reserve the shadow inside the measured badge so placement and the small-image
+            // rule include it, just as they do for Pixel's hard shadow.
+            let radius = style.plate.shadowRadius
+            let offset = style.plate.shadowOffset
+            let plateRect = CGRect(x: badge.minX + radius + max(0, -offset.width),
+                y: badge.minY + radius + max(0, offset.height),
+                width: badge.width - 2 * radius - abs(offset.width),
+                height: badge.height - 2 * radius - abs(offset.height))
+            let plate = CGPath(roundedRect: plateRect, cornerWidth: style.plate.cornerRadius,
+                                cornerHeight: style.plate.cornerRadius, transform: nil)
+            context.saveGState()
+            context.clip(to: badge)
             context.setShouldAntialias(true)
+            // Quartz shadows use device units and y-up offsets, independent of the CTM.
+            context.setShadow(offset: CGSize(width: offset.width * scale, height: offset.height * scale),
+                              blur: radius * scale, color: style.plate.shadow.cgColor)
             context.setFillColor(style.plate.background.cgColor)
             context.addPath(plate)
             context.fillPath()
+            context.restoreGState()
             let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [
                 .font: style.font,
                 NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true,
             ]))
             context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
-            context.textPosition = CGPoint(x: badge.minX + style.padding.width,
-                y: badge.minY + style.padding.height + style.font.ascender)
+            context.setShouldAntialias(true)
+            context.textPosition = CGPoint(x: plateRect.minX + style.padding.width,
+                y: plateRect.minY + style.padding.height + style.font.ascender)
             context.setFillColor(style.text.cgColor)
             CTLineDraw(line, context)
             return context.makeImage() ?? image
@@ -107,8 +122,8 @@ enum Watermark {
             height = CGFloat(glyphHeight + 2 * padding.y + shadowOffset) * cell
         case .systemText:
             let textSize = HUD.textSize(text, font: style.font)
-            width = textSize.width + 2 * style.padding.width
-            height = textSize.height + 2 * style.padding.height
+            width = textSize.width + 2 * style.padding.width + 2 * style.plate.shadowRadius + abs(style.plate.shadowOffset.width)
+            height = textSize.height + 2 * style.padding.height + 2 * style.plate.shadowRadius + abs(style.plate.shadowOffset.height)
         }
         guard 2 * (width + style.margin) <= imageSize.width, 2 * (height + style.margin) <= imageSize.height else { return nil }
         return CGRect(x: imageSize.width - style.margin - width, y: imageSize.height - style.margin - height, width: width, height: height)
