@@ -68,6 +68,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         set { capturer.watermark = newValue }
     }
     private let elements = ElementCatalog()
+    private let accessibility = AccessibilityAvailability()
     private let raiser = WindowRaiser()
     private lazy var sourcePreparation = FrozenSourcePreparation(
         waitForRaise: { [raiser] in await raiser.waitForPendingRaise() },
@@ -118,6 +119,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     override init() {
         super.init()
+        accessibility.onChange = { [weak self] allowed in
+            guard let self else { return }
+            accessibilityAvailable = allowed
+            if isShowing { render() }
+        }
+        accessibility.start()
         reusableBrowser = HistoryBrowser(library: historyLibrary)
         raiser.onKey = { [weak self] in $0.type == .keyDown ? self?.handle($0) : self?.keyUp($0) }
         raiser.onActivated = { [weak self] in
@@ -226,7 +233,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         currentWindow = WindowCatalog.initialSelection(in: windows, frontPID: frontPID) ?? 0
         status = ""
         hoverStatus = nil
-        accessibilityAvailable = elements.isTrusted()
+        accessibilityAvailable = accessibility.isAllowed
         enterWindowMode()
         isShowing = true
         onSessionChange?(true)

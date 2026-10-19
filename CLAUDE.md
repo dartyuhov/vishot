@@ -62,7 +62,7 @@ Flow: `main.swift` → `AppDelegate` registers a `HotKey` and status-bar menu �
 
 ### Performance
 
-Latency is the main design constraint, and the README's "Speed notes" describe the intended trade-offs. Keep the hotkey-to-overlay path free of ScreenCaptureKit/AX calls, per-show allocations of windows, and eager image encoding. Nothing of the editor runs before ⇧↵; its layers are built with the panels, export happens only on finish, and copy stays lazy. AX runs only after `f`. `DisplayCatalog` runs only on `G` and `v`.
+Latency is the main design constraint, and the README's "Speed notes" describe the intended trade-offs. Keep the hotkey-to-overlay path free of ScreenCaptureKit/AX calls, per-show allocations of windows, and eager image encoding. Nothing of the editor runs before ⇧↵; its layers are built with the panels, export happens only on finish, and copy stays lazy. AX element discovery runs only after `f`; window raising runs on keyboard navigation. `AccessibilityAvailability` refreshes trust on a background serial queue every 0.5 s and publishes a main-thread snapshot for picker startup and HUD updates. Setup and Settings read live permission status; `f` still live-checks trust without prompting. `DisplayCatalog` runs only on `G` and `v`.
 
 ## Agent skills
 
