@@ -39,21 +39,15 @@ enum AnnotationRenderer {
             context.setStrokeColor(color.cgColor)
             context.stroke(rect)
         case let .arrow(from, to, color):
-            let length = hypot(to.x - from.x, to.y - from.y)
-            guard length > 0 else { return }
-            let unit = CGVector(dx: (to.x - from.x) / length, dy: (to.y - from.y) / length)
-            let head = min(style.headLength, length)
-            let base = CGPoint(x: to.x - unit.dx * head, y: to.y - unit.dy * head)
+            guard let head = arrowHead(from: from, to: to, style: style) else { return }
             context.setStrokeColor(color.cgColor)
             context.move(to: from)
-            context.addLine(to: base)
+            context.addLine(to: head.base)
             context.strokePath()
             context.setFillColor(color.cgColor)
             context.move(to: to)
-            context.addLine(to: CGPoint(x: base.x - unit.dy * head * style.headSpread,
-                                       y: base.y + unit.dx * head * style.headSpread))
-            context.addLine(to: CGPoint(x: base.x + unit.dy * head * style.headSpread,
-                                       y: base.y - unit.dx * head * style.headSpread))
+            context.addLine(to: head.left)
+            context.addLine(to: head.right)
             context.closePath()
             context.fillPath()
         case let .text(text, at, color):
@@ -63,14 +57,18 @@ enum AnnotationRenderer {
 
     /// A one-cell line with a filled triangle head at `to`.
     private static func arrowCells(from: CGPoint, to: CGPoint, style: AnnotationStyle) -> [PixelArt.Cell] {
+        guard let head = arrowHead(from: from, to: to, style: style) else { return [] }
+        return PixelArt.line(from: from, to: to) + PixelArt.triangle(to, head.left, head.right)
+    }
+
+    private static func arrowHead(from: CGPoint, to: CGPoint, style: AnnotationStyle) -> (base: CGPoint, left: CGPoint, right: CGPoint)? {
         let length = hypot(to.x - from.x, to.y - from.y)
-        guard length > 0 else { return [] }
+        guard length > 0 else { return nil }
         let unit = CGVector(dx: (to.x - from.x) / length, dy: (to.y - from.y) / length)
         let head = min(style.headLength, length)
         let base = CGPoint(x: to.x - unit.dx * head, y: to.y - unit.dy * head)
         let spread = head * style.headSpread
-        return PixelArt.line(from: from, to: to) + PixelArt.triangle(
-            to,
+        return (base,
             CGPoint(x: base.x - unit.dy * spread, y: base.y + unit.dx * spread),
             CGPoint(x: base.x + unit.dy * spread, y: base.y - unit.dx * spread)
         )

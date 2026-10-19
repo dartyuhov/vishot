@@ -6,14 +6,14 @@ source and test evidence from checks that require a person and display access.
 
 ## Environment and automated results
 
-Checks ran on October 19, 2026, on arm64 macOS 26.7.1 (25G241), from the final
-theme worktree based on integration commit `490a443`.
+Checks ran on October 19, 2026, on arm64 macOS 26.7.1 (25G241), from the review
+worktree `vishot-themes-review`, based on integration commit `67b63ba`.
 
 - `swift build`: passed.
-- `swift test --force-resolved-versions`: 188 XCTest tests passed, zero failures.
+- `swift test --force-resolved-versions`: 187 XCTest tests passed, zero failures.
 - `./scripts/build.sh`: release bundle built with the default Apple Development
   identity; the script's `codesign --verify --deep --strict` passed.
-- Bundle location: `build/Vishot.app` in the final theme worktree. This build
+- Bundle location: `build/Vishot.app` in the review worktree. This build
   was not installed or launched; the existing installed app was not replaced.
 
 The new history regression first failed on the integrated implementation:
@@ -26,13 +26,33 @@ Existing tests cover Pixel cell edges and shadows, Clean vector edges, multiline
 text and caret placement, crop fidelity, and output at 1x and 2x. Settings tests
 cover persistence, conservative TOML edits, invalid values, reloads, and session
 deferral. History tests cover legacy metadata, unsupported styles, re-editing,
-undo/redo, revision identity, search, loading/error/empty feedback, and stored
-preview preservation. Completion tests exercise delayed PNG/TIFF data, real
+undo/redo, revision identity, search, read errors, and stored preview preservation.
+Completion tests exercise delayed PNG/TIFF data, real
 file saves, save failures, Save As cancellation, and replaced sessions.
 
 These tests use controlled images and AppKit objects. They don't establish
 physical-display legibility, live capture permissions, or signed GUI behavior.
 Raw test binaries can use fallback fonts rather than bundled Pixel fonts.
+
+## Review fixes
+
+The standards review resulted in four focused changes:
+
+- Remove the two new live-window theme tests. Existing Settings tests cover
+  session deferral, and a display-independent history read test now verifies
+  stored preview pixels and bytes across a deferred theme change for both
+  markup styles. Browser navigation and loading/error/empty presentation remain
+  manual checks below. The two pre-existing browser lifetime tests remain.
+- Share editor layer appearance application between construction and theme
+  preparation. Preparing the already-applied theme retains the existing toolbar
+  layouts instead of rebuilding them at initial panel preparation.
+- Persist the optional annotation style as a typed `ThemeID`, keeping schema 1
+  and the same JSON strings. Only missing metadata defaults to Pixel; unknown,
+  malformed, and explicit null values use the unsupported-entry error. Existing
+  history round-trip and legacy/error tests pass.
+- Share arrowhead geometry between Pixel and vector drawing while retaining
+  each treatment's shaft and rendering behavior. Existing rendered-output
+  checks at 1x and 2x pass.
 
 ## Integration audit
 

@@ -19,9 +19,9 @@ struct HistoryEntry: Codable, Equatable {
     var undo: [EditSnapshot]
     var recognizedText: String?
     /// Optional for schema-1 compatibility. Unknown present values are rejected by the store.
-    var annotationStyle: String?
+    var annotationStyle: ThemeID?
 
-    var annotationStyleID: ThemeID { ThemeID(rawValue: annotationStyle ?? "pixel") ?? .pixel }
+    var annotationStyleID: ThemeID { annotationStyle ?? .pixel }
 
     var searchFields: [String] {
         // Fully visible annotation strings are exact searchable data even before OCR completes.
@@ -51,8 +51,7 @@ extension HistoryEntry {
         undo = try fields.decode([EditSnapshot].self, forKey: .undo)
         recognizedText = try fields.decodeIfPresent(String.self, forKey: .recognizedText)
         if fields.contains(.annotationStyle) {
-            guard let value = try? fields.decode(String.self, forKey: .annotationStyle),
-                  ThemeID(rawValue: value) != nil else {
+            guard let value = try? fields.decode(ThemeID.self, forKey: .annotationStyle) else {
                 throw SettingsError(message: "Unsupported History entry \(id).")
             }
             annotationStyle = value
@@ -84,8 +83,7 @@ final class HistoryStore {
     private func metadata(_ id: UUID) -> URL { folder(id).appendingPathComponent("entry.json") }
     private func read(_ id: UUID) throws -> HistoryEntry {
         let entry = try JSONDecoder().decode(HistoryEntry.self, from: Data(contentsOf: metadata(id)))
-        guard entry.schema == 1, entry.id == id,
-              entry.annotationStyle == nil || ThemeID(rawValue: entry.annotationStyle!) != nil else {
+        guard entry.schema == 1, entry.id == id else {
             throw SettingsError(message: "Unsupported History entry \(id).")
         }
         guard entry.scale.isFinite, entry.scale > 0 else { throw SettingsError(message: "Invalid History scale.") }
@@ -146,7 +144,7 @@ final class HistoryStore {
         let entry = HistoryEntry(id: previous?.id ?? UUID(), revision: UUID(), createdAt: previous?.createdAt ?? now,
             modifiedAt: now, scale: document.scale, label: previous?.label ?? label,
             windowTitle: previous?.windowTitle ?? windowTitle, snapshot: document.snapshot, undo: undo,
-            annotationStyle: document.annotationStyle.rawValue)
+            annotationStyle: document.annotationStyle)
         let directory = folder(entry.id)
         try files.createDirectory(at: directory, withIntermediateDirectories: true)
         var published = false

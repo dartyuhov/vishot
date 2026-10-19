@@ -48,19 +48,10 @@ final class EditorLayer: NSObject, CALayerDelegate {
         annotations.contentsScale = scale
         annotations.needsDisplayOnBoundsChange = true
         annotations.mask = annotationMask
-        cropHandle.backgroundColor = theme.editor.active.cgColor
-        cropHandle.borderColor = theme.editor.cropped.cgColor
-        cropHandle.borderWidth = theme.editor.cropHandleBorderWidth
-        cropHandle.cornerRadius = theme.editor.cropHandleRadius
-
         cropDim.frame = root.bounds
         outsideDim.frame = root.bounds
-        cropOutline.shadowColor = theme.editor.cropShadow.cgColor
         cropOutline.shadowOpacity = 1
-        cropOutline.shadowRadius = theme.editor.cropShadowRadius
-        cropOutline.shadowOffset = theme.editor.cropShadowOffset
-        caret.borderColor = theme.editor.caretBorder.cgColor
-        caret.borderWidth = theme.editor.caretBorderWidth
+        applyAppearance()
 
         for layer in [image, annotations, cropDim, cropOutline, outsideDim, crosshair, caret, cropHandle,
                       horizontalToolbar.root, verticalToolbar.root, compactToolbar.root] {
@@ -70,6 +61,7 @@ final class EditorLayer: NSObject, CALayerDelegate {
 
     /// Called with reusable panel preparation, off the hotkey path.
     func prepare(theme: ResolvedTheme) {
+        guard self.theme.id != theme.id else { return }
         self.theme = theme
         for hud in [horizontalToolbar, verticalToolbar, compactToolbar] { hud.root.removeFromSuperlayer() }
         horizontalToolbar = EditorToolbar(scale: backingScale, theme: theme)
@@ -77,6 +69,10 @@ final class EditorLayer: NSObject, CALayerDelegate {
         compactToolbar = EditorToolbar(scale: backingScale, layout: .compact, theme: theme)
         toolbar = horizontalToolbar
         for hud in [horizontalToolbar, verticalToolbar, compactToolbar] { root.addSublayer(hud.root) }
+        applyAppearance()
+    }
+
+    private func applyAppearance() {
         cropDim.fillColor = theme.editor.cropDim.cgColor
         outsideDim.fillColor = theme.selection.outsideDim.cgColor
         SelectionStyle.apply(theme.selection, to: crosshair)
