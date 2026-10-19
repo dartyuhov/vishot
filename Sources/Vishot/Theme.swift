@@ -93,8 +93,13 @@ enum OutlineTreatment {
         case let .rounded(radius):
             path.addRoundedRect(in: rect, cornerWidth: radius, cornerHeight: radius)
             let innerRadius = max(0, radius - width)
-            path.addRoundedRect(in: rect.insetBy(dx: width, dy: width),
-                                cornerWidth: innerRadius, cornerHeight: innerRadius)
+            let inner = rect.insetBy(dx: width, dy: width)
+            // Reflect the symmetric inner contour to reverse its winding without changing
+            // its geometry. CALayer.shadowPath uses nonzero fill, regardless of fillRule.
+            let reverse = CGAffineTransform(a: -1, b: 0, c: 0, d: 1,
+                                           tx: inner.minX + inner.maxX, ty: 0)
+            path.addRoundedRect(in: inner, cornerWidth: innerRadius, cornerHeight: innerRadius,
+                                transform: reverse)
         }
         return path
     }
