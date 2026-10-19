@@ -74,7 +74,6 @@ final class ElementCatalog {
     private static let manualAccessibility = "AXManualAccessibility"
     private static let enhancedUserInterface = "AXEnhancedUserInterface"
 
-    private var hasPrompted = false
     private var preparedPIDs: Set<pid_t> = []
     private var enhancedApps: [pid_t: AXUIElement] = [:]
     private var warmUpEnds: [pid_t: Date] = [:]
@@ -85,12 +84,9 @@ final class ElementCatalog {
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), Self.messagingTimeout)
     }
 
-    /// Shows the system prompt the first time in a session, then only checks.
+    /// Permission actions belong to setup and Settings; picker checks never prompt.
     func isTrusted() -> Bool {
-        guard !hasPrompted else { return AXIsProcessTrusted() }
-        hasPrompted = true
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        return AXIsProcessTrustedWithOptions(options)
+        AXIsProcessTrusted()
     }
 
     /// The Accessibility window for a CG window, or nil when the app doesn't expose it.

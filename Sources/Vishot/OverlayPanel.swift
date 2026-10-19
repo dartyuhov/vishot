@@ -10,7 +10,6 @@ private enum Style {
     /// The landing page's button shadow: hard, offset right and down.
     static let labelShadow: CGFloat = 2
 
-    static let hudBottomInset: CGFloat = 24
     /// Fully transparent pixels let clicks through to the windows below, so the panel keeps a trace of tint.
     static let panelBackground = NSColor(white: 0, alpha: 0.01)
 
@@ -44,11 +43,7 @@ final class OverlayPanel: NSPanel {
     private let border = CAShapeLayer()
     private let labelBackground = CALayer()
     private let labelText = CATextLayer()
-    private let hud = CALayer()
-    /// The mode's name and keys, laid out again only when the mode changes.
-    private let hudRow = CALayer()
-    private var hudRowContent: (name: String, keys: [HUDKey]) = ("", [])
-    private let hudStatus: CATextLayer
+    private let hud: PickerHUD
     /// All outlines sit below all hints, so no outline crosses a hint.
     private let hintOutlines = CALayer()
     private let hints = CALayer()
@@ -61,7 +56,7 @@ final class OverlayPanel: NSPanel {
 
     init(screen: NSScreen) {
         editor = EditorLayer(size: screen.frame.size, scale: screen.backingScaleFactor)
-        hudStatus = HUD.makeStatus(scale: screen.backingScaleFactor)
+        hud = PickerHUD(scale: screen.backingScaleFactor)
         super.init(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         setFrame(screen.frame, display: false)
         isOpaque = false
@@ -93,12 +88,6 @@ final class OverlayPanel: NSPanel {
         HUD.configure(labelText, font: Style.labelFont, color: .white, scale: screen.backingScaleFactor)
         labelBackground.addSublayer(labelText)
 
-        HUD.stylePanel(hud)
-        hud.isHidden = true
-        hudRow.masksToBounds = true
-        hud.addSublayer(hudRow)
-        hud.addSublayer(hudStatus)
-
         regionDim.frame = view.bounds
         regionDim.isHidden = true
         crosshair.isHidden = true
@@ -111,7 +100,7 @@ final class OverlayPanel: NSPanel {
         view.layer?.addSublayer(hintOutlines)
         view.layer?.addSublayer(hints)
         view.layer?.addSublayer(crosshair)
-        view.layer?.addSublayer(hud)
+        view.layer?.addSublayer(hud.root)
         view.layer?.addSublayer(editor.root)
     }
 
@@ -164,53 +153,14 @@ final class OverlayPanel: NSPanel {
         labelText.string = label
     }
 
-    /// The mode's name and keys, and an optional status line below them, at the bottom centre of the screen.
+    /// The mode's name and keys, and optional status above them, at the bottom centre of the screen.
     func showHUD(name: String, keys: [HUDKey], status: String, visible: Bool) {
-        hud.isHidden = !visible
-        guard visible else { return }
-
-        if hudRowContent.name != name || hudRowContent.keys != keys {
-            layOutHUDRow(name: name, keys: keys)
-            hudRowContent = (name, keys)
-        }
-        let rowSize = hudRow.bounds.size
-        let statusSize = status.isEmpty ? .zero : HUD.textSize(status, font: HUD.textFont)
-        let statusHeight = status.isEmpty ? 0 : statusSize.height + HUD.lineGap
-        let maxWidth = frame.width - 2 * HUD.padding.width
-        let width = min(max(rowSize.width, statusSize.width), maxWidth)
-        let height = rowSize.height + statusHeight + 2 * HUD.padding.height
-
-        hud.frame = CGRect(
-            x: ((frame.width - width) / 2 - HUD.padding.width).rounded(),
-            y: Style.hudBottomInset,
-            width: width + 2 * HUD.padding.width,
-            height: height
-        )
-        hud.shadowPath = CGPath(rect: hud.bounds, transform: nil)
-        // A row wider than the screen is cut off by the row's own bounds, not the HUD's, so the shadow stays.
-        hudRow.frame = CGRect(x: HUD.padding.width, y: HUD.padding.height + statusHeight, width: min(rowSize.width, width), height: rowSize.height)
-        hudStatus.isHidden = status.isEmpty
-        hudStatus.frame = CGRect(x: HUD.padding.width, y: HUD.padding.height, width: width, height: statusSize.height)
-        hudStatus.string = status
+        hud.show(name: name, keys: keys, status: status, size: frame.size, visible: visible)
     }
 
-    /// The mode's name in the pixel font, then each entry's keys as keycaps followed by what they do,
-    /// in one row sized to fit, centred vertically.
-    private func layOutHUDRow(name: String, keys: [HUDKey]) {
-        hudRow.sublayers?.forEach { $0.removeFromSuperlayer() }
-        let entries = keys.map { HUD.makeEntry($0, scale: backingScaleFactor).layer }
-        let nameHeight = HUD.textSize(name, font: HUD.nameFont).height
-        let height = max(nameHeight, entries.map(\.frame.height).max() ?? 0)
-        let nameLayer = HUD.makeName(name, rowHeight: height, scale: backingScaleFactor)
-        hudRow.addSublayer(nameLayer)
-        var x = nameLayer.frame.width
-        for entry in entries {
-            x += HUD.entryGap
-            entry.frame.origin = CGPoint(x: x, y: ((height - entry.frame.height) / 2).rounded())
-            hudRow.addSublayer(entry)
-            x += entry.frame.width
-        }
-        hudRow.bounds.size = CGSize(width: x, height: height)
+    func hudUnavailableReason(at point: CGPoint) -> String? {
+        guard isVisible, frame.contains(point.flippedBetweenCocoaAndCG) else { return nil }
+        return hud.unavailableReason(at: localPoint(point))
     }
 
     /// Region mode: dims everything around `rect` and shows the cursor, both in Cocoa global space.
@@ -232,7 +182,7 @@ final class OverlayPanel: NSPanel {
     func hidePicker() {
         border.isHidden = true
         labelBackground.isHidden = true
-        hud.isHidden = true
+        hud.root.isHidden = true
         showHints([], typed: 0)
         showRegion(nil, cursor: nil)
     }
