@@ -2,6 +2,73 @@ import XCTest
 @testable import Vishot
 
 final class SettingsTests: XCTestCase {
+    func testThemeStorePersistsReloadsAndDefersWithoutLosingLastGoodSettings() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("config.toml")
+        var registrations = 0
+        let store = SettingsStore(url: url) { _ in registrations += 1; return NSObject() }
+        store.start(watching: false)
+        store.update(theme: .clean)
+        XCTAssertEqual(store.active.theme, .clean)
+        let restarted = SettingsStore(url: url) { _ in NSObject() }
+        restarted.start(watching: false)
+        XCTAssertEqual(restarted.active.theme, .clean)
+        store.setSessionActive(true)
+        store.update(theme: .pixel)
+        XCTAssertEqual(store.configured?.theme, .pixel)
+        XCTAssertEqual(store.active.theme, .clean)
+        // A history-to-editor transition remains the same active session.
+        store.setSessionActive(true)
+        XCTAssertEqual(store.active.theme, .clean)
+        try "theme = 'pixel'\nwatermark = false".write(to: url, atomically: true, encoding: .utf8)
+        store.reload()
+        XCTAssertEqual(store.active.theme, .clean)
+        XCTAssertTrue(store.active.watermark)
+        XCTAssertEqual(store.configured?.theme, .pixel)
+        store.setSessionActive(false)
+        XCTAssertEqual(store.active.theme, .pixel)
+        XCTAssertFalse(store.active.watermark)
+        try "# external\ntheme = 'clean'\nwatermark = false".write(to: url, atomically: true, encoding: .utf8)
+        store.reload()
+        XCTAssertEqual(store.active.theme, .clean)
+        XCTAssertFalse(store.active.watermark)
+        let lastGood = store.active
+        for value in ["'missing'", "false"] {
+            let invalid = "theme = \(value)\nwatermark = true"
+            try invalid.write(to: url, atomically: true, encoding: .utf8)
+            store.reload()
+            store.update(theme: .pixel)
+            XCTAssertEqual(store.active, lastGood)
+            XCTAssertNil(store.configured)
+            XCTAssertNotNil(store.error)
+            XCTAssertEqual(try String(contentsOf: url), invalid)
+        }
+        XCTAssertEqual(registrations, 1, "Theme-only changes must not re-register hotkeys")
+    }
+
+    func testThemeEditsPreserveSourceAndInsertAtRoot() throws {
+        let source = "# café\r\n\"theme\"  = 'pixel' # appearance\r\nwatermark = false\r\n[notes]\r\ntheme = 'unrelated'\r\n"
+        let edited = try AppSettings.edit(source, theme: .clean)
+        XCTAssertEqual(edited, "# café\r\n\"theme\"  = \"clean\" # appearance\r\nwatermark = false\r\n[notes]\r\ntheme = 'unrelated'\r\n")
+        XCTAssertEqual(try AppSettings.parse(edited).theme, .clean)
+        let missing = "# keep\r\n[notes]\r\nx = 'untouched'\r\n"
+        XCTAssertEqual(try AppSettings.edit(missing, theme: .clean), "theme = \"clean\"\r\n" + missing)
+        XCTAssertEqual(try AppSettings.edit(source, theme: .pixel), source)
+        XCTAssertThrowsError(try AppSettings.edit("theme = '''\npixel'''", theme: .clean))
+    }
+
+    func testThemeDefaultsAndValidation() throws {
+        XCTAssertEqual(try AppSettings.parse("").theme, .pixel)
+        XCTAssertEqual(try AppSettings.parse(AppSettings.defaultSource).theme, .pixel)
+        XCTAssertEqual(try AppSettings.parse("theme = 'clean'").theme, .clean)
+        for value in ["'unknown'", "'Clean'", "true", "7", "[]", "{}"] {
+            XCTAssertThrowsError(try AppSettings.parse("theme = \(value)")) { error in
+                XCTAssertTrue(error.localizedDescription.contains("theme"))
+            }
+        }
+    }
+
     func testMultilineClosingQuotesDoNotHideRealInsertionHeader() throws {
         for delimiter in ["\"", "'"] {
             let source = "[notes]\ntext = \(String(repeating: delimiter, count: 3))note\(String(repeating: delimiter, count: 4))\n[history] # real"
@@ -129,9 +196,10 @@ final class SettingsTests: XCTestCase {
         let store = SettingsStore(url: link) { _ in NSObject() }
         store.start(watching: false)
         try "# external change\nwatermark = true\n[shortcut]\nkey = 'K'".write(to: target, atomically: true, encoding: .utf8)
-        store.update(watermark: false)
+        store.update(theme: .clean, watermark: false)
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), target.path)
-        XCTAssertTrue(try String(contentsOf: target).hasPrefix("# external change\nwatermark = false"))
+        XCTAssertEqual(try String(contentsOf: target), "theme = \"clean\"\n# external change\nwatermark = false\n[shortcut]\nkey = 'K'")
+        XCTAssertEqual(store.active.theme, .clean)
         XCTAssertEqual(store.active.shortcut.key, "K")
         XCTAssertFalse(store.active.watermark)
     }
@@ -169,8 +237,8 @@ final class SettingsTests: XCTestCase {
         let store = SettingsStore(url: link) { _ in NSObject() }
         store.start()
         let changed = expectation(description: "Reload symlink target after atomic save")
-        store.onChange = { if !store.active.watermark { changed.fulfill() } }
-        try "watermark = false".write(to: target, atomically: true, encoding: .utf8)
+        store.onChange = { if !store.active.watermark && store.active.theme == .clean { changed.fulfill() } }
+        try "theme = 'clean'\nwatermark = false".write(to: target, atomically: true, encoding: .utf8)
         wait(for: [changed], timeout: 3)
         store.onChange = nil
     }

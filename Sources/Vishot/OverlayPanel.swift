@@ -1,26 +1,5 @@
 import AppKit
 
-private enum Style {
-    /// Also the size of the pixel left out of each corner, as in the logo.
-    static let borderWidth: CGFloat = 4
-    static let color = Palette.accent
-    static let labelFont = Fonts.pixel()
-    static let labelPadding = CGSize(width: 8, height: 2)
-    static let labelInset: CGFloat = 10
-    /// The landing page's button shadow: hard, offset right and down.
-    static let labelShadow: CGFloat = 2
-
-    /// Fully transparent pixels let clicks through to the windows below, so the panel keeps a trace of tint.
-    static let panelBackground = NSColor(white: 0, alpha: 0.01)
-
-    static let hintFont = Fonts.mono(11, bold: true)
-    /// Leaves: yellow hints, no outline.
-    static let hintBackground = Palette.hintLeaf
-    /// Containers: outline and hint share one of these. No yellow, so it stays the mark of a leaf.
-    static let hintPalette = Palette.hintContainers
-    static let hintPadding = CGSize(width: 4, height: 1)
-}
-
 /// A hint and the element it is shown on. `rect` is in Cocoa global space. Containers have a
 /// `colorIndex` and get an outline.
 struct HintMark {
@@ -53,14 +32,18 @@ final class OverlayPanel: NSPanel {
     private let regionDim = SelectionStyle.makeDim()
     private let crosshair = SelectionStyle.makeCrosshair()
     private let editor: EditorLayer
+    private var theme: ResolvedTheme
+    private var style: PickerStyle { theme.picker }
+    private var hudStyle: HUDStyle { theme.hud }
 
-    init(screen: NSScreen) {
+    init(screen: NSScreen, theme: ResolvedTheme) {
+        self.theme = theme
         editor = EditorLayer(size: screen.frame.size, scale: screen.backingScaleFactor)
-        hud = PickerHUD(scale: screen.backingScaleFactor)
+        hud = PickerHUD(scale: screen.backingScaleFactor, style: theme.hud)
         super.init(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         setFrame(screen.frame, display: false)
         isOpaque = false
-        backgroundColor = Style.panelBackground
+        backgroundColor = style.panelBackground
         hasShadow = false
         level = .screenSaver
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
@@ -77,20 +60,18 @@ final class OverlayPanel: NSPanel {
         contentView = view
 
         border.frame = view.bounds
-        border.fillColor = Style.color.cgColor
+        border.fillColor = style.accent.cgColor
         border.fillRule = .evenOdd
 
-        labelBackground.backgroundColor = Style.color.cgColor
-        labelBackground.shadowColor = Palette.hintLeaf.cgColor
-        labelBackground.shadowOpacity = 1
-        labelBackground.shadowRadius = 0
-        labelBackground.shadowOffset = CGSize(width: Style.labelShadow, height: -Style.labelShadow)
-        HUD.configure(labelText, font: Style.labelFont, color: .white, scale: screen.backingScaleFactor)
+        style.label.apply(to: labelBackground)
+        HUD.configure(labelText, font: style.labelFont, color: style.labelText, scale: screen.backingScaleFactor)
         labelBackground.addSublayer(labelText)
 
         regionDim.frame = view.bounds
         regionDim.isHidden = true
         crosshair.isHidden = true
+        regionDim.fillColor = theme.selection.outsideDim.cgColor
+        SelectionStyle.apply(theme.selection, to: crosshair)
 
         view.layer?.addSublayer(regionDim)
         view.layer?.addSublayer(border)
@@ -102,6 +83,22 @@ final class OverlayPanel: NSPanel {
         view.layer?.addSublayer(crosshair)
         view.layer?.addSublayer(hud.root)
         view.layer?.addSublayer(editor.root)
+    }
+
+    /// Called only at startup, screen changes, or an idle preference change.
+    func prepare(theme: ResolvedTheme, modes: [(name: String, keys: [HUDKey])]) {
+        self.theme = theme
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        backgroundColor = style.panelBackground
+        border.fillColor = style.accent.cgColor
+        style.label.apply(to: labelBackground)
+        HUD.configure(labelText, font: style.labelFont, color: style.labelText, scale: backingScaleFactor)
+        hud.prepare(style: hudStyle, modes: modes)
+        regionDim.fillColor = theme.selection.outsideDim.cgColor
+        SelectionStyle.apply(theme.selection, to: crosshair)
+        for layers in hintLayers { styleHint(layers) }
+        CATransaction.commit()
     }
 
     override var canBecomeKey: Bool { true }
@@ -126,28 +123,25 @@ final class OverlayPanel: NSPanel {
 
         // A target that touches the screen edge (always true for displays) draws its border inside,
         // where it stays visible.
-        let outset = local.insetBy(dx: -Style.borderWidth, dy: -Style.borderWidth)
+        let outset = local.insetBy(dx: -style.borderWidth, dy: -style.borderWidth)
         let isInset = bounds.contains(local) && !bounds.contains(outset)
         let outer = isInset ? local : outset
         // A ring, through the even-odd fill: the outer shape and the same shape one border width in.
-        let path = CGMutablePath()
-        path.addPixelRoundedRect(outer, pixel: Style.borderWidth)
-        path.addPixelRoundedRect(outer.insetBy(dx: Style.borderWidth, dy: Style.borderWidth), pixel: Style.borderWidth)
-        border.path = path
+        border.path = style.outline.path(around: outer, width: style.borderWidth)
 
-        let textSize = (label as NSString).size(withAttributes: [.font: Style.labelFont])
-        let maxWidth = max(0, local.width - 2 * Style.labelInset - 2 * Style.labelPadding.width)
+        let textSize = (label as NSString).size(withAttributes: [.font: style.labelFont])
+        let maxWidth = max(0, local.width - 2 * style.labelInset - 2 * style.labelPadding.width)
         let textWidth = min(ceil(textSize.width), maxWidth)
-        let size = CGSize(width: textWidth + 2 * Style.labelPadding.width, height: ceil(textSize.height) + 2 * Style.labelPadding.height)
+        let size = CGSize(width: textWidth + 2 * style.labelPadding.width, height: ceil(textSize.height) + 2 * style.labelPadding.height)
         labelBackground.frame = CGRect(
-            x: local.minX + Style.labelInset,
-            y: local.maxY - Style.labelInset - size.height,
+            x: local.minX + style.labelInset,
+            y: local.maxY - style.labelInset - size.height,
             width: size.width,
             height: size.height
         )
-        labelBackground.shadowPath = CGPath(rect: CGRect(origin: .zero, size: size), transform: nil)
+        labelBackground.shadowPath = style.label.path(in: CGRect(origin: .zero, size: size))
         labelText.frame = CGRect(
-            x: Style.labelPadding.width, y: HUD.textY(Style.labelFont, lineHeight: ceil(textSize.height), in: size.height, scale: backingScaleFactor),
+            x: style.labelPadding.width, y: HUD.textY(style.labelFont, lineHeight: ceil(textSize.height), in: size.height, scale: backingScaleFactor),
             width: textWidth, height: ceil(textSize.height)
         )
         labelText.string = label
@@ -225,13 +219,13 @@ final class OverlayPanel: NSPanel {
             let (outline, background, text) = hintLayers[used]
             used += 1
 
-            let color = mark.colorIndex.map { Style.hintPalette[$0 % Style.hintPalette.count] } ?? Style.hintBackground
+            let color = mark.colorIndex.map { style.hintContainers[$0 % style.hintContainers.count] } ?? style.hintLeaf
             outline.isHidden = mark.colorIndex == nil
             outline.frame = local.insetBy(dx: 1, dy: 1)
             outline.borderColor = color.cgColor
 
-            let size = HUD.textSize(mark.code, font: Style.hintFont)
-            let hintSize = CGSize(width: size.width + 2 * Style.hintPadding.width, height: size.height + 2 * Style.hintPadding.height)
+            let size = HUD.textSize(mark.code, font: style.hintFont)
+            let hintSize = CGSize(width: size.width + 2 * style.hintPadding.width, height: size.height + 2 * style.hintPadding.height)
             let origin = CGPoint(
                 x: min(max(local.minX, 0), bounds.width - hintSize.width),
                 y: min(max(local.maxY - hintSize.height, 0), bounds.height - hintSize.height)
@@ -239,9 +233,9 @@ final class OverlayPanel: NSPanel {
             background.frame = CGRect(origin: origin, size: hintSize)
             background.backgroundColor = color.cgColor
             background.isHidden = false
-            text.frame = CGRect(x: Style.hintPadding.width, y: Style.hintPadding.height, width: size.width, height: size.height)
-            let string = NSMutableAttributedString(string: mark.code, attributes: [.font: Style.hintFont, .foregroundColor: Palette.ink])
-            string.addAttribute(.foregroundColor, value: Palette.ink.withAlphaComponent(0.35), range: NSRange(location: 0, length: min(typed, mark.code.utf16.count)))
+            text.frame = CGRect(x: style.hintPadding.width, y: style.hintPadding.height, width: size.width, height: size.height)
+            let string = NSMutableAttributedString(string: mark.code, attributes: [.font: style.hintFont, .foregroundColor: style.hintText])
+            string.addAttribute(.foregroundColor, value: style.hintText.withAlphaComponent(0.35), range: NSRange(location: 0, length: min(typed, mark.code.utf16.count)))
             text.string = string
         }
         for unused in hintLayers[used...] {
@@ -252,17 +246,25 @@ final class OverlayPanel: NSPanel {
 
     private func makeHintLayer() -> (outline: CALayer, background: CALayer, text: CATextLayer) {
         let outline = CALayer()
-        outline.borderWidth = 2
         hintOutlines.addSublayer(outline)
 
         let background = CALayer()
         background.borderColor = NSColor(white: 0, alpha: 0.4).cgColor
-        background.borderWidth = 0.5
         let text = CATextLayer()
         text.contentsScale = backingScaleFactor
         background.addSublayer(text)
         hints.addSublayer(background)
-        return (outline, background, text)
+        let layers = (outline, background, text)
+        styleHint(layers)
+        return layers
+    }
+
+    private func styleHint(_ layers: (outline: CALayer, background: CALayer, text: CATextLayer)) {
+        layers.outline.borderWidth = style.hintOutlineWidth
+        layers.outline.cornerRadius = style.hintCornerRadius
+        layers.background.borderWidth = style.hintBorderWidth
+        layers.background.cornerRadius = style.hintCornerRadius
+        HUD.configure(layers.text, font: style.hintFont, color: style.hintText, scale: backingScaleFactor)
     }
 }
 

@@ -127,13 +127,13 @@ final class SettingsStore {
     }
 
     /// Edits only the requested preference on fresh source, retaining external edits.
-    func update(watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
+    func update(theme: ThemeID? = nil, watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
                 historyRetention: HistoryRetention? = nil, historyShortcut: CaptureShortcut? = nil,
                 clearHistoryShortcut: Bool = false) {
         do {
             let target = url.resolvingSymlinksInPath()
             let original = try String(contentsOf: target, encoding: .utf8)
-            let edited = try AppSettings.edit(original, watermark: watermark, shortcut: shortcut,
+            let edited = try AppSettings.edit(original, theme: theme, watermark: watermark, shortcut: shortcut,
                 historyRetention: historyRetention, historyShortcut: historyShortcut, clearHistoryShortcut: clearHistoryShortcut)
             guard url.resolvingSymlinksInPath() == target,
                   try String(contentsOf: target, encoding: .utf8) == original else {

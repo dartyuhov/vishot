@@ -78,6 +78,8 @@ struct EditorScene {
 
 /// Edits a capture in place, over the overlay panels. Takes keys and mouse events until it finishes.
 final class EditorController {
+    /// Surrounding UI appearance; document markup style is independent when restoring history.
+    let theme: ResolvedTheme
     enum Tool: CaseIterable, Hashable {
         case arrow, rect, text, crop
 
@@ -148,7 +150,9 @@ final class EditorController {
     /// Refreshed from the rendered toolbar's placement on its host panel.
     var canHideHUD = false
 
-    init(capture: Capture, restored: HistoryDocument? = nil, viewScale: CGFloat = 1) {
+    init(capture: Capture, restored: HistoryDocument? = nil, viewScale: CGFloat = 1,
+         theme: ResolvedTheme = ThemeCatalog.pixel) {
+        self.theme = theme
         document = restored?.document ?? EditDocument(image: capture.image, scale: capture.scale, crop: capture.initialCrop)
         history = EditHistory(snapshots: restored?.undo ?? [])
         self.viewScale = viewScale

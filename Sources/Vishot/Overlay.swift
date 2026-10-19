@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 
 final class OverlayController: NSObject, NSWindowDelegate {
-    private enum Mode {
+    private enum Mode: CaseIterable {
         case window, element, hint, screen, region
 
         var name: String {
@@ -48,6 +48,21 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private var panels: [OverlayPanel] = []
+    private var preparedTheme = ThemeCatalog.pixel
+    /// One immutable resolved value for the entire picker/history/editor lifetime.
+    /// History-to-editor and editor-to-history transitions deliberately retain it.
+    private(set) var sessionTheme: ResolvedTheme?
+
+    func prepareTheme(_ id: ThemeID) {
+        guard !isSessionActive, preparedTheme.id != id else { return }
+        preparedTheme = ThemeCatalog.resolve(id)
+        preparePickerPanels()
+    }
+
+    private func preparePickerPanels() {
+        let modes = Mode.allCases.map { (name: $0.name, keys: $0.keys) }
+        panels.forEach { $0.prepare(theme: preparedTheme, modes: modes) }
+    }
     private var isShowing = false
     private let capturer = Capturer()
     let historyLibrary = HistoryLibrary()
@@ -156,6 +171,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         appToReactivate = NSWorkspace.shared.frontmostApplication
         let browser = reusableBrowser!
         self.browser = browser
+        sessionTheme = preparedTheme
         browser.onClose = { [weak self] in self?.closeHistory() }
         browser.onEdit = { [weak self] in self?.editHistory($0, on: $1) }
         browser.onYank = { [weak self, weak browser] entry in
@@ -201,7 +217,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
             browser.suspend()
             self.isShowing = true
             let capture = Capture(image: loaded.document.image, scale: loaded.document.scale, frame: frame, initialCrop: loaded.document.crop)
-            let editor = EditorController(capture: capture, restored: loaded, viewScale: scale)
+            guard let theme = self.sessionTheme else { self.historyLibrary.release(id); return }
+            let editor = EditorController(capture: capture, restored: loaded, viewScale: scale, theme: theme)
             editor.onFinish = { [weak self] in self?.finishEditing($0, export: $1) }
             editor.onChange = { [weak self] in self?.render() }
             self.editor = editor
@@ -236,6 +253,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         accessibilityAvailable = accessibility.isAllowed
         enterWindowMode()
         isShowing = true
+        sessionTheme = preparedTheme
         onSessionChange?(true)
         render()
         panels.forEach { $0.orderFrontRegardless() }
@@ -249,6 +267,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             historyLibrary.finishSession()
         }
         isShowing = false
+        sessionTheme = nil
         session += 1
         sourcePreparation.cancel()
         isCapturing = false
@@ -324,7 +343,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func startEditing(_ capture: Capture) {
-        let editor = EditorController(capture: capture)
+        guard let theme = sessionTheme else { return }
+        let editor = EditorController(capture: capture, theme: theme)
         editor.onFinish = { [weak self] in self?.finishEditing($0, export: $1) }
         editor.onChange = { [weak self] in self?.render() }
         self.editor = editor
@@ -765,7 +785,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func rebuildPanels() {
         panels.forEach { $0.close() }
         panels = NSScreen.screens.map { screen in
-            let panel = OverlayPanel(screen: screen)
+            let panel = OverlayPanel(screen: screen, theme: preparedTheme)
             panel.delegate = self
             panel.onKeyDown = { [weak self] in self?.handle($0) }
             panel.onKeyUp = { [weak self] in self?.keyUp($0) }
@@ -775,6 +795,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             panel.onMouseUp = { [weak self] in self?.mouseUp(at: $0) }
             return panel
         }
+        preparePickerPanels()
     }
 
     /// Clicking elsewhere or switching Spaces cancels the selection. A click on another screen's

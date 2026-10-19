@@ -63,12 +63,16 @@ struct CaptureShortcut: Equatable {
 }
 
 struct AppSettings: Equatable {
+    var theme = ThemeID.pixel
     var watermark = true
     var shortcut = CaptureShortcut.defaults
     var historyRetention = HistoryRetention.sevenDays
     var historyShortcut: CaptureShortcut?
     static let defaults = AppSettings()
     static let defaultSource = """
+    # Built-in appearance: pixel or clean.
+    theme = "pixel"
+
     # Keep this on to help others discover Vishot.
     watermark = true
 
@@ -89,6 +93,12 @@ struct AppSettings: Equatable {
     static func parse(_ source: String) throws -> AppSettings {
         let table = try TOMLTable(string: source)
         var settings = defaults
+        if let value = table["theme"] {
+            guard let name = value.string, let theme = ThemeID(rawValue: name) else {
+                throw SettingsError(message: "theme must be \"pixel\" or \"clean\".")
+            }
+            settings.theme = theme
+        }
         if let value = table["watermark"] {
             guard let flag = value.bool else { throw SettingsError(message: "watermark must be true or false.") }
             settings.watermark = flag
@@ -144,11 +154,12 @@ struct AppSettings: Equatable {
 
     /// Full TOML is accepted for reading. Editing is deliberately conservative:
     /// unsupported source layouts are left untouched rather than reformatted.
-    static func edit(_ source: String, watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
+    static func edit(_ source: String, theme: ThemeID? = nil, watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
                      historyRetention: HistoryRetention? = nil, historyShortcut: CaptureShortcut? = nil,
                      clearHistoryShortcut: Bool = false) throws -> String {
         let current = try parse(source)
         var expected = current
+        if let theme { expected.theme = theme }
         if let watermark { expected.watermark = watermark }
         if let shortcut { expected.shortcut = try shortcut.validated() }
         if let historyRetention { expected.historyRetention = historyRetention }
@@ -156,6 +167,7 @@ struct AppSettings: Equatable {
         if clearHistoryShortcut { expected.historyShortcut = nil }
         var result = source
         let updates: [(String, String, Bool)] = [
+            ("theme", "\"\(expected.theme.rawValue)\"", expected.theme != current.theme),
             ("watermark", expected.watermark ? "true" : "false", expected.watermark != current.watermark),
             ("shortcut.key", "\"\(expected.shortcut.key)\"", expected.shortcut.key != current.shortcut.key),
             ("shortcut.modifiers", "[" + expected.shortcut.modifiers.map { "\"\($0)\"" }.joined(separator: ", ") + "]", expected.shortcut.modifiers != current.shortcut.modifiers),
@@ -216,6 +228,7 @@ struct AppSettings: Equatable {
         let originalTable = try TOMLTable(string: source)
         let editedTable = try TOMLTable(string: result)
         for table in [originalTable, editedTable] {
+            table.remove(at: "theme")
             table.remove(at: "watermark")
             if let shortcutTable = table["shortcut"]?.table {
                 shortcutTable.remove(at: "key")

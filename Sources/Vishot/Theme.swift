@@ -6,6 +6,13 @@ import CoreText
 enum ThemeID: String, Codable, CaseIterable {
     case pixel
     case clean
+
+    var label: String {
+        switch self {
+        case .pixel: return "Pixel"
+        case .clean: return "Clean"
+        }
+    }
 }
 
 struct ResolvedTheme {
@@ -157,6 +164,27 @@ struct SettingsStyle {
     let muted: NSColor
     let accent: NSColor
     let font: NSFont
+
+    var labelColor: NSColor { usesNativeAppearance ? .labelColor : text }
+    var secondaryLabelColor: NSColor { usesNativeAppearance ? .secondaryLabelColor : muted }
+
+    /// Only app-owned content receives the fixed dark preset; window chrome stays native.
+    func apply(to content: NSView) {
+        content.appearance = usesNativeAppearance ? nil : NSAppearance(named: .darkAqua)
+        content.wantsLayer = true
+        content.layer?.backgroundColor = usesNativeAppearance ? nil : background.cgColor
+        applyControls(in: content)
+    }
+
+    private func applyControls(in view: NSView) {
+        if let label = view as? NSTextField {
+            label.textColor = (label.font?.pointSize ?? font.pointSize) <= 12 ? secondaryLabelColor : labelColor
+        }
+        if let control = view as? NSButton {
+            control.contentTintColor = usesNativeAppearance ? nil : accent
+        }
+        for child in view.subviews { applyControls(in: child) }
+    }
 }
 
 struct AnnotationStyle {
