@@ -9,11 +9,11 @@ final class ExportTests: XCTestCase {
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
             let image = try XCTUnwrap(context.makeImage())
             let style = ThemeCatalog.clean.annotation
-            var document = EditDocument(image: image, scale: scale)
+            var document = EditDocument(image: image, scale: scale, annotationStyle: .clean)
             document.annotations = [.rect(CGRect(x: 12.25, y: 12.25, width: 30, height: 30), color: .red),
                 .arrow(from: CGPoint(x: 60.25, y: 60.25), to: CGPoint(x: 96.25, y: 80.25), color: .purple),
                 .text("one\ntwo", at: CGPoint(x: 20.25, y: 110.25), color: .white)]
-            let output = try XCTUnwrap(AnnotationRenderer.export(document, style: style))
+            let output = try XCTUnwrap(AnnotationRenderer.export(document))
             let bytes = output.dataProvider!.data! as Data
             let edgeAlpha = bytes[Int(12 * scale) * output.bytesPerRow + Int(20 * scale) * 4 + 3]
             XCTAssertEqual(edgeAlpha, 255, "A centered 3 pt vector stroke covers the top edge")
@@ -32,12 +32,28 @@ final class ExportTests: XCTestCase {
             XCTAssertEqual(caret.minX, emptyCaret.minX)
             XCTAssertGreaterThan(caret.minY, emptyCaret.maxY)
             document.crop = CGRect(x: 10, y: 10, width: 100, height: 120)
-            let cropped = try XCTUnwrap(AnnotationRenderer.export(document, style: style))
+            let cropped = try XCTUnwrap(AnnotationRenderer.export(document))
             XCTAssertEqual(cropped.width, Int(100 * scale))
             XCTAssertEqual(cropped.height, Int(120 * scale))
             document.annotations = []
             document.crop = nil
-            XCTAssertTrue(AnnotationRenderer.export(document, style: style) === image)
+            XCTAssertTrue(AnnotationRenderer.export(document) === image)
+        }
+    }
+
+    func testCleanMarkupAndCropPreserveOriginalPixelsAtBothScales() throws {
+        for scale in [CGFloat(1), 2] {
+            let image = try XCTUnwrap(Self.numberedImage())
+            var document = EditDocument(image: image, scale: scale, annotationStyle: .clean)
+            XCTAssertTrue(AnnotationRenderer.export(document) === image)
+            // Force the markup drawing path away from the source; every numbered source pixel
+            // must survive the redraw without interpolation or a coordinate-space shift.
+            document.annotations = [.rect(CGRect(x: -50, y: -50, width: 1, height: 1), color: .red)]
+            XCTAssertEqual(Self.redValues(of: try XCTUnwrap(AnnotationRenderer.export(document))), Array(0...15).map(UInt8.init))
+            document.crop = CGRect(x: 1 / scale, y: 2 / scale, width: 2 / scale, height: 1 / scale)
+            XCTAssertEqual(Self.redValues(of: try XCTUnwrap(AnnotationRenderer.export(document))), [9, 10])
+            document.annotations = []
+            XCTAssertEqual(Self.redValues(of: try XCTUnwrap(AnnotationRenderer.export(document))), [9, 10])
         }
     }
 

@@ -74,6 +74,8 @@ struct EditorScene {
     let canRedo: Bool
     let status: String
     var viewScale: CGFloat = 1
+    var annotationStyle: ThemeID = .pixel
+    var resolvedAnnotationStyle: AnnotationStyle = ThemeCatalog.pixel.annotation
 }
 
 /// Edits a capture in place, over the overlay panels. Takes keys and mouse events until it finishes.
@@ -153,7 +155,8 @@ final class EditorController {
     init(capture: Capture, restored: HistoryDocument? = nil, viewScale: CGFloat = 1,
          theme: ResolvedTheme = ThemeCatalog.pixel) {
         self.theme = theme
-        document = restored?.document ?? EditDocument(image: capture.image, scale: capture.scale, crop: capture.initialCrop)
+        document = restored?.document ?? EditDocument(image: capture.image, scale: capture.scale,
+            crop: capture.initialCrop, annotationStyle: theme.id)
         history = EditHistory(snapshots: restored?.undo ?? [])
         self.viewScale = viewScale
         baseline = document.snapshot
@@ -617,7 +620,7 @@ final class EditorController {
             if let annotation = shape(from: start, to: cursor.position) { annotations.append(annotation) }
         case let .typing(text, at):
             if !text.isEmpty { annotations.append(.text(text, at: at, color: color)) }
-            caret = AnnotationRenderer.caret(after: text, at: at)
+            caret = AnnotationRenderer.caret(after: text, at: at, style: document.resolvedAnnotationStyle)
         case .idle: break
         }
         return EditorScene(
@@ -635,7 +638,9 @@ final class EditorController {
             canUndo: history.canUndo,
             canRedo: history.canRedo,
             status: status,
-            viewScale: viewScale
+            viewScale: viewScale,
+            annotationStyle: document.annotationStyle,
+            resolvedAnnotationStyle: document.resolvedAnnotationStyle
         )
     }
 

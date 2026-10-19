@@ -18,16 +18,47 @@ struct HistoryEntry: Codable, Equatable {
     var snapshot: EditSnapshot
     var undo: [EditSnapshot]
     var recognizedText: String?
+    /// Optional for schema-1 compatibility. Unknown present values are rejected by the store.
+    var annotationStyle: String?
+
+    var annotationStyleID: ThemeID { ThemeID(rawValue: annotationStyle ?? "pixel") ?? .pixel }
 
     var searchFields: [String] {
         // Fully visible annotation strings are exact searchable data even before OCR completes.
         // Partially clipped strings rely on rendered OCR so hidden characters never leak.
+        let style = ThemeCatalog.resolve(annotationStyleID).annotation
         let text = snapshot.annotations.compactMap { annotation -> String? in
             guard case let .text(text, at, _) = annotation else { return nil }
-            if let crop = snapshot.crop, !crop.contains(AnnotationRenderer.textBounds(text, at: at)) { return nil }
+            if let crop = snapshot.crop, !crop.contains(AnnotationRenderer.textBounds(text, at: at, style: style)) { return nil }
             return text
         }.joined(separator: "\n")
         return [label, windowTitle, recognizedText ?? "", text]
+    }
+}
+
+extension HistoryEntry {
+    init(from decoder: Decoder) throws {
+        let fields = try decoder.container(keyedBy: CodingKeys.self)
+        schema = try fields.decode(Int.self, forKey: .schema)
+        id = try fields.decode(UUID.self, forKey: .id)
+        revision = try fields.decode(UUID.self, forKey: .revision)
+        createdAt = try fields.decode(Date.self, forKey: .createdAt)
+        modifiedAt = try fields.decode(Date.self, forKey: .modifiedAt)
+        scale = try fields.decode(CGFloat.self, forKey: .scale)
+        label = try fields.decode(String.self, forKey: .label)
+        windowTitle = try fields.decode(String.self, forKey: .windowTitle)
+        snapshot = try fields.decode(EditSnapshot.self, forKey: .snapshot)
+        undo = try fields.decode([EditSnapshot].self, forKey: .undo)
+        recognizedText = try fields.decodeIfPresent(String.self, forKey: .recognizedText)
+        if fields.contains(.annotationStyle) {
+            guard let value = try? fields.decode(String.self, forKey: .annotationStyle),
+                  ThemeID(rawValue: value) != nil else {
+                throw SettingsError(message: "Unsupported History entry \(id).")
+            }
+            annotationStyle = value
+        } else {
+            annotationStyle = nil
+        }
     }
 }
 
@@ -53,7 +84,10 @@ final class HistoryStore {
     private func metadata(_ id: UUID) -> URL { folder(id).appendingPathComponent("entry.json") }
     private func read(_ id: UUID) throws -> HistoryEntry {
         let entry = try JSONDecoder().decode(HistoryEntry.self, from: Data(contentsOf: metadata(id)))
-        guard entry.schema == 1, entry.id == id else { throw SettingsError(message: "Unsupported History entry \(id).") }
+        guard entry.schema == 1, entry.id == id,
+              entry.annotationStyle == nil || ThemeID(rawValue: entry.annotationStyle!) != nil else {
+            throw SettingsError(message: "Unsupported History entry \(id).")
+        }
         guard entry.scale.isFinite, entry.scale > 0 else { throw SettingsError(message: "Invalid History scale.") }
         for snapshot in [entry.snapshot] + entry.undo {
             func valid(_ point: CGPoint) -> Bool { point.x.isFinite && point.y.isFinite && abs(point.x) <= 1_000_000 && abs(point.y) <= 1_000_000 }
@@ -100,7 +134,8 @@ final class HistoryStore {
     func commit(document: EditDocument, undo: [EditSnapshot], label: String, windowTitle: String = "",
                 id: UUID? = nil, now: Date = Date()) throws -> HistoryEntry {
         let previous = try id.map(read)
-        if let previous, previous.snapshot == document.snapshot { return previous }
+        if let previous, previous.snapshot == document.snapshot,
+           previous.annotationStyleID == document.annotationStyle { return previous }
         guard document.scale.isFinite, document.scale > 0,
               let preview = AnnotationRenderer.export(document),
               let previewData = ImageEncoding.data(preview, scale: document.scale, type: .png),
@@ -110,7 +145,8 @@ final class HistoryStore {
         }
         let entry = HistoryEntry(id: previous?.id ?? UUID(), revision: UUID(), createdAt: previous?.createdAt ?? now,
             modifiedAt: now, scale: document.scale, label: previous?.label ?? label,
-            windowTitle: previous?.windowTitle ?? windowTitle, snapshot: document.snapshot, undo: undo)
+            windowTitle: previous?.windowTitle ?? windowTitle, snapshot: document.snapshot, undo: undo,
+            annotationStyle: document.annotationStyle.rawValue)
         let directory = folder(entry.id)
         try files.createDirectory(at: directory, withIntermediateDirectories: true)
         var published = false
@@ -142,7 +178,7 @@ final class HistoryStore {
         let entry = try read(id)
         let image = try Self.image(at: folder(id).appendingPathComponent("original.png"))
         guard entry.scale.isFinite, entry.scale > 0 else { throw SettingsError(message: "Invalid History image scale.") }
-        var document = EditDocument(image: image, scale: entry.scale)
+        var document = EditDocument(image: image, scale: entry.scale, annotationStyle: entry.annotationStyleID)
         document.snapshot = entry.snapshot
         let bounds = CGRect(origin: .zero, size: document.size)
         for snapshot in [entry.snapshot] + entry.undo {

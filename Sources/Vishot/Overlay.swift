@@ -303,7 +303,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         captureMetadata(for: target)
         let label = captureLabel, title = captureWindowTitle, watermark = capturer.watermark
         prepareSource(for: target) { [self] capture in
-            let document = EditDocument(image: capture.image, scale: capture.scale, crop: capture.initialCrop)
+            let document = EditDocument(image: capture.image, scale: capture.scale, crop: capture.initialCrop,
+                annotationStyle: sessionTheme?.id ?? .pixel)
             guard let request = screenshotCompletion.prepare(document: document, undo: [], label: label,
                 windowTitle: title, session: session, watermark: watermark)
             else { status = "export failed"; render(); return }

@@ -103,6 +103,22 @@ enum AnnotationRenderer {
         // Glyphs are drawn y up, so flip them back in the y-down image space.
         context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
 
+        if case .vector = style.treatment {
+            context.setShouldAntialias(true)
+            context.setLineJoin(.round)
+            context.setLineWidth(2 * style.textHaloWidth)
+            context.setStrokeColor(halo.cgColor)
+            context.setFillColor(color.cgColor)
+            context.setTextDrawingMode(.fillStroke)
+            context.textPosition = baseline
+            CTLineDraw(line, context)
+            // Restore the fill over the inner half of the halo stroke.
+            context.setTextDrawingMode(.fill)
+            context.textPosition = baseline
+            CTLineDraw(line, context)
+            return
+        }
+
         // An outline: the text in the halo color moved 1 pt each way. Thinner than a cell, so it doesn't
         // fill the one-cell gaps between letters.
         context.setFillColor(halo.cgColor)
@@ -127,8 +143,12 @@ enum AnnotationRenderer {
         let metrics = layout("Hg", style: style).metrics
         let width = lines.map { layout($0, style: style).metrics.width }.max() ?? 0
         let baseline = style.baseline(at: point)
-        return CGRect(x: baseline.x, y: baseline.y - metrics.ascent, width: width,
+        let box = CGRect(x: baseline.x, y: baseline.y - metrics.ascent, width: width,
                       height: metrics.ascent + metrics.descent + CGFloat(lines.count - 1) * style.lineHeight)
+        switch style.treatment {
+        case .cells: return box
+        case .vector: return box.insetBy(dx: -style.textHaloWidth, dy: -style.textHaloWidth)
+        }
     }
 
     /// The caret after `text` while it is typed, in image space.
@@ -140,8 +160,10 @@ enum AnnotationRenderer {
         let lines = text.components(separatedBy: "\n")
         let width = layout(lines.last ?? "", style: style).metrics.width
         // Measured on sample letters, so the caret has a height before anything is typed.
-        let line = textBounds("Hg", at: CGPoint(x: point.x, y: point.y + CGFloat(lines.count - 1) * style.lineHeight), style: style)
-        return CGRect(x: line.minX + width + 1, y: line.minY, width: 2, height: line.height)
+        let baseline = style.baseline(at: CGPoint(x: point.x, y: point.y + CGFloat(lines.count - 1) * style.lineHeight))
+        let metrics = layout("Hg", style: style).metrics
+        return CGRect(x: baseline.x + width + 1, y: baseline.y - metrics.ascent,
+                      width: 2, height: metrics.ascent + metrics.descent)
     }
 
     private static func layout(_ text: String, style: AnnotationStyle) -> (line: CTLine, metrics: (width: CGFloat, ascent: CGFloat, descent: CGFloat)) {
@@ -161,7 +183,7 @@ enum AnnotationRenderer {
 
     /// The image with its annotations drawn in, cropped. Nil if drawing fails.
     static func export(_ document: EditDocument) -> CGImage? {
-        export(document, style: pixelStyle)
+        export(document, style: document.resolvedAnnotationStyle)
     }
 
     static func export(_ document: EditDocument, style: AnnotationStyle) -> CGImage? {

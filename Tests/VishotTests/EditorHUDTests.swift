@@ -171,12 +171,19 @@ final class EditorHUDTests: XCTestCase {
     }
 
     func testActualToolbarFitsSmallAndPortraitDisplays() throws {
+        for theme in [ThemeCatalog.pixel, ThemeCatalog.clean] {
+            try assertToolbarFitsSmallAndPortraitDisplays(theme: theme)
+        }
+    }
+
+    private func assertToolbarFitsSmallAndPortraitDisplays(theme: ResolvedTheme) throws {
         for size in [CGSize(width: 800, height: 600), CGSize(width: 1024, height: 768),
                      CGSize(width: 1440, height: 900), CGSize(width: 800, height: 1000)] {
             let bounds = CGRect(origin: .zero, size: size)
             let layer = EditorLayer(size: size, scale: 2)
+            layer.prepare(theme: theme)
             layer.show(try scene(frame: bounds), panelFrame: bounds, showsToolbar: true)
-            let toolbar = try XCTUnwrap(layer.root.sublayers?.last { !$0.isHidden && $0.borderWidth == 2 })
+            let toolbar = try XCTUnwrap(layer.root.sublayers?.last { !$0.isHidden && $0.borderWidth == theme.hud.panel.borderWidth })
             XCTAssertTrue(bounds.insetBy(dx: 12, dy: 12).contains(toolbar.frame), "\(size): \(toolbar.frame)")
             for label in ["copy to clipboard", "save", "save+copy", "save as", "discard"] {
                 let text = try XCTUnwrap(text(label, in: toolbar))

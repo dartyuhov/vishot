@@ -87,6 +87,7 @@ final class OverlayPanel: NSPanel {
 
     /// Called only at startup, screen changes, or an idle preference change.
     func prepare(theme: ResolvedTheme, modes: [(name: String, keys: [HUDKey])]) {
+        editor.prepare(theme: theme)
         self.theme = theme
         CATransaction.begin()
         CATransaction.setDisableActions(true)

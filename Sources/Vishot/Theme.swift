@@ -195,6 +195,7 @@ struct AnnotationStyle {
     let strokeWidth: CGFloat
     let headLength: CGFloat
     let headSpread: CGFloat
+    let textHaloWidth: CGFloat
 
     func baseline(at point: CGPoint) -> CGPoint {
         let baseline = CGPoint(x: point.x, y: point.y + CTFontGetCapHeight(font) / 2)
@@ -274,7 +275,7 @@ enum ThemeCatalog {
                 muted: muted, accent: Palette.accent, font: .systemFont(ofSize: 13)),
             annotation: AnnotationStyle(treatment: clean ? .vector : .cells, font: font,
                 lineHeight: clean ? ceil(fontHeight) + 3 : ceil(fontHeight / 3) * 3 + 3,
-                strokeWidth: 3, headLength: 24, headSpread: 0.6),
+                strokeWidth: 3, headLength: 24, headSpread: 0.6, textHaloWidth: 1),
             watermark: WatermarkStyle(treatment: clean ? .systemText : .pixelGlyphs,
                 plate: PanelStyle(background: Palette.ink, border: .clear, borderWidth: 0,
                     cornerRadius: clean ? 5 : 0, shadow: clean ? Palette.shadow : Palette.hintLeaf,
