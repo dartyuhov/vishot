@@ -29,7 +29,8 @@ enum CapturePermission: CaseIterable {
 
     var instructions: String {
         let page = self == .screenRecording ? "Screen Recording (Screen & System Audio Recording on newer macOS versions)" : "Accessibility"
-        return "Open System Settings → Privacy & Security → \(page), then enable Vishot. Return here to check access. If macOS asks you to quit and reopen Vishot, do so before checking again."
+        let addInstructions = self == .accessibility ? " If Vishot is missing from the list, click Add (+), locate the Vishot application, and click Open, then enable Vishot." : ""
+        return "Open System Settings → Privacy & Security → \(page), then enable Vishot.\(addInstructions) Return here to check access. If macOS asks you to quit and reopen Vishot, do so before checking again."
     }
 
     func readAccess() -> Bool {
