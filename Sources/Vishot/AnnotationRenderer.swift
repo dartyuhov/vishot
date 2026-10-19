@@ -1,17 +1,10 @@
 import AppKit
 import CoreText
 
-/// Shared styled drawing and measurement for preview and export. Legacy calls resolve Pixel;
-/// migrated owners retain and pass an immutable style for the document's lifetime.
+/// Shared styled drawing and measurement for preview and export.
 enum AnnotationRenderer {
-    private static var pixelStyle: AnnotationStyle { ThemeCatalog.pixel.annotation }
-
     /// Draws in image space: the context's user space must have its origin at the image's top-left,
     /// y down, in points.
-    static func draw(_ annotations: [Annotation], in context: CGContext) {
-        draw(annotations, in: context, style: pixelStyle)
-    }
-
     static func draw(_ annotations: [Annotation], in context: CGContext, style: AnnotationStyle) {
         // A hard shadow one cell down and right, like the landing page's. Shadows are set in device
         // space, so the offset is converted, and points down-right on screen.
@@ -25,9 +18,9 @@ enum AnnotationRenderer {
             }
             switch annotation {
             case let .arrow(from, to, color):
-                drawCells(arrowCells(from: from, to: to, style: style), color: color, shadowOffset: shadowOffset, in: context)
+                drawCells(arrowCells(from: from, to: to, style: style), color: color, shadowOffset: shadowOffset, in: context, style: style)
             case let .rect(rect, color):
-                drawCells(PixelArt.outline(rect), color: color, shadowOffset: shadowOffset, in: context)
+                drawCells(PixelArt.outline(rect), color: color, shadowOffset: shadowOffset, in: context, style: style)
             case let .text(text, at, color):
                 drawText(text, at: at, color: color, in: context, style: style)
             }
@@ -83,8 +76,8 @@ enum AnnotationRenderer {
         )
     }
 
-    private static func drawCells(_ cells: [PixelArt.Cell], color: AnnotationColor, shadowOffset: CGSize, in context: CGContext) {
-        context.setShadow(offset: shadowOffset, blur: 0, color: CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.35))
+    private static func drawCells(_ cells: [PixelArt.Cell], color: AnnotationColor, shadowOffset: CGSize, in context: CGContext, style: AnnotationStyle) {
+        context.setShadow(offset: shadowOffset, blur: 0, color: style.shadow)
         context.setFillColor(color.cgColor)
         // One fill, so overlapping cells (the line inside the head) don't darken the shadow.
         context.fill(Set(cells).map(PixelArt.rect))
@@ -134,10 +127,6 @@ enum AnnotationRenderer {
     }
 
     /// The line box of a text annotation, in image space.
-    static func textBounds(_ text: String, at point: CGPoint) -> CGRect {
-        textBounds(text, at: point, style: pixelStyle)
-    }
-
     static func textBounds(_ text: String, at point: CGPoint, style: AnnotationStyle) -> CGRect {
         let lines = text.components(separatedBy: "\n")
         let metrics = layout("Hg", style: style).metrics
@@ -147,15 +136,22 @@ enum AnnotationRenderer {
                       height: metrics.ascent + metrics.descent + CGFloat(lines.count - 1) * style.lineHeight)
         switch style.treatment {
         case .cells: return box
-        case .vector: return box.insetBy(dx: -style.textHaloWidth, dy: -style.textHaloWidth)
+        case .vector:
+            // Typographic ascent/descent alone can miss combining marks and glyph overhangs.
+            // Include the actual ink of every line before adding the readability halo.
+            var bounds = box
+            for (index, text) in lines.enumerated() {
+                let ink = CTLineGetBoundsWithOptions(layout(text, style: style).line, .useGlyphPathBounds)
+                guard !ink.isEmpty, !ink.isNull else { continue }
+                bounds = bounds.union(CGRect(x: baseline.x + ink.minX,
+                    y: baseline.y + CGFloat(index) * style.lineHeight - ink.maxY,
+                    width: ink.width, height: ink.height))
+            }
+            return bounds.insetBy(dx: -style.textHaloWidth, dy: -style.textHaloWidth)
         }
     }
 
     /// The caret after `text` while it is typed, in image space.
-    static func caret(after text: String, at point: CGPoint) -> CGRect {
-        caret(after: text, at: point, style: pixelStyle)
-    }
-
     static func caret(after text: String, at point: CGPoint, style: AnnotationStyle) -> CGRect {
         let lines = text.components(separatedBy: "\n")
         let width = layout(lines.last ?? "", style: style).metrics.width
@@ -183,10 +179,6 @@ enum AnnotationRenderer {
 
     /// The image with its annotations drawn in, cropped. Nil if drawing fails.
     static func export(_ document: EditDocument) -> CGImage? {
-        export(document, style: document.resolvedAnnotationStyle)
-    }
-
-    static func export(_ document: EditDocument, style: AnnotationStyle) -> CGImage? {
         let image = document.image
         let pixelSize = CGSize(width: image.width, height: image.height)
         var cropRect: CGRect?
@@ -201,7 +193,7 @@ enum AnnotationRenderer {
         }
 
         guard let context = imageSpaceContext(drawing: image, scale: document.scale) else { return nil }
-        draw(document.annotations, in: context, style: style)
+        draw(document.annotations, in: context, style: document.resolvedAnnotationStyle)
 
         guard let drawn = context.makeImage() else { return nil }
         guard let cropRect else { return drawn }

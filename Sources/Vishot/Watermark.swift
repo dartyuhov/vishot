@@ -1,19 +1,12 @@
 import AppKit
 import CoreText
 
-/// The "vishot.dev" credit in the bottom-right corner of every copied or saved image, in the landing
-/// page's look: light pixel small capitals on a square dark plate with a hard amber shadow, so it reads
-/// on any content. Output preferences control whether it is drawn.
+/// The themed "vishot.dev" credit in the bottom-right corner of copied or saved images.
+/// Output preferences control whether it is drawn.
 enum Watermark {
     static let text = "vishot.dev"
-    /// From the image's right and bottom edges to the shadow, in points.
-    static let margin: CGFloat = 12
     /// One pixel of the pixel font, in points. Whole points keep every edge on a device pixel.
     private static let cell: CGFloat = 2
-    /// Padding around the text and the shadow's offset, in cells.
-    private static let padding = (x: 4, y: 3)
-    private static let shadowOffset = 1
-    private static let pixelStyle = ThemeCatalog.pixel.watermark
 
     /// The small capitals of the pixel font, rows top to bottom, as the wordmark is set. The landing
     /// page's demo (site/main.js) has the full-height capitals.
@@ -47,10 +40,6 @@ enum Watermark {
     }()
 
     /// `image` with the badge drawn in, or `image` itself when it is too small for one or drawing fails.
-    static func apply(to image: CGImage, scale: CGFloat) -> CGImage {
-        apply(to: image, scale: scale, style: pixelStyle)
-    }
-
     static func apply(to image: CGImage, scale: CGFloat, style: WatermarkStyle) -> CGImage {
         let size = CGSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
         guard let badge = badgeRect(in: size, style: style),
@@ -91,15 +80,16 @@ enum Watermark {
             return context.makeImage() ?? image
         }
 
-        let offset = CGFloat(shadowOffset) * cell
-        let plate = CGRect(x: badge.minX, y: badge.minY, width: badge.width - offset, height: badge.height - offset)
+        let offset = style.plate.shadowOffset
+        let plate = CGRect(x: badge.minX, y: badge.minY,
+            width: badge.width - offset.width, height: badge.height + offset.height)
         // The plate is opaque, so drawing it over the whole shadow leaves only the shadow's L.
         context.setFillColor(style.plate.shadow.cgColor)
-        context.fill(plate.offsetBy(dx: offset, dy: offset))
+        context.fill(plate.offsetBy(dx: offset.width, dy: -offset.height))
         context.setFillColor(style.plate.background.cgColor)
         context.fill(plate)
 
-        let textOrigin = CGPoint(x: plate.minX + CGFloat(padding.x) * cell, y: plate.minY + CGFloat(padding.y) * cell)
+        let textOrigin = CGPoint(x: plate.minX + style.padding.width, y: plate.minY + style.padding.height)
         context.setFillColor(style.text.cgColor)
         context.fill(pixels.cells.map {
             CGRect(x: textOrigin.x + $0.x * cell, y: textOrigin.y + $0.y * cell, width: cell, height: cell)
@@ -109,17 +99,13 @@ enum Watermark {
 
     /// The badge with its shadow in image space (points, y down), or nil when it and its margins would
     /// take more than half the image's width or height, as on a capture of a single button.
-    static func badgeRect(in imageSize: CGSize) -> CGRect? {
-        badgeRect(in: imageSize, style: pixelStyle)
-    }
-
     static func badgeRect(in imageSize: CGSize, style: WatermarkStyle) -> CGRect? {
         let width: CGFloat
         let height: CGFloat
         switch style.treatment {
         case .pixelGlyphs:
-            width = CGFloat(pixels.width + 2 * padding.x + shadowOffset) * cell
-            height = CGFloat(glyphHeight + 2 * padding.y + shadowOffset) * cell
+            width = CGFloat(pixels.width) * cell + 2 * style.padding.width + style.plate.shadowOffset.width
+            height = CGFloat(glyphHeight) * cell + 2 * style.padding.height - style.plate.shadowOffset.height
         case .systemText:
             let textSize = HUD.textSize(text, font: style.font)
             width = textSize.width + 2 * style.padding.width + 2 * style.plate.shadowRadius + abs(style.plate.shadowOffset.width)

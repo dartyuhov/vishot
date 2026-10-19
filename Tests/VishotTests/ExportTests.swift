@@ -57,7 +57,7 @@ final class ExportTests: XCTestCase {
         }
     }
 
-    func testExplicitPixelStyleMatchesLegacyPreviewExportAndTextMeasurement() throws {
+    func testPixelDocumentExportMatchesSharedPreviewDrawing() throws {
         for scale in [CGFloat(1), 2] {
             let context = try XCTUnwrap(CGContext(data: nil, width: Int(160 * scale), height: Int(160 * scale),
                 bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -68,17 +68,10 @@ final class ExportTests: XCTestCase {
                 .rect(CGRect(x: 12, y: 60, width: 40, height: 30), color: .red),
                 .text("one\ntwo", at: CGPoint(x: 20, y: 110), color: .white)]
             let style = ThemeCatalog.pixel.annotation
-            let legacy = try XCTUnwrap(AnnotationRenderer.export(document))
-            let explicit = try XCTUnwrap(AnnotationRenderer.export(document, style: style))
+            let output = try XCTUnwrap(AnnotationRenderer.export(document))
             let preview = try XCTUnwrap(AnnotationRenderer.imageSpaceContext(drawing: image, scale: scale))
             AnnotationRenderer.draw(document.annotations, in: preview, style: style)
-            XCTAssertEqual(explicit.dataProvider!.data! as Data, legacy.dataProvider!.data! as Data)
-            XCTAssertEqual(preview.makeImage()!.dataProvider!.data! as Data, explicit.dataProvider!.data! as Data)
-            let origin = CGPoint(x: 20, y: 110)
-            XCTAssertEqual(AnnotationRenderer.textBounds("one\ntwo", at: origin, style: style),
-                           AnnotationRenderer.textBounds("one\ntwo", at: origin))
-            XCTAssertEqual(AnnotationRenderer.caret(after: "one\ntwo", at: origin, style: style),
-                           AnnotationRenderer.caret(after: "one\ntwo", at: origin))
+            XCTAssertEqual(preview.makeImage()!.dataProvider!.data! as Data, output.dataProvider!.data! as Data)
         }
     }
 

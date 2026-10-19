@@ -47,12 +47,9 @@ final class WatermarkTests: XCTestCase {
         }
     }
 
-    func testExplicitWatermarkStylesPreservePixelAndDrawCleanWithinMeasuredBadge() throws {
+    func testCleanDrawsWithinMeasuredBadge() throws {
         for scale in [CGFloat(1), 2] {
             let image = try XCTUnwrap(Self.whiteImage(width: Int(400 * scale), height: Int(300 * scale)))
-            let pixel = Watermark.apply(to: image, scale: scale, style: ThemeCatalog.pixel.watermark)
-            let legacy = Watermark.apply(to: image, scale: scale)
-            XCTAssertEqual(pixel.dataProvider!.data! as Data, legacy.dataProvider!.data! as Data)
             let cleanStyle = ThemeCatalog.clean.watermark
             let badge = try XCTUnwrap(Watermark.badgeRect(in: CGSize(width: 400, height: 300), style: cleanStyle))
             let clean = Watermark.apply(to: image, scale: scale, style: cleanStyle)
@@ -79,32 +76,32 @@ final class WatermarkTests: XCTestCase {
         let marked = ImageOutput(image: image, scale: 1, output: OutputStyle(watermark: preference, style: ThemeCatalog.pixel.watermark))
         let source = try XCTUnwrap(CGImageSourceCreateWithData(try XCTUnwrap(marked.data(type: .png)) as CFData, nil))
         let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
-        let badge = try XCTUnwrap(Watermark.badgeRect(in: CGSize(width: 400, height: 300)))
+        let badge = try XCTUnwrap(Watermark.badgeRect(in: CGSize(width: 400, height: 300), style: ThemeCatalog.pixel.watermark))
         XCTAssertLessThan(Self.red(of: decoded, x: Int(badge.minX) + 4, y: Int(badge.midY)), 100)
     }
     func testBadgeSitsInTheBottomRightCorner() throws {
         let size = CGSize(width: 800, height: 600)
-        let badge = try XCTUnwrap(Watermark.badgeRect(in: size))
-        XCTAssertEqual(badge.maxX, size.width - Watermark.margin, accuracy: 0.001)
-        XCTAssertEqual(badge.maxY, size.height - Watermark.margin, accuracy: 0.001)
+        let badge = try XCTUnwrap(Watermark.badgeRect(in: size, style: ThemeCatalog.pixel.watermark))
+        XCTAssertEqual(badge.maxX, size.width - 12, accuracy: 0.001)
+        XCTAssertEqual(badge.maxY, size.height - 12, accuracy: 0.001)
         XCTAssertGreaterThan(badge.width, badge.height)
     }
 
     func testBadgeIsLeftOutOfSmallImages() {
-        XCTAssertNil(Watermark.badgeRect(in: CGSize(width: 120, height: 40)))
+        XCTAssertNil(Watermark.badgeRect(in: CGSize(width: 120, height: 40), style: ThemeCatalog.pixel.watermark))
     }
 
     func testApplyKeepsThePixelSize() throws {
         let image = try XCTUnwrap(Self.whiteImage(width: 400, height: 300))
-        let output = Watermark.apply(to: image, scale: 1)
+        let output = Watermark.apply(to: image, scale: 1, style: ThemeCatalog.pixel.watermark)
         XCTAssertEqual(output.width, 400)
         XCTAssertEqual(output.height, 300)
     }
 
     func testApplyDrawsTheBadgeAndNothingElse() throws {
         let image = try XCTUnwrap(Self.whiteImage(width: 400, height: 300))
-        let badge = try XCTUnwrap(Watermark.badgeRect(in: CGSize(width: 400, height: 300)))
-        let output = Watermark.apply(to: image, scale: 1)
+        let badge = try XCTUnwrap(Watermark.badgeRect(in: CGSize(width: 400, height: 300), style: ThemeCatalog.pixel.watermark))
+        let output = Watermark.apply(to: image, scale: 1, style: ThemeCatalog.pixel.watermark)
         // Inside the plate's left padding: the dark fill, not the text.
         XCTAssertLessThan(Self.red(of: output, x: Int(badge.minX) + 4, y: Int(badge.midY)), 100)
         XCTAssertEqual(Self.red(of: output, x: 0, y: 0), 255)
@@ -113,15 +110,15 @@ final class WatermarkTests: XCTestCase {
 
     func testApplyAtScaleTwoDrawsInPoints() throws {
         let image = try XCTUnwrap(Self.whiteImage(width: 800, height: 600))
-        let badge = try XCTUnwrap(Watermark.badgeRect(in: CGSize(width: 400, height: 300)))
-        let output = Watermark.apply(to: image, scale: 2)
+        let badge = try XCTUnwrap(Watermark.badgeRect(in: CGSize(width: 400, height: 300), style: ThemeCatalog.pixel.watermark))
+        let output = Watermark.apply(to: image, scale: 2, style: ThemeCatalog.pixel.watermark)
         XCTAssertLessThan(Self.red(of: output, x: Int(badge.minX + 4) * 2, y: Int(badge.midY) * 2), 100)
         XCTAssertEqual(Self.red(of: output, x: Int(badge.minX - 2) * 2, y: Int(badge.midY) * 2), 255)
     }
 
     func testApplyReturnsSmallImagesUnchanged() throws {
         let image = try XCTUnwrap(Self.whiteImage(width: 120, height: 40))
-        XCTAssertTrue(Watermark.apply(to: image, scale: 1) === image)
+        XCTAssertTrue(Watermark.apply(to: image, scale: 1, style: ThemeCatalog.pixel.watermark) === image)
     }
 
     private static func whiteImage(width: Int, height: Int) -> CGImage? {

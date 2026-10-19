@@ -76,6 +76,7 @@ struct HUDStyle {
     let entryGap: CGFloat
     let actionGap: CGFloat
     let keyGap: CGFloat
+    let disabledOpacity: Float
 }
 
 /// Ring geometry is a drawing treatment, independent of the theme identity and input geometry.
@@ -97,6 +98,23 @@ enum OutlineTreatment {
         }
         return path
     }
+
+    /// Crop feedback stays outside the retained pixels. Pixel uses whole annotation cells.
+    func cropPath(around crop: CGRect, width: CGFloat) -> CGPath {
+        switch self {
+        case .pixel:
+            let cell = PixelArt.cell
+            let minX = ((crop.minX / cell).rounded(.down) - 1) * cell
+            let minY = ((crop.minY / cell).rounded(.down) - 1) * cell
+            let maxX = ((crop.maxX / cell).rounded(.up) + 1) * cell
+            let maxY = ((crop.maxY / cell).rounded(.up) + 1) * cell
+            let path = CGMutablePath()
+            path.addRects(PixelArt.outline(CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)).map(PixelArt.rect))
+            return path
+        case .rounded:
+            return path(around: crop.insetBy(dx: -width, dy: -width), width: width)
+        }
+    }
 }
 
 struct PickerStyle {
@@ -115,6 +133,8 @@ struct PickerStyle {
     let hintPadding: CGSize
     let hintCornerRadius: CGFloat
     let hintBorderWidth: CGFloat
+    let hintBorder: NSColor
+    let typedHintOpacity: CGFloat
     let hintOutlineWidth: CGFloat
     let hudBottomInset: CGFloat
     let panelBackground: NSColor
@@ -143,6 +163,11 @@ struct EditorStyle {
     let caretBorder: NSColor
     let caretBorderWidth: CGFloat
     let swatchRing: CGFloat
+    let swatchLightText: NSColor
+    let swatchDarkText: NSColor
+    let cropHandleBorderWidth: CGFloat
+    let cropHandleSize: CGFloat
+    let cropHandleRadius: CGFloat
 }
 
 struct HistoryStyle {
@@ -168,6 +193,7 @@ struct SettingsStyle {
     let muted: NSColor
     let accent: NSColor
     let font: NSFont
+    let error: NSColor
 
     var labelColor: NSColor { usesNativeAppearance ? .labelColor : text }
     var secondaryLabelColor: NSColor { usesNativeAppearance ? .secondaryLabelColor : muted }
@@ -200,6 +226,7 @@ struct AnnotationStyle {
     let headLength: CGFloat
     let headSpread: CGFloat
     let textHaloWidth: CGFloat
+    let shadow: CGColor
 
     func baseline(at point: CGPoint) -> CGPoint {
         let baseline = CGPoint(x: point.x, y: point.y + CTFontGetCapHeight(font) / 2)
@@ -247,7 +274,7 @@ enum ThemeCatalog {
         let hud = HUDStyle(panel: panel, keycap: keycap,
             nameFont: clean ? .systemFont(ofSize: 14, weight: .semibold) : Fonts.pixel(),
             textFont: clean ? .systemFont(ofSize: 12) : Fonts.mono(12), text: text, muted: muted, dim: Palette.textDim,
-            padding: CGSize(width: 14, height: 10), lineGap: 8, entryGap: 18, actionGap: 6, keyGap: 3)
+            padding: CGSize(width: 14, height: 10), lineGap: 8, entryGap: 18, actionGap: 6, keyGap: 3, disabledOpacity: 0.35)
         let label = PanelStyle(background: Palette.accent, border: .clear, borderWidth: 0,
             cornerRadius: clean ? 5 : 0, shadow: clean ? Palette.shadow : Palette.hintLeaf,
             shadowRadius: clean ? 6 : 0, shadowOffset: CGSize(width: clean ? 0 : 2, height: -2))
@@ -262,7 +289,8 @@ enum ThemeCatalog {
                 hintFont: clean ? .monospacedSystemFont(ofSize: 11, weight: .semibold) : Fonts.mono(11, bold: true),
                 hintText: Palette.ink, hintLeaf: Palette.hintLeaf, hintContainers: Palette.hintContainers,
                 hintPadding: CGSize(width: 4, height: 1), hintCornerRadius: clean ? 3 : 0,
-                hintBorderWidth: 0.5, hintOutlineWidth: clean ? 1 : 2, hudBottomInset: 24,
+                hintBorderWidth: 0.5, hintBorder: NSColor(white: 0, alpha: 0.4), typedHintOpacity: 0.35,
+                hintOutlineWidth: clean ? 1 : 2, hudBottomInset: 24,
                 panelBackground: NSColor(white: 0, alpha: 0.01)),
             selection: SelectionDrawingStyle(outsideDim: NSColor(white: 0, alpha: 0.45), arm: 12, gap: 3,
                 foreground: .white, outline: NSColor(white: 0, alpha: 0.75), width: 2, outlineWidth: 4,
@@ -271,7 +299,9 @@ enum ThemeCatalog {
                 cropOutline: clean ? .rounded(radius: 3) : .pixel(corner: 3), cropWidth: 3,
                 cropShadow: NSColor(white: 0, alpha: 0.35), cropShadowRadius: clean ? 3 : 0,
                 cropShadowOffset: CGSize(width: clean ? 0 : 3, height: -3),
-                caretBorder: NSColor(white: 1, alpha: 0.8), caretBorderWidth: 0.5, swatchRing: 2),
+                caretBorder: NSColor(white: 1, alpha: 0.8), caretBorderWidth: 0.5, swatchRing: 2,
+                swatchLightText: .white, swatchDarkText: Palette.ink,
+                cropHandleBorderWidth: clean ? 1 : 2, cropHandleSize: 10, cropHandleRadius: clean ? 3 : 0),
             history: HistoryStyle(backdrop: clean ? surface : NSColor(white: 0, alpha: 0.78),
                 background: clean ? raised : surface, selected: Palette.accent, separator: line,
                 text: .white, muted: muted, font: clean ? .systemFont(ofSize: 14) : Fonts.mono(14),
@@ -279,10 +309,11 @@ enum ThemeCatalog {
                 outline: clean ? .rounded(radius: 6) : .pixel(corner: 4), selectedWidth: clean ? 2 : 4,
                 borderWidth: clean ? 1 : 2),
             settings: SettingsStyle(usesNativeAppearance: !clean, background: surface, text: text,
-                muted: muted, accent: Palette.accent, font: .systemFont(ofSize: 13)),
+                muted: muted, accent: Palette.accent, font: .systemFont(ofSize: 13), error: .systemRed),
             annotation: AnnotationStyle(treatment: clean ? .vector : .cells, font: font,
                 lineHeight: clean ? ceil(fontHeight) + 3 : ceil(fontHeight / 3) * 3 + 3,
-                strokeWidth: 3, headLength: 24, headSpread: 0.6, textHaloWidth: 1),
+                strokeWidth: 3, headLength: 24, headSpread: 0.6, textHaloWidth: 1,
+                shadow: NSColor(white: 0, alpha: 0.35).cgColor),
             watermark: WatermarkStyle(treatment: clean ? .systemText : .pixelGlyphs,
                 plate: PanelStyle(background: Palette.ink, border: .clear, borderWidth: 0,
                     cornerRadius: clean ? 5 : 0, shadow: clean ? Palette.shadow : Palette.hintLeaf,

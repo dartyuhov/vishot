@@ -19,7 +19,7 @@ final class EditorHUDTests: XCTestCase {
         for size in [CGSize(width: 1440, height: 900), CGSize(width: 800, height: 600)] {
             let bounds = CGRect(origin: .zero, size: size)
             let editor = try makeEditor()
-            let layer = EditorLayer(size: size, scale: 2)
+            let layer = EditorLayer(size: size, scale: 2, theme: ThemeCatalog.pixel)
             func show() -> CALayer {
                 var scene = editor.makeScene()
                 // A full-screen source forces the inside placement, where hiding is available.
@@ -180,7 +180,7 @@ final class EditorHUDTests: XCTestCase {
         for size in [CGSize(width: 800, height: 600), CGSize(width: 1024, height: 768),
                      CGSize(width: 1440, height: 900), CGSize(width: 800, height: 1000)] {
             let bounds = CGRect(origin: .zero, size: size)
-            let layer = EditorLayer(size: size, scale: 2)
+            let layer = EditorLayer(size: size, scale: 2, theme: theme)
             layer.prepare(theme: theme)
             layer.show(try scene(frame: bounds), panelFrame: bounds, showsToolbar: true)
             let toolbar = try XCTUnwrap(layer.root.sublayers?.last { !$0.isHidden && $0.borderWidth == theme.hud.panel.borderWidth })

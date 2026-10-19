@@ -6,12 +6,12 @@ final class EditorLayer: NSObject, CALayerDelegate {
     let root = CALayer()
     private let image = CALayer()
     private let annotations = CALayer()
-    private let cropDim = SelectionStyle.makeDim(ThemeCatalog.pixel.editor.cropDim)
+    private let cropDim: CAShapeLayer
     private let cropOutline = CAShapeLayer()
     private let cropHandle = CALayer()
     private let annotationMask = CAShapeLayer()
-    private let outsideDim = SelectionStyle.makeDim()
-    private let crosshair = SelectionStyle.makeCrosshair()
+    private let outsideDim: CAShapeLayer
+    private let crosshair: CALayer
     private let caret = CALayer()
     private var horizontalToolbar: EditorToolbar
     private var verticalToolbar: EditorToolbar
@@ -24,15 +24,20 @@ final class EditorLayer: NSObject, CALayerDelegate {
     private var drawnOffset = CGPoint.zero
     private var drawnScale: CGFloat = 1
     private var drawnStyleID: ThemeID?
-    private var drawnStyle = ThemeCatalog.pixel.annotation
-    private var theme = ThemeCatalog.pixel
+    private var drawnStyle: AnnotationStyle
+    private var theme: ResolvedTheme
     private let backingScale: CGFloat
 
-    init(size: CGSize, scale: CGFloat) {
+    init(size: CGSize, scale: CGFloat, theme: ResolvedTheme) {
+        self.theme = theme
+        drawnStyle = theme.annotation
+        cropDim = SelectionStyle.makeDim(theme.editor.cropDim)
+        outsideDim = SelectionStyle.makeDim(theme.selection.outsideDim)
+        crosshair = SelectionStyle.makeCrosshair(style: theme.selection)
         backingScale = scale
-        horizontalToolbar = EditorToolbar(scale: scale)
-        verticalToolbar = EditorToolbar(scale: scale, layout: .vertical)
-        compactToolbar = EditorToolbar(scale: scale, layout: .compact)
+        horizontalToolbar = EditorToolbar(scale: scale, theme: theme)
+        verticalToolbar = EditorToolbar(scale: scale, layout: .vertical, theme: theme)
+        compactToolbar = EditorToolbar(scale: scale, layout: .compact, theme: theme)
         toolbar = horizontalToolbar
         super.init()
         root.frame = CGRect(origin: .zero, size: size)
@@ -45,16 +50,17 @@ final class EditorLayer: NSObject, CALayerDelegate {
         annotations.mask = annotationMask
         cropHandle.backgroundColor = theme.editor.active.cgColor
         cropHandle.borderColor = theme.editor.cropped.cgColor
-        cropHandle.borderWidth = 2
+        cropHandle.borderWidth = theme.editor.cropHandleBorderWidth
+        cropHandle.cornerRadius = theme.editor.cropHandleRadius
 
         cropDim.frame = root.bounds
         outsideDim.frame = root.bounds
         cropOutline.shadowColor = theme.editor.cropShadow.cgColor
         cropOutline.shadowOpacity = 1
-        cropOutline.shadowRadius = 0
-        cropOutline.shadowOffset = CGSize(width: PixelArt.cell, height: -PixelArt.cell)
-        caret.borderColor = NSColor(white: 1, alpha: 0.8).cgColor
-        caret.borderWidth = 0.5
+        cropOutline.shadowRadius = theme.editor.cropShadowRadius
+        cropOutline.shadowOffset = theme.editor.cropShadowOffset
+        caret.borderColor = theme.editor.caretBorder.cgColor
+        caret.borderWidth = theme.editor.caretBorderWidth
 
         for layer in [image, annotations, cropDim, cropOutline, outsideDim, crosshair, caret, cropHandle,
                       horizontalToolbar.root, verticalToolbar.root, compactToolbar.root] {
@@ -80,6 +86,9 @@ final class EditorLayer: NSObject, CALayerDelegate {
         caret.borderColor = theme.editor.caretBorder.cgColor
         caret.borderWidth = theme.editor.caretBorderWidth
         cropHandle.backgroundColor = theme.editor.active.cgColor
+        cropHandle.borderColor = theme.editor.cropped.cgColor
+        cropHandle.borderWidth = theme.editor.cropHandleBorderWidth
+        cropHandle.cornerRadius = theme.editor.cropHandleRadius
     }
 
     /// `panelFrame` is the panel's frame in Cocoa global space.
@@ -133,13 +142,7 @@ final class EditorLayer: NSObject, CALayerDelegate {
             cropOutline.frame = imageRect
             let flip = CGAffineTransform(a: scale, b: 0, c: 0, d: -scale, tx: 0, ty: imageRect.height)
             let ring = CGMutablePath()
-            switch theme.editor.cropOutline {
-            case .pixel:
-                ring.addRects(Self.cropRing(crop).map(PixelArt.rect), transform: flip)
-            case .rounded:
-                ring.addPath(theme.editor.cropOutline.path(around: crop.insetBy(dx: -theme.editor.cropWidth, dy: -theme.editor.cropWidth),
-                    width: theme.editor.cropWidth), transform: flip)
-            }
+            ring.addPath(theme.editor.cropOutline.cropPath(around: crop, width: theme.editor.cropWidth), transform: flip)
             cropOutline.fillRule = .evenOdd
             cropOutline.path = ring
             cropOutline.shadowPath = ring
@@ -156,7 +159,8 @@ final class EditorLayer: NSObject, CALayerDelegate {
         cropHandle.isHidden = scene.cropHandle == nil
         if let handle = scene.cropHandle {
             let position = local(handle)
-            cropHandle.frame = CGRect(x: position.x - 5, y: position.y - 5, width: 10, height: 10)
+            let size = theme.editor.cropHandleSize
+            cropHandle.frame = CGRect(x: position.x - size / 2, y: position.y - size / 2, width: size, height: size)
         }
 
         for hud in [horizontalToolbar, verticalToolbar, compactToolbar] { hud.root.isHidden = true }
@@ -175,17 +179,6 @@ final class EditorLayer: NSObject, CALayerDelegate {
             toolbar.update(scene, canHideHUD: canHideHUD)
             toolbar.root.frame = placement.frame
         }
-    }
-
-    /// A rectangle annotation's ring, on the cells just outside the crop, so it covers only the corner
-    /// cells of what is kept.
-    private static func cropRing(_ crop: CGRect) -> [PixelArt.Cell] {
-        let cell = PixelArt.cell
-        let minX = ((crop.minX / cell).rounded(.down) - 1) * cell
-        let minY = ((crop.minY / cell).rounded(.down) - 1) * cell
-        let maxX = ((crop.maxX / cell).rounded(.up) + 1) * cell
-        let maxY = ((crop.maxY / cell).rounded(.up) + 1) * cell
-        return PixelArt.outline(CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY))
     }
 
     func hide() {
@@ -252,7 +245,7 @@ private final class EditorToolbar {
         (.toggleHUD, HUDKey("o", action: "hide HUD"), 2, 1),
     ]
 
-    init(scale: CGFloat, layout: EditorHUDPlacement.Layout = .horizontal, theme: ResolvedTheme = ThemeCatalog.pixel) {
+    init(scale: CGFloat, layout: EditorHUDPlacement.Layout = .horizontal, theme: ResolvedTheme) {
         self.theme = theme
         let style = theme.hud
         self.layout = layout
@@ -431,7 +424,7 @@ private final class EditorToolbar {
     private static func makeSwatch(_ color: AnnotationColor, key: String, scale: CGFloat, theme: ResolvedTheme) -> CALayer {
         let isLight = [.yellow, .green, .white].contains(color)
         let ring = theme.editor.swatchRing
-        let keycap = HUD.makeKeycap(key, face: NSColor(cgColor: color.cgColor) ?? .gray, text: isLight ? theme.picker.hintText : .white, scale: scale, style: theme.hud.keycap).edge
+        let keycap = HUD.makeKeycap(key, face: NSColor(cgColor: color.cgColor)!, text: isLight ? theme.editor.swatchDarkText : theme.editor.swatchLightText, scale: scale, style: theme.hud.keycap).edge
         keycap.frame.origin = CGPoint(x: ring, y: ring)
         let swatch = CALayer()
         swatch.borderColor = theme.hud.text.cgColor
@@ -457,9 +450,9 @@ private final class EditorToolbar {
             case .color(let color):
                 layer.borderWidth = color == scene.color ? theme.editor.swatchRing : 0
             case .undo:
-                layer.opacity = scene.canUndo ? 1 : 0.35
+                layer.opacity = scene.canUndo ? 1 : style.disabledOpacity
             case .redo:
-                layer.opacity = scene.canRedo ? 1 : 0.35
+                layer.opacity = scene.canRedo ? 1 : style.disabledOpacity
             case .escape:
                 // Esc places the current annotation (or applies a resize) before it can discard.
                 entry?.action.string = scene.context.escapeLabel

@@ -2,15 +2,8 @@ import AppKit
 
 /// What the editor and region mode draw alike, so they keep looking the same.
 enum SelectionStyle {
-    /// Over what is outside the selection: around the editor's image, or around a region.
-    static let outsideDim = NSColor(white: 0, alpha: 0.45)
-
     /// The cursor: four arms around a gap, white on a darker outline so it shows on any content.
     /// Its position is the aiming point.
-    static func makeCrosshair() -> CALayer {
-        makeCrosshair(style: ThemeCatalog.pixel.selection)
-    }
-
     static func makeCrosshair(style: SelectionDrawingStyle) -> CALayer {
         let crosshair = CALayer()
         apply(style, to: crosshair)
@@ -39,7 +32,7 @@ enum SelectionStyle {
 
     /// A dim layer that leaves a hole, through an even-odd fill. Set its path to the dimmed area plus
     /// the hole.
-    static func makeDim(_ color: NSColor = outsideDim) -> CAShapeLayer {
+    static func makeDim(_ color: NSColor) -> CAShapeLayer {
         let dim = CAShapeLayer()
         dim.fillRule = .evenOdd
         dim.fillColor = color.cgColor

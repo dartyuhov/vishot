@@ -211,7 +211,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     private func showStatus(_ heading: String, message: String, isError: Bool) {
         statusSection.isHidden = message.isEmpty
         statusHeading.stringValue = heading
-        statusHeading.textColor = isError ? .systemRed : resolvedTheme.settings.labelColor
+        statusHeading.textColor = isError ? resolvedTheme.settings.error : resolvedTheme.settings.labelColor
         status.stringValue = message
         status.textColor = resolvedTheme.settings.secondaryLabelColor
         resizeToContent()

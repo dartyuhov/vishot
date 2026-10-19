@@ -14,22 +14,8 @@ struct HUDKey: Equatable {
     }
 }
 
-/// What the picker's HUD and the editor's toolbar draw alike: the landing page's panel, a name in the
-/// pixel font, and entries of keycaps followed by what they do.
+/// Shared styled panels, headings, and keycaps for picker, history, and editor guidance.
 enum HUD {
-    private static let pixelStyle = ThemeCatalog.pixel.hud
-    static let nameFont = pixelStyle.nameFont
-    static let keyFont = pixelStyle.keycap.font
-    static let textFont = pixelStyle.textFont
-    static let padding = pixelStyle.padding
-    static let lineGap = pixelStyle.lineGap
-    static let shadow = pixelStyle.panel.shadowOffset.width
-    /// After the name and between entries, between an entry's keys and what they do, and between two
-    /// keys of one entry.
-    static let entryGap = pixelStyle.entryGap
-    static let actionGap = pixelStyle.actionGap
-    static let keyGap = pixelStyle.keyGap
-
     /// An entry's layers. `faces` are its keycaps' faces, so a highlight can recolor them.
     struct Entry {
         let layer: CALayer
@@ -37,20 +23,11 @@ enum HUD {
         let action: CATextLayer
     }
 
-    /// The landing page's panels: square, a 2 pt edge and a hard shadow. Set `shadowPath` once sized.
-    static func stylePanel(_ layer: CALayer) {
-        stylePanel(layer, style: pixelStyle)
-    }
-
     static func stylePanel(_ layer: CALayer, style: HUDStyle) {
         style.panel.apply(to: layer)
     }
 
     /// The name, its baseline on a whole device pixel, centred in a row `height` tall.
-    static func makeName(_ name: String, rowHeight height: CGFloat, scale: CGFloat) -> CATextLayer {
-        makeName(name, rowHeight: height, scale: scale, style: pixelStyle)
-    }
-
     static func makeName(_ name: String, rowHeight height: CGFloat, scale: CGFloat, style: HUDStyle) -> CATextLayer {
         let text = makeText(name, font: style.nameFont, color: style.text, scale: scale)
         text.frame.origin.y = textY(style.nameFont, lineHeight: text.frame.height, in: height, scale: scale)
@@ -58,10 +35,6 @@ enum HUD {
     }
 
     /// The entry's keycaps, separated by slashes, then what they do, in one layer as tall as a keycap.
-    static func makeEntry(_ entry: HUDKey, scale: CGFloat) -> Entry {
-        makeEntry(entry, scale: scale, style: pixelStyle)
-    }
-
     static func makeEntry(_ entry: HUDKey, scale: CGFloat, style: HUDStyle) -> Entry {
         let layer = CALayer()
         layer.opacity = entry.isEnabled ? 1 : 0.45
@@ -92,12 +65,6 @@ enum HUD {
 
     /// A key drawn like the landing page's `<kbd>`: a raised face on a darker edge, thicker at the bottom.
     static func makeKeycap(
-        _ key: String, face color: NSColor = Palette.surfaceRaised, text textColor: NSColor = Palette.text, scale: CGFloat
-    ) -> (edge: CALayer, face: CALayer) {
-        makeKeycap(key, face: color, text: textColor, scale: scale, style: pixelStyle.keycap)
-    }
-
-    static func makeKeycap(
         _ key: String, face color: NSColor? = nil, text textColor: NSColor? = nil,
         scale: CGFloat, style: KeycapStyle
     ) -> (edge: CALayer, face: CALayer) {
@@ -122,10 +89,6 @@ enum HUD {
     }
 
     /// A status line: muted, cut off with an ellipsis. Set its frame and string.
-    static func makeStatus(scale: CGFloat) -> CATextLayer {
-        makeStatus(scale: scale, style: pixelStyle)
-    }
-
     static func makeStatus(scale: CGFloat, style: HUDStyle) -> CATextLayer {
         let layer = CATextLayer()
         configure(layer, font: style.textFont, color: style.muted, scale: scale)

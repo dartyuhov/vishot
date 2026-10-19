@@ -204,12 +204,13 @@ retention for the ad-hoc-signed distribution packages. See
 ## Settings
 
 Open **Settings…** from the menu bar to record a global capture shortcut,
-toggle the watermark, or open the configuration file. The watermark defaults
-to on; keeping it on helps others discover Vishot.
+choose a theme, toggle the watermark, or open the configuration file. The
+watermark defaults to on; keeping it on helps others discover Vishot.
 
 Settings and external file edits share `~/.config/vishot/config.toml`:
 
 ```toml
+theme = "pixel"
 watermark = true
 
 [shortcut]
@@ -222,15 +223,34 @@ Optional modifiers are `option` and `shift`. Supported keys include uppercase
 letters, digits, `F1`–`F12`, and names such as `Space`, `Return`, `Tab`,
 `Left`, `Right`, `Up`, `Down`, and `Minus`.
 
-File changes reload automatically and apply after the current picker/editor
-session ends. Invalid edits or unavailable shortcuts keep the working settings;
+Choose **Appearance → Theme** for **Pixel** (the default pixel-art look) or
+**Clean** (dark-neutral panels, rounded controls, system fonts, and smooth
+markup). The root-level `theme` value accepts exactly `"pixel"` or `"clean"`.
+Missing values use Pixel; values such as `"Clean"` are invalid. The theme covers
+the picker, hints, region feedback, history, editor controls, annotations, and
+watermark. Native menus, window chrome, save dialogs, and logos keep their
+system or brand appearance. Keyboard and mouse controls stay the same.
+
+File changes reload automatically and apply when idle, without a restart. An
+active picker, history browser, or editor keeps its theme until that session
+ends, including history-to-editor transitions and returning from **Save As**.
+**Changes Pending** in Settings explains deferred changes. Invalid edits or
+unavailable shortcuts keep the working settings;
 **Settings… — Configuration Error** shows how to fix them. A broken file at
 startup uses defaults without overwriting it. Missing fields use defaults.
 
 Window edits preserve comments and unrelated content. For layouts that cannot
 be edited safely, such as modifier arrays containing comments, edit the file
-directly. Symlinked dotfiles are supported. Output keeps the watermark choice
-from copy/save time, including images encoded later when pasted.
+directly. Symlinked dotfiles are supported. Copied and saved images keep the
+session's watermark theme and enabled choice, including background saves and
+images encoded later when pasted. Small images omit the watermark.
+
+Existing editable screenshots keep their original markup style when reopened,
+including newly added annotations, undo, and redo. Surrounding controls use the
+current session theme. Older history entries without style metadata use Pixel.
+Changing themes doesn't regenerate stored previews or alter earlier screenshot
+pixels. History and editor previews stay watermark-free; yanking an entry uses
+the current session's watermark preference.
 
 ## Speed notes
 

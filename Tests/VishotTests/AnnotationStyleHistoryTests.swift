@@ -4,6 +4,30 @@ import XCTest
 @testable import Vishot
 
 final class AnnotationStyleHistoryTests: XCTestCase {
+    func testCleanSearchExcludesAccentedGlyphsClippedAboveTheTypographicLineBox() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = HistoryStore(url: folder)
+        let image = try XCTUnwrap(CGContext(data: nil, width: 300, height: 200, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)?.makeImage())
+        let text = "A\u{030d}\u{030d}\u{030d}\u{030d}"
+        var document = EditDocument(image: image, scale: 1,
+            annotations: [.text(text, at: CGPoint(x: 50, y: 80), color: .purple)],
+            crop: CGRect(x: 10, y: 55, width: 250, height: 120), annotationStyle: .clean)
+        let entry = try store.commit(document: document, undo: [], label: "Clipped marks")
+        let preview = try store.preview(entry)
+        let uncropped = try XCTUnwrap(AnnotationRenderer.export(EditDocument(image: image, scale: 1,
+            annotations: document.annotations, annotationStyle: .clean)))
+        let aboveCrop = try XCTUnwrap(uncropped.cropping(to: CGRect(x: 10, y: 0, width: 250, height: 55)))
+        XCTAssertTrue(try pixels(aboveCrop).contains { $0 != 0 }, "The crop really removes rendered marks")
+        XCTAssertEqual(preview.height, 120)
+        XCTAssertFalse(entry.searchFields.contains { $0.contains(text) }, "Clipped glyphs must rely on visible OCR")
+        document.crop = CGRect(x: 10, y: 0, width: 250, height: 180)
+        let visible = try store.commit(document: document, undo: [], label: "Visible marks", id: entry.id)
+        XCTAssertTrue(visible.searchFields.contains { $0.contains(text) })
+    }
+
     func testCleanSearchExcludesTextWhoseReadabilityHaloIsCroppedAndStyleChangesRevise() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -83,7 +107,7 @@ final class AnnotationStyleHistoryTests: XCTestCase {
         var result: CGImage?
         editor.onFinish = { _, output in result = output?.image }
         editor.select(.finish(.copy))
-        let expected = try XCTUnwrap(AnnotationRenderer.export(editor.document, style: ThemeCatalog.clean.annotation))
+        let expected = try XCTUnwrap(AnnotationRenderer.export(editor.document))
         XCTAssertEqual(try pixels(XCTUnwrap(result)), try pixels(expected))
     }
 

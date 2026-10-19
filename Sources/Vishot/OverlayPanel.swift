@@ -29,8 +29,8 @@ final class OverlayPanel: NSPanel {
     /// Each hint's outline, background and text, grown on first use and reused after.
     private var hintLayers: [(outline: CALayer, background: CALayer, text: CATextLayer)] = []
     /// Region mode: the dimming around the region, and the cursor.
-    private let regionDim = SelectionStyle.makeDim()
-    private let crosshair = SelectionStyle.makeCrosshair()
+    private let regionDim: CAShapeLayer
+    private let crosshair: CALayer
     private let editor: EditorLayer
     private var theme: ResolvedTheme
     private var style: PickerStyle { theme.picker }
@@ -38,7 +38,9 @@ final class OverlayPanel: NSPanel {
 
     init(screen: NSScreen, theme: ResolvedTheme) {
         self.theme = theme
-        editor = EditorLayer(size: screen.frame.size, scale: screen.backingScaleFactor)
+        regionDim = SelectionStyle.makeDim(theme.selection.outsideDim)
+        crosshair = SelectionStyle.makeCrosshair(style: theme.selection)
+        editor = EditorLayer(size: screen.frame.size, scale: screen.backingScaleFactor, theme: theme)
         hud = PickerHUD(scale: screen.backingScaleFactor, style: theme.hud)
         super.init(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         setFrame(screen.frame, display: false)
@@ -236,7 +238,7 @@ final class OverlayPanel: NSPanel {
             background.isHidden = false
             text.frame = CGRect(x: style.hintPadding.width, y: style.hintPadding.height, width: size.width, height: size.height)
             let string = NSMutableAttributedString(string: mark.code, attributes: [.font: style.hintFont, .foregroundColor: style.hintText])
-            string.addAttribute(.foregroundColor, value: style.hintText.withAlphaComponent(0.35), range: NSRange(location: 0, length: min(typed, mark.code.utf16.count)))
+            string.addAttribute(.foregroundColor, value: style.hintText.withAlphaComponent(style.typedHintOpacity), range: NSRange(location: 0, length: min(typed, mark.code.utf16.count)))
             text.string = string
         }
         for unused in hintLayers[used...] {
@@ -250,7 +252,6 @@ final class OverlayPanel: NSPanel {
         hintOutlines.addSublayer(outline)
 
         let background = CALayer()
-        background.borderColor = NSColor(white: 0, alpha: 0.4).cgColor
         let text = CATextLayer()
         text.contentsScale = backingScaleFactor
         background.addSublayer(text)
@@ -264,6 +265,7 @@ final class OverlayPanel: NSPanel {
         layers.outline.borderWidth = style.hintOutlineWidth
         layers.outline.cornerRadius = style.hintCornerRadius
         layers.background.borderWidth = style.hintBorderWidth
+        layers.background.borderColor = style.hintBorder.cgColor
         layers.background.cornerRadius = style.hintCornerRadius
         HUD.configure(layers.text, font: style.hintFont, color: style.hintText, scale: backingScaleFactor)
     }
