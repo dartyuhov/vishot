@@ -1,46 +1,81 @@
 import AppKit
 import CoreText
 
-/// Draws annotations as pixel art on `PixelArt`'s grid. The on-screen layers and the export both call
-/// `draw`, so what you see is what you get.
+/// Shared styled drawing and measurement for preview and export. Legacy calls resolve Pixel;
+/// migrated owners retain and pass an immutable style for the document's lifetime.
 enum AnnotationRenderer {
-    private static let headLength = 8 * PixelArt.cell
-    /// Half the head's width, relative to its length.
-    private static let headSpread: CGFloat = 0.6
-    /// Its pixels are `PixelArt.cell` points, so text sits on the same grid as arrows and rectangles.
-    private static let font: CTFont = Fonts.pixel(8 * PixelArt.cell)
-    private static var lineHeight: CGFloat {
-        ceil((CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font)) / PixelArt.cell) * PixelArt.cell + PixelArt.cell
-    }
+    private static var pixelStyle: AnnotationStyle { ThemeCatalog.pixel.annotation }
 
     /// Draws in image space: the context's user space must have its origin at the image's top-left,
     /// y down, in points.
     static func draw(_ annotations: [Annotation], in context: CGContext) {
+        draw(annotations, in: context, style: pixelStyle)
+    }
+
+    static func draw(_ annotations: [Annotation], in context: CGContext, style: AnnotationStyle) {
         // A hard shadow one cell down and right, like the landing page's. Shadows are set in device
         // space, so the offset is converted, and points down-right on screen.
         let shadowOffset = CGSize(width: PixelArt.cell, height: PixelArt.cell).applying(context.ctm)
         for annotation in annotations {
             context.saveGState()
+            if case .vector = style.treatment {
+                drawVector(annotation, in: context, style: style)
+                context.restoreGState()
+                continue
+            }
             switch annotation {
             case let .arrow(from, to, color):
-                drawCells(arrowCells(from: from, to: to), color: color, shadowOffset: shadowOffset, in: context)
+                drawCells(arrowCells(from: from, to: to, style: style), color: color, shadowOffset: shadowOffset, in: context)
             case let .rect(rect, color):
                 drawCells(PixelArt.outline(rect), color: color, shadowOffset: shadowOffset, in: context)
             case let .text(text, at, color):
-                drawText(text, at: at, color: color, in: context)
+                drawText(text, at: at, color: color, in: context, style: style)
             }
             context.restoreGState()
         }
     }
 
+    /// The same vector treatment is used by preview and export. It never snaps input geometry.
+    private static func drawVector(_ annotation: Annotation, in context: CGContext, style: AnnotationStyle) {
+        context.setShouldAntialias(true)
+        context.setLineWidth(style.strokeWidth)
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        switch annotation {
+        case let .rect(rect, color):
+            context.setStrokeColor(color.cgColor)
+            context.stroke(rect)
+        case let .arrow(from, to, color):
+            let length = hypot(to.x - from.x, to.y - from.y)
+            guard length > 0 else { return }
+            let unit = CGVector(dx: (to.x - from.x) / length, dy: (to.y - from.y) / length)
+            let head = min(style.headLength, length)
+            let base = CGPoint(x: to.x - unit.dx * head, y: to.y - unit.dy * head)
+            context.setStrokeColor(color.cgColor)
+            context.move(to: from)
+            context.addLine(to: base)
+            context.strokePath()
+            context.setFillColor(color.cgColor)
+            context.move(to: to)
+            context.addLine(to: CGPoint(x: base.x - unit.dy * head * style.headSpread,
+                                       y: base.y + unit.dx * head * style.headSpread))
+            context.addLine(to: CGPoint(x: base.x + unit.dy * head * style.headSpread,
+                                       y: base.y - unit.dx * head * style.headSpread))
+            context.closePath()
+            context.fillPath()
+        case let .text(text, at, color):
+            drawText(text, at: at, color: color, in: context, style: style)
+        }
+    }
+
     /// A one-cell line with a filled triangle head at `to`.
-    private static func arrowCells(from: CGPoint, to: CGPoint) -> [PixelArt.Cell] {
+    private static func arrowCells(from: CGPoint, to: CGPoint, style: AnnotationStyle) -> [PixelArt.Cell] {
         let length = hypot(to.x - from.x, to.y - from.y)
         guard length > 0 else { return [] }
         let unit = CGVector(dx: (to.x - from.x) / length, dy: (to.y - from.y) / length)
-        let head = min(headLength, length)
+        let head = min(style.headLength, length)
         let base = CGPoint(x: to.x - unit.dx * head, y: to.y - unit.dy * head)
-        let spread = head * headSpread
+        let spread = head * style.headSpread
         return PixelArt.line(from: from, to: to) + PixelArt.triangle(
             to,
             CGPoint(x: base.x - unit.dy * spread, y: base.y + unit.dx * spread),
@@ -55,16 +90,16 @@ enum AnnotationRenderer {
         context.fill(Set(cells).map(PixelArt.rect))
     }
 
-    private static func drawText(_ text: String, at point: CGPoint, color: AnnotationColor, in context: CGContext) {
+    private static func drawText(_ text: String, at point: CGPoint, color: AnnotationColor, in context: CGContext, style: AnnotationStyle) {
         for (index, line) in text.components(separatedBy: "\n").enumerated() {
-            drawTextLine(line, at: CGPoint(x: point.x, y: point.y + CGFloat(index) * lineHeight), color: color, in: context)
+            drawTextLine(line, at: CGPoint(x: point.x, y: point.y + CGFloat(index) * style.lineHeight), color: color, in: context, style: style)
         }
     }
 
-    private static func drawTextLine(_ text: String, at point: CGPoint, color: AnnotationColor, in context: CGContext) {
-        let line = layout(text).line
+    private static func drawTextLine(_ text: String, at point: CGPoint, color: AnnotationColor, in context: CGContext, style: AnnotationStyle) {
+        let line = layout(text, style: style).line
         let halo = color == .white ? AnnotationColor.black : .white
-        let baseline = baseline(at: point)
+        let baseline = style.baseline(at: point)
         // Glyphs are drawn y up, so flip them back in the y-down image space.
         context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
 
@@ -82,34 +117,36 @@ enum AnnotationRenderer {
         CTLineDraw(line, context)
     }
 
-    /// Where a text annotation centred on `point` starts its baseline: its capitals centred on the
-    /// point, and on the grid, so the font's pixels are cells.
-    private static func baseline(at point: CGPoint) -> CGPoint {
-        PixelArt.snapped(CGPoint(x: point.x, y: point.y + CTFontGetCapHeight(font) / 2))
-    }
-
     /// The line box of a text annotation, in image space.
     static func textBounds(_ text: String, at point: CGPoint) -> CGRect {
+        textBounds(text, at: point, style: pixelStyle)
+    }
+
+    static func textBounds(_ text: String, at point: CGPoint, style: AnnotationStyle) -> CGRect {
         let lines = text.components(separatedBy: "\n")
-        let metrics = layout("Hg").metrics
-        let width = lines.map { layout($0).metrics.width }.max() ?? 0
-        let baseline = baseline(at: point)
+        let metrics = layout("Hg", style: style).metrics
+        let width = lines.map { layout($0, style: style).metrics.width }.max() ?? 0
+        let baseline = style.baseline(at: point)
         return CGRect(x: baseline.x, y: baseline.y - metrics.ascent, width: width,
-                      height: metrics.ascent + metrics.descent + CGFloat(lines.count - 1) * lineHeight)
+                      height: metrics.ascent + metrics.descent + CGFloat(lines.count - 1) * style.lineHeight)
     }
 
     /// The caret after `text` while it is typed, in image space.
     static func caret(after text: String, at point: CGPoint) -> CGRect {
+        caret(after: text, at: point, style: pixelStyle)
+    }
+
+    static func caret(after text: String, at point: CGPoint, style: AnnotationStyle) -> CGRect {
         let lines = text.components(separatedBy: "\n")
-        let width = layout(lines.last ?? "").metrics.width
+        let width = layout(lines.last ?? "", style: style).metrics.width
         // Measured on sample letters, so the caret has a height before anything is typed.
-        let line = textBounds("Hg", at: CGPoint(x: point.x, y: point.y + CGFloat(lines.count - 1) * lineHeight))
+        let line = textBounds("Hg", at: CGPoint(x: point.x, y: point.y + CGFloat(lines.count - 1) * style.lineHeight), style: style)
         return CGRect(x: line.minX + width + 1, y: line.minY, width: 2, height: line.height)
     }
 
-    private static func layout(_ text: String) -> (line: CTLine, metrics: (width: CGFloat, ascent: CGFloat, descent: CGFloat)) {
+    private static func layout(_ text: String, style: AnnotationStyle) -> (line: CTLine, metrics: (width: CGFloat, ascent: CGFloat, descent: CGFloat)) {
         let attributes: [NSAttributedString.Key: Any] = [
-            NSAttributedString.Key(kCTFontAttributeName as String): font,
+            NSAttributedString.Key(kCTFontAttributeName as String): style.font,
             // Colors come from the context, so one line serves both the halo and the fill.
             NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true,
         ]
@@ -124,6 +161,10 @@ enum AnnotationRenderer {
 
     /// The image with its annotations drawn in, cropped. Nil if drawing fails.
     static func export(_ document: EditDocument) -> CGImage? {
+        export(document, style: pixelStyle)
+    }
+
+    static func export(_ document: EditDocument, style: AnnotationStyle) -> CGImage? {
         let image = document.image
         let pixelSize = CGSize(width: image.width, height: image.height)
         var cropRect: CGRect?
@@ -138,7 +179,7 @@ enum AnnotationRenderer {
         }
 
         guard let context = imageSpaceContext(drawing: image, scale: document.scale) else { return nil }
-        draw(document.annotations, in: context)
+        draw(document.annotations, in: context, style: style)
 
         guard let drawn = context.makeImage() else { return nil }
         guard let cropRect else { return drawn }

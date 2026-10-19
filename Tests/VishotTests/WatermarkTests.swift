@@ -3,6 +3,24 @@ import UniformTypeIdentifiers
 @testable import Vishot
 
 final class WatermarkTests: XCTestCase {
+    func testExplicitWatermarkStylesPreservePixelAndDrawCleanWithinMeasuredBadge() throws {
+        for scale in [CGFloat(1), 2] {
+            let image = try XCTUnwrap(Self.whiteImage(width: Int(400 * scale), height: Int(300 * scale)))
+            let pixel = Watermark.apply(to: image, scale: scale, style: ThemeCatalog.pixel.watermark)
+            let legacy = Watermark.apply(to: image, scale: scale)
+            XCTAssertEqual(pixel.dataProvider!.data! as Data, legacy.dataProvider!.data! as Data)
+            let cleanStyle = ThemeCatalog.clean.watermark
+            let badge = try XCTUnwrap(Watermark.badgeRect(in: CGSize(width: 400, height: 300), style: cleanStyle))
+            let clean = Watermark.apply(to: image, scale: scale, style: cleanStyle)
+            XCTAssertEqual(Self.red(of: clean, x: 0, y: 0), 255)
+            XCTAssertLessThan(Self.red(of: clean, x: Int((badge.minX + 4) * scale), y: Int(badge.midY * scale)), 100)
+            XCTAssertEqual(badge.maxX, 388, accuracy: 0.001)
+            XCTAssertEqual(badge.maxY, 288, accuracy: 0.001)
+            let small = try XCTUnwrap(Self.whiteImage(width: 120, height: 40))
+            XCTAssertTrue(Watermark.apply(to: small, scale: scale, style: cleanStyle) === small)
+        }
+    }
+
     func testOutputSnapshotsWatermarkAndEncodesBothClipboardFormats() throws {
         let image = try XCTUnwrap(Self.whiteImage(width: 400, height: 300))
         var preference = false
