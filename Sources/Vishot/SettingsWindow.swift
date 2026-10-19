@@ -14,6 +14,8 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     private let statusHeading = NSTextField(labelWithString: "")
     private let statusSection = NSStackView()
     private let contentStack = NSStackView()
+    private let permissionControls = CapturePermission.allCases.map { PermissionControlView(permission: $0) }
+    private var activationObserver: NSObjectProtocol?
     func recordGlobalShortcut(_ shortcut: CaptureShortcut) -> Bool {
         guard window?.isKeyWindow == true else { return false }
         if historyRecorder.isRecording { historyRecorder.accept(shortcut); return true }
@@ -31,6 +33,15 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
+        for control in permissionControls {
+            control.onLayoutChange = { [weak self] in self?.resizeToContent() }
+        }
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.window?.isVisible == true else { return }
+            self.refreshPermissions()
+        }
         window.isRecordingShortcut = { [weak self] in self?.recorder.isRecording == true || self?.historyRecorder.isRecording == true }
         recorder.onRecord = { [weak self] shortcut in self?.store.update(shortcut: shortcut) }
         recorder.onError = { [weak self] message in self?.showStatus("Shortcut Error", message: message, isError: true) }
@@ -106,6 +117,8 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
             header,
             section("Capture", views: [row, help("Click the shortcut to record a new one. Include ⌘ or ⌃; Esc cancels.")]),
             separator(),
+            section("Permissions", views: permissionControls),
+            separator(),
             section("Watermark", views: [watermark, help("Keep this on to help others discover Vishot.")]),
             separator(),
             section("Capture History", views: [historyKeys, historyPolicy, historyUsage,
@@ -146,6 +159,14 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    deinit {
+        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
+    }
+
+    private func refreshPermissions() {
+        for control in permissionControls { control.refresh() }
+    }
+
     private func help(_ text: String) -> NSTextField {
         let label = NSTextField(wrappingLabelWithString: text)
         label.font = .systemFont(ofSize: 12)
@@ -162,6 +183,9 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         stack.alignment = .leading
         stack.spacing = 8
         for view in views where view is NSTextField {
+            view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+        for view in views where view is PermissionControlView {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
         return stack
@@ -196,9 +220,11 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) { recorder.cancel(); historyRecorder.cancel() }
     func windowDidResignKey(_ notification: Notification) { recorder.cancel(); historyRecorder.cancel() }
+    func windowDidBecomeKey(_ notification: Notification) { refreshPermissions() }
 
     func present() {
         store.reload()
+        refreshPermissions()
         refresh()
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
