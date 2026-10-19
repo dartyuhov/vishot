@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 
 final class SetupWindow: NSWindowController, NSWindowDelegate {
     private let flow: SetupFlow
@@ -7,10 +6,8 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
     private let capture: () -> Void
     private let checklist = NSStackView()
     private let guide = NSStackView()
-    private let screenStatus = NSTextField(labelWithString: "")
-    private let accessibilityStatus = NSTextField(labelWithString: "")
+    private let permissions = CapturePermission.allCases.map { PermissionControlView(permission: $0) }
     private let shortcutLabel = NSTextField(wrappingLabelWithString: "")
-    private let feedback = NSTextField(wrappingLabelWithString: "")
     private let continueButton = NSButton(title: "Continue", target: nil, action: nil)
     private var activationObserver: NSObjectProtocol?
 
@@ -31,12 +28,10 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
         heading.font = .systemFont(ofSize: 22, weight: .semibold)
         checklist.addArrangedSubview(heading)
         checklist.addArrangedSubview(help("Choose access for keyboard-first screenshots. Enable Vishot yourself in System Settings → Privacy & Security."))
-        addPermission(to: checklist, heading: "Required · Screen Recording", status: screenStatus,
-                      explanation: "Allows Vishot to capture screenshots of your windows and displays.",
-                      action: #selector(enableScreenRecording))
-        addPermission(to: checklist, heading: "Optional, recommended · Accessibility", status: accessibilityStatus,
-                      explanation: "Temporarily brings keyboard-selected windows forward and lets you select UI elements. Without it, you can still select windows and capture screenshots.",
-                      action: #selector(enableAccessibility))
+        for permission in permissions {
+            checklist.addArrangedSubview(permission)
+            permission.onLayoutChange = { [weak self] in self?.refresh() }
+        }
         checklist.addArrangedSubview(help("If access still shows Not allowed after enabling it, quit and reopen Vishot. Setup will return until you finish."))
         continueButton.target = self
         continueButton.action = #selector(continueSetup)
@@ -59,10 +54,7 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
         actions.spacing = 8
         guide.addArrangedSubview(actions)
 
-        feedback.font = .systemFont(ofSize: 12)
-        feedback.textColor = .secondaryLabelColor
-        feedback.isSelectable = true
-        let stack = NSStackView(views: [checklist, guide, feedback])
+        let stack = NSStackView(views: [checklist, guide])
         configure(stack)
         stack.translatesAutoresizingMaskIntoConstraints = false
         let content = window.contentView!
@@ -90,7 +82,6 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
             section.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
             for view in section.arrangedSubviews { view.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true }
         }
-        feedback.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
                                                                    object: nil, queue: .main) { [weak self] _ in
             guard self?.window?.isVisible == true else { return }
@@ -116,22 +107,6 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
         return label
     }
 
-    private func addPermission(to stack: NSStackView, heading: String, status: NSTextField,
-                               explanation: String, action: Selector) {
-        let title = NSTextField(labelWithString: heading)
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
-        let enable = NSButton(title: "Enable…", target: self, action: action)
-        enable.setAccessibilityLabel("Enable \(heading.contains("Screen Recording") ? "Screen Recording" : "Accessibility")")
-        let row = NSStackView(views: [status, NSView(), enable])
-        row.orientation = .horizontal
-        let description = help(explanation)
-        let section = NSStackView(views: [title, description, row])
-        configure(section)
-        section.spacing = 8
-        for view in section.arrangedSubviews { view.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true }
-        stack.addArrangedSubview(section)
-    }
-
     func present() {
         refresh()
         NSApp.activate(ignoringOtherApps: true)
@@ -141,14 +116,12 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
 
     func refresh() {
         flow.refresh()
-        screenStatus.stringValue = flow.screenRecordingAllowed ? "Allowed" : "Not allowed"
-        accessibilityStatus.stringValue = flow.accessibilityAllowed ? "Allowed" : "Not allowed"
+        permissions.forEach { $0.refresh() }
         continueButton.isEnabled = flow.screenRecordingAllowed
         continueButton.title = flow.accessibilityAllowed ? "Continue" : "Continue without Accessibility"
         shortcutLabel.stringValue = "Press \(shortcut()) to start a capture."
         checklist.isHidden = flow.isShowingGuide
         guide.isHidden = !flow.isShowingGuide
-        feedback.isHidden = feedback.stringValue.isEmpty
         window?.recalculateKeyViewLoop()
     }
 
@@ -167,17 +140,6 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
     @objc private func firstCapture() { complete(takeScreenshot: true) }
     private func complete(takeScreenshot: Bool) {
         flow.finish(dismiss: { self.window?.orderOut(nil) }, capture: takeScreenshot ? capture : nil)
-        refresh()
-    }
-
-    @objc private func enableScreenRecording() { openPrivacyPage("Screen Recording", anchor: "Privacy_ScreenCapture") }
-    @objc private func enableAccessibility() { openPrivacyPage("Accessibility", anchor: "Privacy_Accessibility") }
-
-    private func openPrivacyPage(_ name: String, anchor: String) {
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)")!
-        let opened = NSWorkspace.shared.open(url)
-        feedback.stringValue = (opened ? "" : "Couldn’t open System Settings. ") +
-            "In System Settings → Privacy & Security → \(name), enable Vishot. Opening the page does not grant access."
         refresh()
     }
 
@@ -206,6 +168,6 @@ extension SetupFlow {
     static func live(defaults: UserDefaults = .standard) -> SetupFlow {
         SetupFlow(isComplete: { defaults.bool(forKey: "setupComplete") },
                   rememberCompletion: { defaults.set(true, forKey: "setupComplete") },
-                  readAccess: { (CGPreflightScreenCaptureAccess(), AXIsProcessTrusted()) })
+                  readAccess: { (CapturePermission.screenRecording.readAccess(), CapturePermission.accessibility.readAccess()) })
     }
 }

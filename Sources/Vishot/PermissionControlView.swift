@@ -1,6 +1,6 @@
 import AppKit
 
-/// Native controls used only by the Settings window, away from picker rendering.
+/// Shared native setup and Settings controls, away from picker rendering.
 final class PermissionControlView: NSStackView {
     private var control: PermissionControl
     private let availability = NSTextField(labelWithString: "")
