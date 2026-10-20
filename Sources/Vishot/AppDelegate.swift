@@ -49,6 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsItem: NSMenuItem?
     private var overlay: OverlayController?
     private var launchAtLoginItem: NSMenuItem?
+    private lazy var setup = SetupFlow.live()
+    private var setupWindow: SetupWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Before the overlay builds its panels, which ask for the fonts.
@@ -58,13 +60,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settings = SettingsStore(registerHistory: { [weak self] shortcut in
             guard let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.carbonModifiers, action: { [weak self] in
                 if self?.settingsWindow?.recordGlobalShortcut(shortcut) == true { return }
-                overlay.showHistory()
+                self?.showHistory()
             }) else { throw SettingsError(message: "Could not register History shortcut \(shortcut.display). It may be used by macOS or another app.") }
             return hotKey
         }) { [weak self] shortcut in
             guard let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.carbonModifiers, action: { [weak self] in
                 if self?.settingsWindow?.recordGlobalShortcut(shortcut) == true { return }
-                overlay.toggle()
+                self?.capture()
             }) else { throw SettingsError(message: "Could not register \(shortcut.display). It may be used by macOS or another app.") }
             return hotKey
         }
@@ -79,9 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.start()
         overlay.historyLibrary.start()
 
-        if !CGPreflightScreenCaptureAccess() {
-            CGRequestScreenCaptureAccess()
-        }
+        if setup.needsSetup { presentSetup() }
     }
 
     private func setUpStatusItem() {
@@ -149,10 +149,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func captureFromMenu() {
         // Let the menu finish closing before the overlay takes key focus.
-        DispatchQueue.main.async { self.overlay?.toggle() }
+        DispatchQueue.main.async { self.capture() }
     }
 
-    @objc private func historyFromMenu() { DispatchQueue.main.async { self.overlay?.showHistory() } }
+    @objc private func historyFromMenu() { DispatchQueue.main.async { self.showHistory() } }
+
+    private func capture() {
+        if overlay?.isSessionActive != true,
+           setupWindow?.window?.isVisible == true, setup.isShowingGuide {
+            setupWindow?.takeFirstScreenshot()
+            return
+        }
+        guard !setup.needsSetup else {
+            if setup.isShowingGuide { setupWindow?.takeFirstScreenshot() }
+            else { presentSetup() }
+            return
+        }
+        overlay?.toggle()
+    }
+
+    private func showHistory() {
+        guard !setup.needsSetup else { presentSetup(); return }
+        overlay?.showHistory()
+    }
+
+    private func presentSetup() {
+        if setupWindow == nil {
+            setupWindow = SetupWindow(flow: setup, shortcut: { [weak self] in
+                self?.settings?.active.shortcut.display ?? CaptureShortcut.defaults.display
+            }, capture: { [weak self] in self?.overlay?.toggle() })
+        }
+        setupWindow?.present()
+    }
 
     private func settingsChanged() {
         guard let settings else { return }
@@ -164,6 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay?.watermark = settings.active.watermark
         overlay?.historyLibrary.retention = settings.active.historyRetention
         settingsWindow?.refresh()
+        if setupWindow?.window?.isVisible == true { setupWindow?.refresh() }
     }
 
     @objc private func openSettings() {

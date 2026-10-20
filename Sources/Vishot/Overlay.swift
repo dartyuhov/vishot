@@ -15,15 +15,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
             }
         }
 
-        var keys: [HUDKey] {
+        func keys(accessibilityAvailable: Bool) -> [HUDKey] {
             switch self {
             case .window: [
-                HUDKey("hjkl", action: "move"), HUDKey("f", action: "elements"), HUDKey("v", action: "region"),
+                HUDKey("hjkl", action: "move"), PickerHUD.elementsKey(accessibilityAvailable: accessibilityAvailable), HUDKey("v", action: "region"),
                 HUDKey("G", action: "screen"), HUDKey("↵", action: "copy"), HUDKey("⇧↵", "e", action: "edit"),
                 HUDKey("esc", action: "cancel"),
             ]
             case .element: [
-                HUDKey("f", action: "elements"), HUDKey("v", action: "region"), HUDKey("G", action: "screen"),
+                PickerHUD.elementsKey(accessibilityAvailable: accessibilityAvailable), HUDKey("v", action: "region"), HUDKey("G", action: "screen"),
                 HUDKey("↵", action: "copy"), HUDKey("⇧↵", "e", action: "edit"), HUDKey("esc", action: "back"),
             ]
             case .hint: [HUDKey(action: "type a hint"), HUDKey("⌫", action: "undo"), HUDKey("esc", action: "back")]
@@ -68,6 +68,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         set { capturer.watermark = newValue }
     }
     private let elements = ElementCatalog()
+    private let accessibility = AccessibilityAvailability()
     private let raiser = WindowRaiser()
     private lazy var sourcePreparation = FrozenSourcePreparation(
         waitForRaise: { [raiser] in await raiser.waitForPendingRaise() },
@@ -101,6 +102,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var hints: [Hint] = []
     private var typedHint = ""
     private var status = ""
+    private var hoverStatus: String?
+    private var accessibilityAvailable = false
     private var warmUpTimer: Timer?
     /// Region mode's cursor and region, while in it.
     private var region: RegionSelector?
@@ -116,6 +119,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     override init() {
         super.init()
+        accessibility.onChange = { [weak self] allowed in
+            guard let self else { return }
+            accessibilityAvailable = allowed
+            if isShowing { render() }
+        }
+        accessibility.start()
         reusableBrowser = HistoryBrowser(library: historyLibrary)
         raiser.onKey = { [weak self] in $0.type == .keyDown ? self?.handle($0) : self?.keyUp($0) }
         raiser.onActivated = { [weak self] in
@@ -223,6 +232,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         currentWindow = WindowCatalog.initialSelection(in: windows, frontPID: frontPID) ?? 0
         status = ""
+        hoverStatus = nil
+        accessibilityAvailable = accessibility.isAllowed
         enterWindowMode()
         isShowing = true
         onSessionChange?(true)
@@ -423,9 +434,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     /// Puts hints on the elements of the current window. The window stays selected until a hint is typed.
     private func startHints() {
-        guard elements.isTrusted() else {
-            NSSound.beep()
-            status = "Allow Vishot in System Settings → Privacy & Security → Accessibility"
+        accessibilityAvailable = elements.isTrusted()
+        guard accessibilityAvailable else {
+            status = PickerHUD.elementUnavailableReason
             return
         }
         if mode == .window { currentWindow = selected }
@@ -570,10 +581,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
         // Region mode's HUD follows its cursor, since there may be no region yet.
         let anchor = (region?.cursor ?? targets[selected].anchor).flippedBetweenCocoaAndCG
         let hudPanel = panels.first { $0.frame.contains(anchor) } ?? panels.first
-        let statusLine = isCapturing ? "capturing…"
-            : !status.isEmpty ? status
+        let statusLine = isCapturing ? "capturing…" : hoverStatus ?? (
+            !status.isEmpty ? status
             : warmUpTimer != nil ? "loading page…"
             : region?.status ?? ""
+        )
         let regionRect = region == nil ? nil : target?.frame.flippedBetweenCocoaAndCG
         let regionCursor = region?.cursor.flippedBetweenCocoaAndCG
         // Containers are numbered among themselves, so nested ones (adjacent in the list) get different colors.
@@ -590,7 +602,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             panel.highlight(target?.frame.flippedBetweenCocoaAndCG, label: target?.label ?? "")
             panel.showRegion(regionRect, cursor: regionCursor)
             panel.showHints(marks, typed: typedHint.count)
-            panel.showHUD(name: mode.name, keys: mode.keys, status: statusLine, visible: panel === hudPanel)
+            panel.showHUD(name: mode.name, keys: mode.keys(accessibilityAvailable: accessibilityAvailable), status: statusLine, visible: panel === hudPanel)
         }
         CATransaction.commit()
     }
@@ -606,6 +618,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             return
         }
         status = ""
+        hoverStatus = nil
         let keyCode = Int(event.keyCode)
         let shift = event.modifierFlags.contains(.shift)
         if isCapturing {
@@ -645,6 +658,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
             }
             edit()
         case kVK_ANSI_E: edit()
+        case kVK_ANSI_Y:
+            confirm()
+            return
         case kVK_ANSI_F where mode == .window || mode == .element: startHints()
         case kVK_ANSI_G where shift && mode != .screen: enterScreenMode()
         case kVK_ANSI_V: enterRegionMode()
@@ -654,7 +670,6 @@ final class OverlayController: NSObject, NSWindowDelegate {
             return
         default: break
         }
-        // The Accessibility prompt can take key focus, which closes the overlay.
         if isShowing { render() }
     }
 
@@ -675,9 +690,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
             render()
             return
         }
+        let previousHover = hoverStatus
+        hoverStatus = panels.compactMap { $0.hudUnavailableReason(at: point) }.first
+        if hoverStatus != nil {
+            if hoverStatus != previousHover { render() }
+            return
+        }
         let before = selected
         _ = select(at: point)
-        if selected != before { render() }
+        if selected != before || previousHover != nil { render() }
     }
 
     private func mouseDown(at point: CGPoint) {
@@ -693,6 +714,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         if let region {
             region.mouseDown(at: point)
+            render()
+            return
+        }
+        if let reason = panels.compactMap({ $0.hudUnavailableReason(at: point) }).first {
+            status = reason
             render()
             return
         }

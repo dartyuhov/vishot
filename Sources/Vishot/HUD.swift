@@ -4,10 +4,13 @@ import AppKit
 struct HUDKey: Equatable {
     let keys: [String]
     let action: String
+    let unavailableReason: String?
+    var isEnabled: Bool { unavailableReason == nil }
 
-    init(_ keys: String..., action: String) {
+    init(_ keys: String..., action: String, unavailableReason: String? = nil) {
         self.keys = keys
         self.action = action
+        self.unavailableReason = unavailableReason
     }
 }
 
@@ -55,6 +58,7 @@ enum HUD {
     /// The entry's keycaps, separated by slashes, then what they do, in one layer as tall as a keycap.
     static func makeEntry(_ entry: HUDKey, scale: CGFloat) -> Entry {
         let layer = CALayer()
+        layer.opacity = entry.isEnabled ? 1 : 0.45
         var parts: [(layer: CALayer, font: NSFont?, gap: CGFloat)] = []
         var faces: [CALayer] = []
         for (index, key) in entry.keys.enumerated() {
