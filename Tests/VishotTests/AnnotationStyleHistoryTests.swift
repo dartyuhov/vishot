@@ -102,8 +102,15 @@ final class AnnotationStyleHistoryTests: XCTestCase {
         try key(kVK_ANSI_H, "Hello")
         try key(kVK_Return, "\n", flags: .shift)
         try key(kVK_ANSI_W, "World")
-        XCTAssertEqual(editor.makeScene().caret,
-            AnnotationRenderer.caret(after: "Hello\nWorld", at: CGPoint(x: 80, y: 60), style: ThemeCatalog.clean.annotation))
+        let caret = try XCTUnwrap(editor.makeScene().caret)
+        let expectedCaret = AnnotationRenderer.caret(after: "Hello\nWorld", at: CGPoint(x: 80, y: 60),
+            style: ThemeCatalog.clean.annotation)
+        // CoreText measurements can differ slightly across macOS/SDK versions.
+        // Keep the tolerance well below a device pixel at either supported scale.
+        XCTAssertEqual(caret.minX, expectedCaret.minX, accuracy: 0.001)
+        XCTAssertEqual(caret.minY, expectedCaret.minY, accuracy: 0.001)
+        XCTAssertEqual(caret.width, expectedCaret.width, accuracy: 0.001)
+        XCTAssertEqual(caret.height, expectedCaret.height, accuracy: 0.001)
         var result: CGImage?
         editor.onFinish = { _, output in result = output?.image }
         editor.select(.finish(.copy))
