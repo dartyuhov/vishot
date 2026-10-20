@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// Main-thread settings state; the returned registration keeps the hotkey alive.
 final class SettingsStore {
@@ -9,6 +9,12 @@ final class SettingsStore {
     private(set) var configured: AppSettings?
     private(set) var error: String?
     private(set) var isSessionActive = false
+    private(set) var activeColorScheme = ColorScheme.light
+    private var systemColorScheme = ColorScheme.light
+    private var appearanceObservation: NSKeyValueObservation?
+    var hasPendingAppearance: Bool {
+        configured.map { $0.appearance.resolve(system: systemColorScheme) != activeColorScheme } ?? false
+    }
     var onChange: (() -> Void)?
     private let register: (CaptureShortcut) throws -> AnyObject
     private var registration: AnyObject?
@@ -29,6 +35,12 @@ final class SettingsStore {
     deinit { timer?.cancel() }
 
     func start(watching: Bool = true) {
+        systemColorScheme = NSApp?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
+        activeColorScheme = active.appearance.resolve(system: systemColorScheme)
+        appearanceObservation = NSApp?.observe(\.effectiveAppearance, options: [.new]) { [weak self] app, _ in
+            let scheme: ColorScheme = app.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
+            DispatchQueue.main.async { self?.systemAppearanceChanged(scheme) }
+        }
         reload()
         if registration == nil {
             do { registration = try register(active.shortcut) }
@@ -103,7 +115,16 @@ final class SettingsStore {
 
     func setSessionActive(_ active: Bool) {
         isSessionActive = active
-        if !active { applyConfigured() }
+        if !active {
+            applyConfigured()
+            activeColorScheme = self.active.appearance.resolve(system: systemColorScheme)
+        }
+        onChange?()
+    }
+
+    func systemAppearanceChanged(_ scheme: ColorScheme) {
+        systemColorScheme = scheme
+        if !isSessionActive { activeColorScheme = active.appearance.resolve(system: scheme) }
         onChange?()
     }
 
@@ -122,18 +143,20 @@ final class SettingsStore {
             registration = nextCapture
             historyRegistration = nextHistory
             active = candidate
+            activeColorScheme = candidate.appearance.resolve(system: systemColorScheme)
             error = nil
         } catch { self.error = error.localizedDescription }
     }
 
     /// Edits only the requested preference on fresh source, retaining external edits.
-    func update(watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
+    func update(appearance: AppearancePreference? = nil, style: VisualStyle? = nil,
+                watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
                 historyRetention: HistoryRetention? = nil, historyShortcut: CaptureShortcut? = nil,
                 clearHistoryShortcut: Bool = false) {
         do {
             let target = url.resolvingSymlinksInPath()
             let original = try String(contentsOf: target, encoding: .utf8)
-            let edited = try AppSettings.edit(original, watermark: watermark, shortcut: shortcut,
+            let edited = try AppSettings.edit(original, appearance: appearance, style: style, watermark: watermark, shortcut: shortcut,
                 historyRetention: historyRetention, historyShortcut: historyShortcut, clearHistoryShortcut: clearHistoryShortcut)
             guard url.resolvingSymlinksInPath() == target,
                   try String(contentsOf: target, encoding: .utf8) == original else {

@@ -204,12 +204,14 @@ retention for the ad-hoc-signed distribution packages. See
 ## Settings
 
 Open **Settings…** from the menu bar to record a global capture shortcut,
-toggle the watermark, or open the configuration file. The watermark defaults
-to on; keeping it on helps others discover Vishot.
+choose appearance and style, toggle the watermark, or open the configuration file. The
+watermark defaults to on; keeping it on helps others discover Vishot.
 
 Settings and external file edits share `~/.config/vishot/config.toml`:
 
 ```toml
+appearance = "system"
+style = "pixel"
 watermark = true
 
 [shortcut]
@@ -222,15 +224,40 @@ Optional modifiers are `option` and `shift`. Supported keys include uppercase
 letters, digits, `F1`–`F12`, and names such as `Space`, `Return`, `Tab`,
 `Left`, `Right`, `Up`, `Down`, and `Minus`.
 
-File changes reload automatically and apply after the current picker/editor
-session ends. Invalid edits or unavailable shortcuts keep the working settings;
+Choose **Appearance** (**System**, **Light**, or **Dark**) and **Style**
+(**Pixel** or **Smooth**) independently. Both styles support light and dark
+interface colors. System follows macOS. Pixel keeps pixel-art geometry and
+fonts; Smooth uses rounded controls, system fonts, and vector markup.
+Configuration accepts lowercase `appearance = "system"`, `"light"`, or
+`"dark"`, and `style = "pixel"` or `"smooth"`. New installations default to
+System and Pixel. Legacy `theme = "pixel"` or `"clean"` retains Dark colors
+and maps to Pixel or Smooth; explicit new settings take precedence. Changing
+either selector migrates the old assignment while preserving comments.
+Appearance changes interface colors, not captured pixels, annotation colors,
+or the watermark's output palette. Style covers the picker, hints, HUDs,
+history, editor, markup, and watermark. Logos retain their brand appearance.
+
+File changes reload automatically and apply when idle, without a restart. An
+active picker, history browser, or editor keeps its appearance and style until that session
+ends, including history-to-editor transitions and returning from **Save As**.
+System appearance changes are deferred too. **Changes Pending** in Settings
+explains deferred changes. Invalid edits or
+unavailable shortcuts keep the working settings;
 **Settings… — Configuration Error** shows how to fix them. A broken file at
 startup uses defaults without overwriting it. Missing fields use defaults.
 
 Window edits preserve comments and unrelated content. For layouts that cannot
 be edited safely, such as modifier arrays containing comments, edit the file
-directly. Symlinked dotfiles are supported. Output keeps the watermark choice
-from copy/save time, including images encoded later when pasted.
+directly. Symlinked dotfiles are supported. Copied and saved images keep the
+session's watermark style and enabled choice, including background saves and
+images encoded later when pasted. Small images omit the watermark.
+
+Existing editable screenshots keep their original markup style when reopened,
+including newly added annotations, undo, and redo. Surrounding controls use the
+current session appearance and style. Older history entries without style metadata use Pixel.
+Changing preferences doesn't regenerate stored previews or alter earlier screenshot
+pixels. History and editor previews stay watermark-free; yanking an entry uses
+the current session's watermark preference.
 
 ## Speed notes
 

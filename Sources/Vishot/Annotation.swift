@@ -54,6 +54,20 @@ struct EditDocument {
     /// In image space. Nil keeps the whole image.
     var crop: CGRect?
 
+    /// Fixed for the editable screenshot's lifetime; snapshots only restore geometry/content.
+    let annotationStyle: ThemeID
+    let resolvedAnnotationStyle: AnnotationStyle
+
+    init(image: CGImage, scale: CGFloat, annotations: [Annotation] = [], crop: CGRect? = nil,
+         annotationStyle: ThemeID = .pixel) {
+        self.image = image
+        self.scale = scale
+        self.annotations = annotations
+        self.crop = crop
+        self.annotationStyle = annotationStyle
+        resolvedAnnotationStyle = ThemeCatalog.resolve(annotationStyle).annotation
+    }
+
     /// In points.
     var size: CGSize {
         CGSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
