@@ -17,8 +17,8 @@ enum CapturePermission: CaseIterable {
 
     var explanation: String {
         switch self {
-        case .screenRecording: return "Required to capture screenshots."
-        case .accessibility: return "Temporarily brings keyboard-selected windows forward and lets you select UI elements. Without access, window navigation remains available, but selected windows are not brought forward and element selection is unavailable."
+        case .screenRecording: return "Capture screenshots."
+        case .accessibility: return "Temporarily bring selected windows forward and select UI elements."
         }
     }
 

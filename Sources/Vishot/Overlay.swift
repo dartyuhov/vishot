@@ -658,6 +658,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
             }
             edit()
         case kVK_ANSI_E: edit()
+        case kVK_ANSI_Y:
+            confirm()
+            return
         case kVK_ANSI_F where mode == .window || mode == .element: startHints()
         case kVK_ANSI_G where shift && mode != .screen: enterScreenMode()
         case kVK_ANSI_V: enterRegionMode()

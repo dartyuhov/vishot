@@ -142,13 +142,13 @@ final class RegionSelector {
             if !selection.corner(at: cursor) { NSSound.beep() }
         case kVK_Tab where selection.isIdle:
             switchDisplay(to: (display + (flags.contains(.shift) ? -1 : 1) + displays.count) % displays.count)
-        case kVK_Return, kVK_ANSI_KeypadEnter, kVK_Space, kVK_ANSI_E:
+        case kVK_Return, kVK_ANSI_KeypadEnter, kVK_Space, kVK_ANSI_E, kVK_ANSI_Y:
             // What you see is what you get, so a region being drawn is finished first.
             guard selection.finish(at: cursor), selection.region != nil else {
                 NSSound.beep()
                 return .none
             }
-            return flags.contains(.shift) || keyCode == kVK_ANSI_E ? .edit : .copy
+            return keyCode == kVK_ANSI_E || (flags.contains(.shift) && keyCode != kVK_ANSI_Y) ? .edit : .copy
         case kVK_Escape:
             if !selection.cancel() { return .back }
         case kVK_ANSI_Q:

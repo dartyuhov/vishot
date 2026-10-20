@@ -155,7 +155,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func historyFromMenu() { DispatchQueue.main.async { self.showHistory() } }
 
     private func capture() {
-        guard !setup.needsSetup else { presentSetup(); return }
+        if overlay?.isSessionActive != true,
+           setupWindow?.window?.isVisible == true, setup.isShowingGuide {
+            setupWindow?.takeFirstScreenshot()
+            return
+        }
+        guard !setup.needsSetup else {
+            if setup.isShowingGuide { setupWindow?.takeFirstScreenshot() }
+            else { presentSetup() }
+            return
+        }
         overlay?.toggle()
     }
 
@@ -168,7 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if setupWindow == nil {
             setupWindow = SetupWindow(flow: setup, shortcut: { [weak self] in
                 self?.settings?.active.shortcut.display ?? CaptureShortcut.defaults.display
-            }, capture: { [weak self] in self?.capture() })
+            }, capture: { [weak self] in self?.overlay?.toggle() })
         }
         setupWindow?.present()
     }
