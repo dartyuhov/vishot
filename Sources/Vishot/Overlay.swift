@@ -63,7 +63,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func preparePickerPanels() {
-        let modes = Mode.allCases.map { (name: $0.name, keys: $0.keys) }
+        let modes = Mode.allCases.flatMap { mode in
+            [false, true].map { (name: mode.name, keys: mode.keys(accessibilityAvailable: $0)) }
+        }
         panels.forEach { $0.prepare(theme: preparedTheme, modes: modes) }
     }
     private var isShowing = false
