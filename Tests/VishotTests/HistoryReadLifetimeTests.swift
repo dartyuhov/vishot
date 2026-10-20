@@ -9,7 +9,7 @@ final class HistoryReadLifetimeTests: XCTestCase {
             defer { try? FileManager.default.removeItem(at: folder) }
             let settings = SettingsStore(url: folder.appendingPathComponent("config.toml")) { _ in NSObject() }
             settings.start(watching: false)
-            settings.update(theme: style)
+            settings.update(style: VisualStyle(annotationID: style))
             settings.setSessionActive(true)
             let store = HistoryStore(url: folder.appendingPathComponent("History"))
             let source = try makeDocument()
@@ -41,7 +41,7 @@ final class HistoryReadLifetimeTests: XCTestCase {
             }
             wait(for: [queued], timeout: 3)
             let nextStyle: ThemeID = style == .pixel ? .clean : .pixel
-            settings.update(theme: nextStyle)
+            settings.update(style: VisualStyle(annotationID: nextStyle))
             settings.setSessionActive(true) // History-to-editor continuation.
             XCTAssertEqual(settings.active.theme, style)
             settings.setSessionActive(false)

@@ -54,9 +54,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private(set) var sessionTheme: ResolvedTheme?
     private var sessionOutput: OutputStyle?
 
-    func prepareTheme(_ id: ThemeID) {
-        guard !isSessionActive, preparedTheme.id != id else { return }
-        preparedTheme = ThemeCatalog.resolve(id)
+    func prepareTheme(style: VisualStyle, colorScheme: ColorScheme) {
+        guard !isSessionActive,
+              preparedTheme.id != style.annotationID || preparedTheme.colorScheme != colorScheme else { return }
+        preparedTheme = ThemeCatalog.resolve(style: style, colorScheme: colorScheme)
         preparePickerPanels()
         reusableBrowser.prepare(theme: preparedTheme)
     }

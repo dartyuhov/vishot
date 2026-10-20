@@ -103,3 +103,21 @@ models/scales, bundle revision, permissions, and observed results here.
 
 The remaining acceptance blocker is signed interactive verification on those
 displays. No live GUI flow or physical-scale result is claimed by this record.
+
+## Appearance and style follow-up
+
+The follow-up separates Appearance (System, Light, Dark) from Style
+(Pixel, Smooth). Swift build, all 191 tests, and the Apple Development signed
+release build pass. Tests cover independent persistence, legacy migration,
+System changes deferred through sessions and invalid configuration, and unchanged
+markup pixels across light/dark interface palettes.
+
+Review identified and fixed stale System resolution after invalid configuration,
+missing first-open Dark/Pixel Settings styling, and active-keycap text contrast
+in Light mode. The obsolete internal `theme:` writing API was removed; legacy
+configuration reading and saved annotation identifiers remain supported.
+
+Interactive installed-app checks for all four style/color combinations and
+actual macOS appearance switching remain pending. The signed follow-up build was
+installed and relaunched for user evaluation. Earlier verification above applies to the original
+unified-theme implementation, not this follow-up's visual acceptance.

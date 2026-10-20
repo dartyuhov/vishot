@@ -63,15 +63,23 @@ struct CaptureShortcut: Equatable {
 }
 
 struct AppSettings: Equatable {
-    var theme = ThemeID.pixel
+    var appearance = AppearancePreference.system
+    var style = VisualStyle.pixel
+    // History identifiers remain stable; application preferences use appearance/style.
+    var theme: ThemeID {
+        get { style.annotationID }
+        set { style = VisualStyle(annotationID: newValue) }
+    }
     var watermark = true
     var shortcut = CaptureShortcut.defaults
     var historyRetention = HistoryRetention.sevenDays
     var historyShortcut: CaptureShortcut?
     static let defaults = AppSettings()
     static let defaultSource = """
-    # Built-in appearance: pixel or clean.
-    theme = "pixel"
+    # Interface colors: system, light, or dark.
+    appearance = "system"
+    # Interface and markup rendering: pixel or smooth.
+    style = "pixel"
 
     # Keep this on to help others discover Vishot.
     watermark = true
@@ -98,6 +106,19 @@ struct AppSettings: Equatable {
                 throw SettingsError(message: "theme must be \"pixel\" or \"clean\".")
             }
             settings.theme = theme
+            settings.appearance = .dark
+        }
+        if let value = table["appearance"] {
+            guard let name = value.string, let appearance = AppearancePreference(rawValue: name) else {
+                throw SettingsError(message: "appearance must be \"system\", \"light\", or \"dark\".")
+            }
+            settings.appearance = appearance
+        }
+        if let value = table["style"] {
+            guard let name = value.string, let style = VisualStyle(rawValue: name) else {
+                throw SettingsError(message: "style must be \"pixel\" or \"smooth\".")
+            }
+            settings.style = style
         }
         if let value = table["watermark"] {
             guard let flag = value.bool else { throw SettingsError(message: "watermark must be true or false.") }
@@ -154,20 +175,33 @@ struct AppSettings: Equatable {
 
     /// Full TOML is accepted for reading. Editing is deliberately conservative:
     /// unsupported source layouts are left untouched rather than reformatted.
-    static func edit(_ source: String, theme: ThemeID? = nil, watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
+    static func edit(_ source: String, appearance: AppearancePreference? = nil,
+                     style: VisualStyle? = nil, watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
                      historyRetention: HistoryRetention? = nil, historyShortcut: CaptureShortcut? = nil,
                      clearHistoryShortcut: Bool = false) throws -> String {
         let current = try parse(source)
         var expected = current
-        if let theme { expected.theme = theme }
+        if let appearance { expected.appearance = appearance }
+        if let style { expected.style = style }
         if let watermark { expected.watermark = watermark }
         if let shortcut { expected.shortcut = try shortcut.validated() }
         if let historyRetention { expected.historyRetention = historyRetention }
         if let historyShortcut { expected.historyShortcut = try historyShortcut.validated() }
         if clearHistoryShortcut { expected.historyShortcut = nil }
         var result = source
+        let hasLegacyTheme = try TOMLTable(string: source)["theme"] != nil
+        let migrate = (appearance != nil || style != nil) && hasLegacyTheme
+        if migrate {
+            let spans = try SettingsSource(result)
+            guard let assignment = spans.assignments[["theme"]],
+                  !result[assignment.value].contains(where: \.isNewline) else {
+                throw SettingsError(message: "Edit theme in the file: its layout cannot be safely migrated by Settings.")
+            }
+            result.removeSubrange(assignment.content)
+        }
         let updates: [(String, String, Bool)] = [
-            ("theme", "\"\(expected.theme.rawValue)\"", expected.theme != current.theme),
+            ("appearance", "\"\(expected.appearance.rawValue)\"", migrate || (appearance != nil && expected.appearance != current.appearance)),
+            ("style", "\"\(expected.style.rawValue)\"", migrate || expected.style != current.style),
             ("watermark", expected.watermark ? "true" : "false", expected.watermark != current.watermark),
             ("shortcut.key", "\"\(expected.shortcut.key)\"", expected.shortcut.key != current.shortcut.key),
             ("shortcut.modifiers", "[" + expected.shortcut.modifiers.map { "\"\($0)\"" }.joined(separator: ", ") + "]", expected.shortcut.modifiers != current.shortcut.modifiers),
@@ -229,6 +263,8 @@ struct AppSettings: Equatable {
         let editedTable = try TOMLTable(string: result)
         for table in [originalTable, editedTable] {
             table.remove(at: "theme")
+            table.remove(at: "appearance")
+            table.remove(at: "style")
             table.remove(at: "watermark")
             if let shortcutTable = table["shortcut"]?.table {
                 shortcutTable.remove(at: "key")

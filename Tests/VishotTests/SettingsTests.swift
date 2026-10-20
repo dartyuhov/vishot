@@ -2,6 +2,70 @@ import XCTest
 @testable import Vishot
 
 final class SettingsTests: XCTestCase {
+    func testSystemAppearanceAndIndependentPreferencesDeferUntilSessionEnds() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("config.toml")
+        let store = SettingsStore(url: url) { _ in NSObject() }
+        store.start(watching: false)
+        store.systemAppearanceChanged(.light)
+        XCTAssertEqual(store.activeColorScheme, .light)
+        store.update(style: .smooth)
+        XCTAssertEqual(store.active.style, .smooth)
+        XCTAssertEqual(store.active.appearance, .system)
+        store.setSessionActive(true)
+        store.systemAppearanceChanged(.dark)
+        XCTAssertEqual(store.activeColorScheme, .light)
+        XCTAssertTrue(store.hasPendingAppearance)
+        store.setSessionActive(false)
+        XCTAssertEqual(store.activeColorScheme, .dark)
+        XCTAssertFalse(store.hasPendingAppearance)
+        store.update(appearance: .light)
+        store.systemAppearanceChanged(.dark)
+        XCTAssertEqual(store.activeColorScheme, .light)
+        XCTAssertEqual(store.active.style, .smooth)
+        let restarted = SettingsStore(url: url) { _ in NSObject() }
+        restarted.start(watching: false)
+        XCTAssertEqual(restarted.active.appearance, .light)
+        XCTAssertEqual(restarted.active.style, .smooth)
+        let lastGood = store.active
+        try "appearance = 'bad'\nstyle = 'pixel'".write(to: url, atomically: true, encoding: .utf8)
+        store.reload()
+        XCTAssertEqual(store.active, lastGood)
+        XCTAssertEqual(store.activeColorScheme, .light)
+        XCTAssertNotNil(store.error)
+        // Last-good System still follows a deferred OS change if the file becomes invalid.
+        try "appearance = 'system'\nstyle = 'smooth'".write(to: url, atomically: true, encoding: .utf8)
+        store.reload()
+        store.systemAppearanceChanged(.light)
+        store.setSessionActive(true)
+        try "appearance = 'bad'".write(to: url, atomically: true, encoding: .utf8)
+        store.reload()
+        store.systemAppearanceChanged(.dark)
+        XCTAssertEqual(store.activeColorScheme, .light)
+        store.setSessionActive(false)
+        XCTAssertEqual(store.activeColorScheme, .dark)
+    }
+
+    func testIndependentAppearanceAndStyleCompatibility() throws {
+        XCTAssertEqual(try AppSettings.parse("").appearance, .system)
+        XCTAssertEqual(try AppSettings.parse("theme = 'clean'").appearance, .dark)
+        XCTAssertEqual(try AppSettings.parse("theme = 'clean'").style, .smooth)
+        let explicit = try AppSettings.parse("theme = 'clean'\nappearance = 'light'\nstyle = 'pixel'")
+        XCTAssertEqual(explicit.appearance, .light)
+        XCTAssertEqual(explicit.style, .pixel)
+        let source = "# keep\r\ntheme = 'clean' # old choice\r\n[notes]\r\nx = 1\r\n"
+        let edited = try AppSettings.edit(source, appearance: .system)
+        XCTAssertEqual(try AppSettings.parse(edited).appearance, .system)
+        XCTAssertEqual(try AppSettings.parse(edited).style, .smooth)
+        XCTAssertFalse(edited.contains("theme ="))
+        XCTAssertTrue(edited.contains("# old choice"))
+        XCTAssertTrue(edited.contains("[notes]\r\nx = 1"))
+        for source in ["appearance = 'auto'", "style = 'clean'", "appearance = true", "style = 1"] {
+            XCTAssertThrowsError(try AppSettings.parse(source))
+        }
+    }
+
     func testThemeStorePersistsReloadsAndDefersWithoutLosingLastGoodSettings() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -9,13 +73,13 @@ final class SettingsTests: XCTestCase {
         var registrations = 0
         let store = SettingsStore(url: url) { _ in registrations += 1; return NSObject() }
         store.start(watching: false)
-        store.update(theme: .clean)
+        store.update(style: .smooth)
         XCTAssertEqual(store.active.theme, .clean)
         let restarted = SettingsStore(url: url) { _ in NSObject() }
         restarted.start(watching: false)
         XCTAssertEqual(restarted.active.theme, .clean)
         store.setSessionActive(true)
-        store.update(theme: .pixel)
+        store.update(style: .pixel)
         XCTAssertEqual(store.configured?.theme, .pixel)
         XCTAssertEqual(store.active.theme, .clean)
         // A history-to-editor transition remains the same active session.
@@ -38,7 +102,7 @@ final class SettingsTests: XCTestCase {
             let invalid = "theme = \(value)\nwatermark = true"
             try invalid.write(to: url, atomically: true, encoding: .utf8)
             store.reload()
-            store.update(theme: .pixel)
+            store.update(style: .pixel)
             XCTAssertEqual(store.active, lastGood)
             XCTAssertNil(store.configured)
             XCTAssertNotNil(store.error)
@@ -49,13 +113,16 @@ final class SettingsTests: XCTestCase {
 
     func testThemeEditsPreserveSourceAndInsertAtRoot() throws {
         let source = "# café\r\n\"theme\"  = 'pixel' # appearance\r\nwatermark = false\r\n[notes]\r\ntheme = 'unrelated'\r\n"
-        let edited = try AppSettings.edit(source, theme: .clean)
-        XCTAssertEqual(edited, "# café\r\n\"theme\"  = \"clean\" # appearance\r\nwatermark = false\r\n[notes]\r\ntheme = 'unrelated'\r\n")
+        let edited = try AppSettings.edit(source, style: .smooth)
+        XCTAssertTrue(edited.contains("# café"))
+        XCTAssertTrue(edited.contains("# appearance"))
+        XCTAssertTrue(edited.contains("[notes]\r\ntheme = 'unrelated'"))
+        XCTAssertEqual(try AppSettings.parse(edited).appearance, .dark)
         XCTAssertEqual(try AppSettings.parse(edited).theme, .clean)
         let missing = "# keep\r\n[notes]\r\nx = 'untouched'\r\n"
-        XCTAssertEqual(try AppSettings.edit(missing, theme: .clean), "theme = \"clean\"\r\n" + missing)
-        XCTAssertEqual(try AppSettings.edit(source, theme: .pixel), source)
-        XCTAssertThrowsError(try AppSettings.edit("theme = '''\npixel'''", theme: .clean))
+        XCTAssertEqual(try AppSettings.edit(missing, style: .smooth), "style = \"smooth\"\r\n" + missing)
+        XCTAssertEqual(try AppSettings.parse(AppSettings.edit(source, style: .pixel)).appearance, .dark)
+        XCTAssertThrowsError(try AppSettings.edit("theme = '''\npixel'''", style: .smooth))
     }
 
     func testThemeDefaultsAndValidation() throws {
@@ -196,9 +263,9 @@ final class SettingsTests: XCTestCase {
         let store = SettingsStore(url: link) { _ in NSObject() }
         store.start(watching: false)
         try "# external change\nwatermark = true\n[shortcut]\nkey = 'K'".write(to: target, atomically: true, encoding: .utf8)
-        store.update(theme: .clean, watermark: false)
+        store.update(style: .smooth, watermark: false)
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), target.path)
-        XCTAssertEqual(try String(contentsOf: target), "theme = \"clean\"\n# external change\nwatermark = false\n[shortcut]\nkey = 'K'")
+        XCTAssertEqual(try String(contentsOf: target), "style = \"smooth\"\n# external change\nwatermark = false\n[shortcut]\nkey = 'K'")
         XCTAssertEqual(store.active.theme, .clean)
         XCTAssertEqual(store.active.shortcut.key, "K")
         XCTAssertFalse(store.active.watermark)

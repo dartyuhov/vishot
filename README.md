@@ -204,13 +204,14 @@ retention for the ad-hoc-signed distribution packages. See
 ## Settings
 
 Open **Settings…** from the menu bar to record a global capture shortcut,
-choose a theme, toggle the watermark, or open the configuration file. The
+choose appearance and style, toggle the watermark, or open the configuration file. The
 watermark defaults to on; keeping it on helps others discover Vishot.
 
 Settings and external file edits share `~/.config/vishot/config.toml`:
 
 ```toml
-theme = "pixel"
+appearance = "system"
+style = "pixel"
 watermark = true
 
 [shortcut]
@@ -223,18 +224,24 @@ Optional modifiers are `option` and `shift`. Supported keys include uppercase
 letters, digits, `F1`–`F12`, and names such as `Space`, `Return`, `Tab`,
 `Left`, `Right`, `Up`, `Down`, and `Minus`.
 
-Choose **Appearance → Theme** for **Pixel** (the default pixel-art look) or
-**Clean** (dark-neutral panels, rounded controls, system fonts, and smooth
-markup). The root-level `theme` value accepts exactly `"pixel"` or `"clean"`.
-Missing values use Pixel; values such as `"Clean"` are invalid. The theme covers
-the picker, hints, region feedback, history, editor controls, annotations, and
-watermark. Native menus, window chrome, save dialogs, and logos keep their
-system or brand appearance. Keyboard and mouse controls stay the same.
+Choose **Appearance** (**System**, **Light**, or **Dark**) and **Style**
+(**Pixel** or **Smooth**) independently. Both styles support light and dark
+interface colors. System follows macOS. Pixel keeps pixel-art geometry and
+fonts; Smooth uses rounded controls, system fonts, and vector markup.
+Configuration accepts lowercase `appearance = "system"`, `"light"`, or
+`"dark"`, and `style = "pixel"` or `"smooth"`. New installations default to
+System and Pixel. Legacy `theme = "pixel"` or `"clean"` retains Dark colors
+and maps to Pixel or Smooth; explicit new settings take precedence. Changing
+either selector migrates the old assignment while preserving comments.
+Appearance changes interface colors, not captured pixels, annotation colors,
+or the watermark's output palette. Style covers the picker, hints, HUDs,
+history, editor, markup, and watermark. Logos retain their brand appearance.
 
 File changes reload automatically and apply when idle, without a restart. An
-active picker, history browser, or editor keeps its theme until that session
+active picker, history browser, or editor keeps its appearance and style until that session
 ends, including history-to-editor transitions and returning from **Save As**.
-**Changes Pending** in Settings explains deferred changes. Invalid edits or
+System appearance changes are deferred too. **Changes Pending** in Settings
+explains deferred changes. Invalid edits or
 unavailable shortcuts keep the working settings;
 **Settings… — Configuration Error** shows how to fix them. A broken file at
 startup uses defaults without overwriting it. Missing fields use defaults.
@@ -242,13 +249,13 @@ startup uses defaults without overwriting it. Missing fields use defaults.
 Window edits preserve comments and unrelated content. For layouts that cannot
 be edited safely, such as modifier arrays containing comments, edit the file
 directly. Symlinked dotfiles are supported. Copied and saved images keep the
-session's watermark theme and enabled choice, including background saves and
+session's watermark style and enabled choice, including background saves and
 images encoded later when pasted. Small images omit the watermark.
 
 Existing editable screenshots keep their original markup style when reopened,
 including newly added annotations, undo, and redo. Surrounding controls use the
-current session theme. Older history entries without style metadata use Pixel.
-Changing themes doesn't regenerate stored previews or alter earlier screenshot
+current session appearance and style. Older history entries without style metadata use Pixel.
+Changing preferences doesn't regenerate stored previews or alter earlier screenshot
 pixels. History and editor previews stay watermark-free; yanking an entry uses
 the current session's watermark preference.
 

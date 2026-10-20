@@ -7,7 +7,9 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     private let clearHistoryShortcut = NSButton(title: "Clear", target: nil, action: nil)
     private let retention = NSPopUpButton(frame: .zero, pullsDown: false)
     private let themeSelector = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let appearanceSelector = NSPopUpButton(frame: .zero, pullsDown: false)
     private var resolvedTheme = ThemeCatalog.pixel
+    private var hasAppliedStyle = false
     private let historyUsage = NSTextField(wrappingLabelWithString: "")
     private let clearHistory = NSButton(title: "Clear History…", target: nil, action: nil)
     private let history: HistoryLibrary?
@@ -59,13 +61,20 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         retention.target = self
         retention.action = #selector(changeRetention)
         retention.setAccessibilityLabel("History retention")
-        themeSelector.addItems(withTitles: ThemeID.allCases.map(\.label))
+        themeSelector.addItems(withTitles: VisualStyle.allCases.map(\.label))
         themeSelector.target = self
         themeSelector.action = #selector(changeTheme)
-        themeSelector.setAccessibilityLabel("Theme")
-        let appearanceRow = NSStackView(views: [NSTextField(labelWithString: "Theme"), themeSelector, NSView()])
+        themeSelector.setAccessibilityLabel("Style")
+        appearanceSelector.addItems(withTitles: AppearancePreference.allCases.map(\.label))
+        appearanceSelector.target = self
+        appearanceSelector.action = #selector(changeAppearance)
+        appearanceSelector.setAccessibilityLabel("Appearance")
+        let appearanceRow = NSStackView(views: [NSTextField(labelWithString: "Appearance"), appearanceSelector, NSView()])
         appearanceRow.orientation = .horizontal
         appearanceRow.spacing = 16
+        let styleRow = NSStackView(views: [NSTextField(labelWithString: "Style"), themeSelector, NSView()])
+        styleRow.orientation = .horizontal
+        styleRow.spacing = 16
         clearHistory.target = self
         clearHistory.action = #selector(clearCaptures)
         historyUsage.font = .systemFont(ofSize: 12)
@@ -124,7 +133,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         header.spacing = 12
         let sections = [
             header,
-            section("Appearance", views: [appearanceRow, help("Choose the appearance for new capture, history, and editor sessions.")]),
+            section("Appearance", views: [appearanceRow, styleRow, help("Choose interface colors and rendering style independently for new sessions.")]),
             separator(),
             section("Capture", views: [row, help("Click the shortcut to record a new one. Include ⌘ or ⌃; Esc cancels.")]),
             separator(),
@@ -244,12 +253,16 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
 
     func refresh() {
         let settings = store.configured ?? store.active
-        if resolvedTheme.id != store.active.theme {
-            resolvedTheme = ThemeCatalog.resolve(store.active.theme)
+        if !hasAppliedStyle || resolvedTheme.id != store.active.theme || resolvedTheme.colorScheme != store.activeColorScheme {
+            resolvedTheme = ThemeCatalog.resolve(style: store.active.style, colorScheme: store.activeColorScheme)
             if let content = window?.contentView { resolvedTheme.settings.apply(to: content) }
+            hasAppliedStyle = true
         }
-        themeSelector.selectItem(at: ThemeID.allCases.firstIndex(of: settings.theme) ?? 0)
+        window?.appearance = store.activeColorScheme.appearance
+        themeSelector.selectItem(at: VisualStyle.allCases.firstIndex(of: settings.style) ?? 0)
         themeSelector.isEnabled = store.configured != nil
+        appearanceSelector.selectItem(at: AppearancePreference.allCases.firstIndex(of: settings.appearance) ?? 0)
+        appearanceSelector.isEnabled = store.configured != nil
         recorder.shortcut = settings.shortcut
         historyRecorder.shortcut = settings.historyShortcut
         historyRecorder.isEnabled = store.configured != nil
@@ -266,15 +279,16 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
             showStatus("Configuration Error", message: "\(error)\nActive: \(store.active.theme.label); \(store.active.shortcut.display); watermark \(store.active.watermark ? "on" : "off").", isError: true)
         } else if let error = history?.error {
             showStatus("History Error", message: error, isError: true)
-        } else if store.isSessionActive && store.configured != store.active {
-            showStatus("Changes Pending", message: "Changes apply after this capture/history/editor session. Active: \(store.active.theme.label); \(store.active.shortcut.display); watermark \(store.active.watermark ? "on" : "off").", isError: false)
+        } else if store.isSessionActive && (store.configured != store.active || store.hasPendingAppearance) {
+            showStatus("Changes Pending", message: "Appearance and settings changes apply after this capture/history/editor session. Active: \(store.active.appearance.label), \(store.active.style.label); \(store.active.shortcut.display); watermark \(store.active.watermark ? "on" : "off").", isError: false)
         } else {
             showStatus("", message: "", isError: false)
         }
     }
 
     @objc private func toggleWatermark() { store.update(watermark: watermark.state == .on) }
-    @objc private func changeTheme() { store.update(theme: ThemeID.allCases[themeSelector.indexOfSelectedItem]) }
+    @objc private func changeTheme() { store.update(style: VisualStyle.allCases[themeSelector.indexOfSelectedItem]) }
+    @objc private func changeAppearance() { store.update(appearance: AppearancePreference.allCases[appearanceSelector.indexOfSelectedItem]) }
     @objc private func changeRetention() { store.update(historyRetention: HistoryRetention.allCases[retention.indexOfSelectedItem]) }
     @objc private func removeHistoryShortcut() { store.update(clearHistoryShortcut: true) }
     @objc private func clearCaptures() {

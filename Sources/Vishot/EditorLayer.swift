@@ -61,7 +61,7 @@ final class EditorLayer: NSObject, CALayerDelegate {
 
     /// Called with reusable panel preparation, off the hotkey path.
     func prepare(theme: ResolvedTheme) {
-        guard self.theme.id != theme.id else { return }
+        guard self.theme.id != theme.id || self.theme.colorScheme != theme.colorScheme else { return }
         self.theme = theme
         for hud in [horizontalToolbar, verticalToolbar, compactToolbar] { hud.root.removeFromSuperlayer() }
         horizontalToolbar = EditorToolbar(scale: backingScale, theme: theme)
@@ -441,7 +441,12 @@ private final class EditorToolbar {
             switch item {
             case .tool(let tool):
                 let isActive = tool == scene.context.tool
-                entry?.faces.forEach { $0.backgroundColor = (isActive ? theme.editor.active : style.keycap.face).cgColor }
+                entry?.faces.forEach { face in
+                    face.backgroundColor = (isActive ? theme.editor.active : style.keycap.face).cgColor
+                    face.sublayers?.compactMap { $0 as? CATextLayer }.forEach {
+                        $0.foregroundColor = (isActive ? theme.editor.activeText : style.keycap.text).cgColor
+                    }
+                }
                 entry?.action.foregroundColor = (isActive ? style.text : style.muted).cgColor
             case .color(let color):
                 layer.borderWidth = color == scene.color ? theme.editor.swatchRing : 0

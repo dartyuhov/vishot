@@ -190,7 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         historyItem?.title = "Capture History" + (settings.active.historyShortcut.map { "  (\($0.display))" } ?? "") + (overlay?.historyLibrary.error == nil ? "" : " — Storage Error")
         settingsItem?.title = settings.error == nil ? "Settings…" : "Settings… — Configuration Error"
         overlay?.watermark = settings.active.watermark
-        overlay?.prepareTheme(settings.active.theme)
+        overlay?.prepareTheme(style: settings.active.style, colorScheme: settings.activeColorScheme)
         overlay?.historyLibrary.retention = settings.active.historyRetention
         settingsWindow?.refresh()
         if setupWindow?.window?.isVisible == true { setupWindow?.refresh() }
