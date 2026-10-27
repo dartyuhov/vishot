@@ -2,42 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 
 final class OverlayController: NSObject, NSWindowDelegate {
-    private enum Mode: CaseIterable {
-        case window, element, hint, screen, region
-
-        var name: String {
-            switch self {
-            case .window: "WINDOW"
-            case .element: "ELEMENT"
-            case .hint: "HINT"
-            case .screen: "SCREEN"
-            case .region: "REGION"
-            }
-        }
-
-        func keys(accessibilityAvailable: Bool) -> [HUDKey] {
-            switch self {
-            case .window: [
-                HUDKey("hjkl", action: "move"), PickerHUD.elementsKey(accessibilityAvailable: accessibilityAvailable), HUDKey("v", action: "region"),
-                HUDKey("G", action: "screen"), HUDKey("↵", action: "copy"), HUDKey("⇧↵", "e", action: "edit"),
-                HUDKey("esc", action: "cancel"),
-            ]
-            case .element: [
-                PickerHUD.elementsKey(accessibilityAvailable: accessibilityAvailable), HUDKey("v", action: "region"), HUDKey("G", action: "screen"),
-                HUDKey("↵", action: "copy"), HUDKey("⇧↵", "e", action: "edit"), HUDKey("esc", action: "back"),
-            ]
-            case .hint: [HUDKey(action: "type a hint"), HUDKey("⌫", action: "undo"), HUDKey("esc", action: "back")]
-            case .screen: [
-                HUDKey("hjkl", action: "move"), HUDKey("v", action: "region"), HUDKey("↵", action: "copy"),
-                HUDKey("⇧↵", "e", action: "edit"), HUDKey("esc", action: "back"),
-            ]
-            case .region: [
-                HUDKey("hjkl", action: "move (⇧ far, ⌥ slow)"), HUDKey("v", action: "corner"), HUDKey("tab", action: "screen"),
-                HUDKey("↵", action: "copy"), HUDKey("⇧↵", "e", action: "edit"), HUDKey("esc", action: "back"),
-            ]
-            }
-        }
-    }
+    private typealias Mode = PickerHUD.Picker
 
     /// A hint and the element it is shown on.
     private struct Hint {
@@ -63,10 +28,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func preparePickerPanels() {
-        let modes = Mode.allCases.flatMap { mode in
-            [false, true].map { (name: mode.name, keys: mode.keys(accessibilityAvailable: $0)) }
-        }
-        panels.forEach { $0.prepare(theme: preparedTheme, modes: modes) }
+        panels.forEach { $0.prepare(theme: preparedTheme) }
     }
     private var isShowing = false
     private let capturer = Capturer()
@@ -700,7 +662,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let statusLine = isCapturing ? "capturing…" : videoCountdown ? status : hoverStatus ?? (
             !status.isEmpty ? status
             : warmUpTimer != nil ? "loading page…"
-            : region?.status ?? ""
+            : region?.status(captureType: videoType ? .video : .screenshot) ?? ""
         )
         let regionRect = region == nil ? nil : (videoRectangle ?? target?.frame)?.flippedBetweenCocoaAndCG
         let regionCursor = videoCountdown ? nil : region?.cursor.flippedBetweenCocoaAndCG
@@ -714,25 +676,23 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        let hudContent = pickerHUDContent
         for panel in panels {
             panel.highlight((videoRectangle ?? target?.frame)?.flippedBetweenCocoaAndCG, label: target?.label ?? "")
             panel.showRegion(regionRect, cursor: regionCursor)
             panel.showHints(marks, typed: typedHint.count)
-            let modeKeys = mode.keys(accessibilityAvailable: accessibilityAvailable).map { key -> HUDKey in
-                guard videoType else { return key }
-                if key.action == "copy" { return HUDKey("↵", action: "record") }
-                if key.action == "edit" { return HUDKey("⇧↵", "e", action: "edit", unavailableReason: "Video editing is unavailable. Press ↵ to record.") }
-                return key
-            }
-            let keys = videoCountdown ? [HUDKey("esc", action: "cancel countdown")] :
-                modeKeys + (mode == .hint ? [] : [HUDKey("r", action: "video",
-                    unavailableReason: historyLibrary.retention == .off ? "Video requires History. Enable retention in Vishot Settings." : nil), HUDKey("s", action: "screenshot")])
-            panel.showHUD(name: (videoType ? "VIDEO · " : "") + mode.name, keys: keys, status: statusLine, visible: panel === hudPanel)
+            panel.showHUD(hudContent, status: statusLine, visible: panel === hudPanel)
         }
         CATransaction.commit()
     }
 
     // MARK: - Input
+
+    private var pickerHUDContent: PickerHUD.Content {
+        PickerHUD.Content(captureType: videoType ? .video : .screenshot, picker: mode,
+            accessibilityAvailable: accessibilityAvailable, historyAvailable: historyLibrary.retention != .off,
+            regionState: region?.hudState ?? .empty, isCountingDown: videoCountdown)
+    }
 
     /// Key codes, not characters, so the keys keep working with non-Latin keyboard layouts.
     private func handle(_ event: NSEvent) {
@@ -759,12 +719,17 @@ final class OverlayController: NSObject, NSWindowDelegate {
             render()
             return
         }
-        if keyCode == kVK_ANSI_R || keyCode == kVK_ANSI_S {
-            if keyCode == kVK_ANSI_R, historyLibrary.retention == .off {
-                status = "Video requires History. Enable retention in Vishot Settings."
-            } else { videoType = keyCode == kVK_ANSI_R }
+        var hudContent = pickerHUDContent
+        switch hudContent.handleCaptureTypeKey(keyCode) {
+        case .unavailable:
+            status = PickerHUD.historyUnavailableReason
             render()
             return
+        case .handled:
+            videoType = hudContent.captureType == .video
+            render()
+            return
+        case .unhandled: break
         }
         if let region {
             switch region.handle(event) {
@@ -821,15 +786,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
             render()
             return
         }
+        let previousHover = hoverStatus
+        hoverStatus = panels.compactMap { $0.hudUnavailableReason(at: point) }.first
+        if panels.contains(where: { $0.hudContains(point) }) {
+            if hoverStatus != previousHover { render() }
+            return
+        }
         if let region {
             region.mouseMoved(to: point)
             render()
-            return
-        }
-        let previousHover = hoverStatus
-        hoverStatus = panels.compactMap { $0.hudUnavailableReason(at: point) }.first
-        if hoverStatus != nil {
-            if hoverStatus != previousHover { render() }
             return
         }
         let before = selected
@@ -848,13 +813,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
             if isShowing, self.editor != nil { render() }
             return
         }
-        if let region {
-            region.mouseDown(at: point)
+        if let reason = panels.compactMap({ $0.hudUnavailableReason(at: point) }).first {
+            status = reason
             render()
             return
         }
-        if let reason = panels.compactMap({ $0.hudUnavailableReason(at: point) }).first {
-            status = reason
+        guard !panels.contains(where: { $0.hudContains(point) }) else { return }
+        if let region {
+            region.mouseDown(at: point)
             render()
             return
         }

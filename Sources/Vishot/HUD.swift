@@ -37,7 +37,7 @@ enum HUD {
     /// The entry's keycaps, separated by slashes, then what they do, in one layer as tall as a keycap.
     static func makeEntry(_ entry: HUDKey, scale: CGFloat, style: HUDStyle) -> Entry {
         let layer = CALayer()
-        layer.opacity = entry.isEnabled ? 1 : 0.45
+        layer.opacity = entry.isEnabled ? 1 : style.disabledOpacity
         var parts: [(layer: CALayer, font: NSFont?, gap: CGFloat)] = []
         var faces: [CALayer] = []
         for (index, key) in entry.keys.enumerated() {
@@ -61,6 +61,25 @@ enum HUD {
         }
         layer.frame.size = CGSize(width: x, height: height)
         return Entry(layer: layer, faces: faces, action: action)
+    }
+
+    /// Selected picker vocabulary: a padded accent plate, like the editor's active tools.
+    static func highlight(_ entry: Entry, color: NSColor, text: NSColor, style: HUDStyle) {
+        entry.faces.forEach { face in
+            face.backgroundColor = color.cgColor
+            face.sublayers?.compactMap { $0 as? CATextLayer }.forEach { $0.foregroundColor = text.cgColor }
+        }
+        entry.action.foregroundColor = text.cgColor
+        entry.layer.backgroundColor = color.cgColor
+        entry.layer.cornerRadius = style.keycap.cornerRadius
+    }
+
+    /// Keyless picker choices share identical geometry whether active or inactive.
+    static func pad(_ entry: Entry, style: HUDStyle) {
+        let padding = style.keycap.padding
+        entry.layer.sublayers?.forEach { $0.frame.origin.x += padding; $0.frame.origin.y += padding }
+        entry.layer.frame.size.width += 2 * padding
+        entry.layer.frame.size.height += 2 * padding
     }
 
     /// A key drawn like the landing page's `<kbd>`: a raised face on a darker edge, thicker at the bottom.
