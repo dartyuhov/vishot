@@ -43,6 +43,7 @@ final class VideoSession {
     private(set) var error: String?
     var onChange: (() -> Void)?
     var onCountdown: ((String) -> Void)?
+    var onRectangle: ((CGRect) -> Void)?
     var onDismissPicker: (() -> Void)?
     var onReturnToPicker: ((String) -> Void)?
     var shortcut = CaptureShortcut.defaults
@@ -55,7 +56,7 @@ final class VideoSession {
         self.history = history
     }
 
-    func begin(displayID: CGDirectDisplayID, session: Int, label: String) {
+    func begin(selection: VideoSelection, session: Int, label: String) {
         guard !isActive, history.retention != .off else { return }
         let token = state.begin()
         sessionID = session
@@ -76,37 +77,45 @@ final class VideoSession {
                 self.startup = Task { @MainActor [weak self] in
                     guard let self else { return }
                     do {
-                        // Prepare concurrently with countdown; no SCStream starts yet.
-                        async let prepared = VideoRecorder.prepare(displayID: displayID, directory: directory)
-                        for second in stride(from: 3, through: 1, by: -1) {
+                        var countdown = VideoCountdown(rectangle: try self.resolve(selection))
+                        var prepared: VideoRecorder?
+                        while self.state.accepts(token) {
+                            _ = self.state.advance(token, to: .countdown)
+                            self.onRectangle?(countdown.rectangle.rect)
+                            while !countdown.isReady && self.state.accepts(token) {
+                                self.onCountdown?("Recording in \(countdown.remaining)… · esc cancel")
+                                try await Task.sleep(nanoseconds: 1_000_000_000)
+                                countdown.tick()
+                            }
                             guard self.state.accepts(token) else { break }
-                            self.onCountdown?("Recording in \(second)… · esc cancel")
-                            try await Task.sleep(nanoseconds: 1_000_000_000)
+                            guard countdown.revalidate(try self.resolve(selection)) else { continue }
+                            _ = self.state.advance(token, to: .preparing)
+                            self.onCountdown?("Preparing recording… · esc cancel")
+                            let recorder = try await VideoRecorder.prepare(rectangle: countdown.rectangle, directory: directory)
+                            guard self.state.accepts(token) else {
+                                await recorder.cancelPreparation()
+                                break
+                            }
+                            // Preparation can be slow. Resolve again, then freeze before
+                            // dismissal; no window identity is consulted after this point.
+                            let current: VideoRectangle
+                            do { current = try self.resolve(selection) }
+                            catch { await recorder.cancelPreparation(); throw error }
+                            guard countdown.revalidate(current) else {
+                                await recorder.cancelPreparation()
+                                continue
+                            }
+                            prepared = recorder
+                            break
                         }
-                        guard self.state.accepts(token) else {
-                            if let recorder = try? await prepared { await recorder.cancelPreparation() }
-                            self.removeUnfinished(directory)
-                            return
-                        }
-                        _ = self.state.advance(token, to: .preparing)
-                        self.onCountdown?("Preparing recording… · esc cancel")
-                        let recorder = try await prepared
-                        guard self.state.accepts(token) else {
-                            await recorder.cancelPreparation()
-                            self.removeUnfinished(directory)
-                            return
-                        }
-                        guard CGDisplayBounds(displayID) == recorder.frame else {
-                            await recorder.cancelPreparation()
-                            throw SettingsError(message: "Display geometry changed. Select the display again.")
-                        }
+                        guard let recorder = prepared else { self.removeUnfinished(directory); return }
                         self.recorder = recorder
                         recorder.onFailure = { [weak self] error in
                             Task { @MainActor in self?.stop(because: error) }
                         }
                         _ = self.state.advance(token, to: .starting)
                         self.onDismissPicker?()
-                        self.showTip(displayID: displayID, shortcut: frozenShortcut)
+                        self.showTip(displayID: recorder.displayID, shortcut: frozenShortcut)
                         self.observeDisplay(recorder)
                         self.onChange?()
                         try await recorder.start()
@@ -123,6 +132,25 @@ final class VideoSession {
                 }
             }
         }
+    }
+
+    /// Startup-only desktop adapters. Preserve NSScreen ordering for intersection
+    /// ties and use CG bounds directly, including negative/above-primary origins.
+    private func resolve(_ selection: VideoSelection) throws -> VideoRectangle {
+        let displays = DisplayCatalog.displays().compactMap { target -> VideoDisplay? in
+            guard case .display(let id) = target.kind, CGDisplayIsActive(id) != 0,
+                  let mode = CGDisplayCopyDisplayMode(id), mode.width > 0 else { return nil }
+            return VideoDisplay(id: id, frame: CGDisplayBounds(id), scale: CGFloat(mode.pixelWidth) / CGFloat(mode.width))
+        }
+        var windowFrame: CGRect?
+        if let id = selection.windowID,
+           let entries = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]],
+           let entry = entries.first(where: { ($0[kCGWindowNumber as String] as? UInt32) == id }),
+           (entry[kCGWindowIsOnscreen as String] as? Bool) == true,
+           let bounds = entry[kCGWindowBounds as String] as? NSDictionary {
+            windowFrame = CGRect(dictionaryRepresentation: bounds)
+        }
+        return try selection.resolve(displays: displays, windowFrame: windowFrame)
     }
 
     func cancelCountdown() {
@@ -204,7 +232,7 @@ final class VideoSession {
     }
 
     private func observeDisplay(_ recorder: VideoRecorder) {
-        let bounds = recorder.frame
+        let bounds = recorder.displayFrame
         let mode = CGDisplayCopyDisplayMode(recorder.displayID)
         let pixels = mode.map { CGSize(width: $0.pixelWidth, height: $0.pixelHeight) }
         displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
