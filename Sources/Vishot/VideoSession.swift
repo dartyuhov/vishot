@@ -46,7 +46,7 @@ final class VideoSession {
     private var recorder: VideoRecording?
     private let prepare: (VideoRectangle, URL) async throws -> VideoRecording
     private let resolveSelection: ((VideoSelection) throws -> VideoRectangle)?
-    private let countdownTick: () async throws -> Void
+    private let countdown: CaptureCountdown
     private let reportError: ((String, Bool) -> Void)?
     private let presentsControls: Bool
     private var startup: Task<Void, Never>?
@@ -73,6 +73,7 @@ final class VideoSession {
     private(set) var error: String?
     var onChange: (() -> Void)?
     var onCountdown: ((String) -> Void)?
+    var onCountdownFrame: ((CountdownFrame?) -> Void)?
     var onRectangle: ((CGRect) -> Void)?
     var onDismissPicker: (() -> Void)?
     var onReturnToPicker: ((String) -> Void)?
@@ -85,13 +86,13 @@ final class VideoSession {
     init(sessions: CaptureSessionCoordinator, history: HistoryLibrary,
          prepare: @escaping (VideoRectangle, URL) async throws -> VideoRecording = { try await VideoRecorder.prepare(rectangle: $0, directory: $1) },
          resolve: ((VideoSelection) throws -> VideoRectangle)? = nil,
-         countdownTick: @escaping () async throws -> Void = { try await Task.sleep(nanoseconds: 1_000_000_000) },
+         countdown: CaptureCountdown = CaptureCountdown(),
          presentsControls: Bool = true, reportError: ((String, Bool) -> Void)? = nil) {
         self.sessions = sessions
         self.history = history
         self.prepare = prepare
         self.resolveSelection = resolve
-        self.countdownTick = countdownTick
+        self.countdown = countdown
         self.reportError = reportError
         self.presentsControls = presentsControls
     }
@@ -123,21 +124,24 @@ final class VideoSession {
                     guard let self else { return }
                     defer { self.sessions.endFileOperation() }
                     do {
-                        var countdown = VideoCountdown(rectangle: try self.resolve(selection))
+                        var rectangle = try self.resolve(selection)
                         var prepared: VideoRecording?
                         while self.state.accepts(token) {
                             _ = self.state.advance(token, to: .countdown)
-                            self.onRectangle?(countdown.rectangle.rect)
-                            while !countdown.isReady && self.state.accepts(token) {
-                                self.onCountdown?("Recording in \(countdown.remaining)… · esc cancel")
-                                try await self.countdownTick()
-                                countdown.tick()
-                            }
+                            self.onRectangle?(rectangle.rect)
+                            self.onCountdown?("")
                             guard self.state.accepts(token) else { break }
-                            guard countdown.revalidate(try self.resolve(selection)) else { continue }
+                            let outcome = await self.countdown.run { [weak self] frame in
+                                guard let self, self.state.accepts(token) else { return }
+                                self.onCountdownFrame?(frame)
+                            }
+                            guard outcome == .completed, self.state.accepts(token) else { break }
+                            let validated = try self.resolve(selection)
+                            if validated != rectangle { rectangle = validated; continue }
                             _ = self.state.advance(token, to: .preparing)
                             self.onCountdown?("Preparing recording… · esc cancel")
-                            let recorder = try await self.prepare(countdown.rectangle, directory)
+                            guard self.state.accepts(token) else { break }
+                            let recorder = try await self.prepare(rectangle, directory)
                             guard self.state.accepts(token) else {
                                 await recorder.cancelPreparation()
                                 break
@@ -147,8 +151,9 @@ final class VideoSession {
                             let current: VideoRectangle
                             do { current = try self.resolve(selection) }
                             catch { await recorder.cancelPreparation(); throw error }
-                            guard countdown.revalidate(current) else {
+                            guard current == rectangle else {
                                 await recorder.cancelPreparation()
+                                rectangle = current
                                 continue
                             }
                             prepared = recorder
@@ -209,6 +214,8 @@ final class VideoSession {
 
     func cancelCountdown() {
         guard state.cancel(state.generation) else { return }
+        countdown.cancel()
+        onCountdownFrame?(nil)
         // Let preparation settle so its writer can be canceled and its directory
         // removed. Generation fencing prevents it from ever starting capture.
         startup = nil

@@ -10,6 +10,151 @@ import ScreenCaptureKit
         frame: CGRect(x: 0, y: 0, width: 100, height: 100), scale: 1),
         rect: CGRect(x: 0, y: 0, width: 100, height: 100))
 
+    func testChangedBoundsBeforeAndAfterPreparationRestartFullCountdownAndFreezeLatestRectangle() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let clock = CountdownTestClock()
+        var current = rectangle
+        var outlines: [CGRect] = []
+        var numbers: [Int] = []
+        var recorders: [Recorder] = []
+        var preparedRects: [VideoRectangle] = []
+        let moved = VideoRectangle(display: rectangle.display, rect: CGRect(x: 1, y: 2, width: 90, height: 80))
+        let scaled = VideoRectangle(display: VideoDisplay(id: 1, frame: rectangle.display.frame, scale: 2), rect: moved.rect)
+        let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
+            prepare: { rect, url in
+                preparedRects.append(rect)
+                let recorder = try Recorder(directory: url)
+                recorders.append(recorder)
+                if recorders.count == 1 { current = scaled }
+                return recorder
+            }, resolve: { _ in current }, countdown: CaptureCountdown(schedule: clock.schedule),
+            presentsControls: false, reportError: { _, _ in })
+        video.onRectangle = { outlines.append($0) }
+        video.onCountdownFrame = { if let frame = $0 { numbers.append(frame.number) } }
+        try begin(video, fixture)
+        try await eventually { numbers == [3] }
+        current = moved
+        clock.advance(to: 3)
+        try await eventually { numbers == [3, 2, 1, 3] }
+        XCTAssertTrue(recorders.isEmpty)
+        XCTAssertEqual(outlines, [rectangle.rect, moved.rect])
+        clock.advance(to: 6)
+        try await eventually { numbers.count == 7 }
+        XCTAssertEqual(numbers, [3, 2, 1, 3, 2, 1, 3])
+        XCTAssertEqual(recorders[0].starts, 0)
+        XCTAssertEqual(recorders[0].cancellations, 1)
+        XCTAssertEqual(outlines, [rectangle.rect, moved.rect, moved.rect])
+        clock.advance(to: 8.999)
+        XCTAssertEqual(recorders.count, 1)
+        clock.advance(to: 9)
+        try await eventually { recorders.count == 2 && recorders[1].starts == 1 }
+        XCTAssertEqual(preparedRects, [moved, scaled])
+        video.stop()
+        try await eventually { !fixture.sessions.isSessionActive }
+    }
+
+    func testCancelledPendingPreparationCannotReviveOrChangeReplacementCountdown() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let clock = CountdownTestClock()
+        var preparation: CheckedContinuation<VideoRecording, Error>?
+        var directory: URL?
+        var numbers: [Int] = []
+        var returns = 0
+        let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
+            prepare: { _, url in
+                directory = url
+                return try await withCheckedThrowingContinuation { preparation = $0 }
+            }, resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
+            presentsControls: false, reportError: { _, _ in })
+        video.onCountdownFrame = { if let frame = $0 { numbers.append(frame.number) } }
+        video.onReturnToPicker = { _ in returns += 1 }
+        try begin(video, fixture)
+        try await eventually { numbers == [3] }
+        clock.advance(to: 3)
+        try await eventually { preparation != nil }
+        video.cancelCountdown()
+        video.cancelCountdown()
+        XCTAssertEqual(returns, 1)
+        try begin(video, fixture)
+        try await eventually { numbers.count == 4 }
+        let stale = try Recorder(directory: XCTUnwrap(directory))
+        preparation?.resume(returning: stale)
+        try await eventually { stale.cancellations == 1 }
+        XCTAssertEqual(stale.starts, 0)
+        XCTAssertEqual(numbers, [3, 2, 1, 3])
+        XCTAssertTrue(video.isCountingDown)
+        video.cancelCountdown()
+        XCTAssertEqual(returns, 2)
+        clock.advance(to: 20)
+        await Task.yield()
+        XCTAssertFalse(video.isActive)
+        XCTAssertTrue(try fixture.store.entries().isEmpty)
+    }
+
+    func testCancelFromPreparingFeedbackCannotBeginPendingPreparation() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let clock = CountdownTestClock()
+        var preparations = 0, returns = 0
+        var number: Int?
+        let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
+            prepare: { _, directory in preparations += 1; return try Recorder(directory: directory) },
+            resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
+            presentsControls: false, reportError: { _, _ in })
+        video.onCountdownFrame = { number = $0?.number }
+        video.onReturnToPicker = { _ in returns += 1 }
+        video.onCountdown = { if $0.contains("Preparing") { video.cancelCountdown() } }
+        try begin(video, fixture)
+        try await eventually { number == 3 }
+        clock.advance(to: 3)
+        try await eventually { returns == 1 }
+        await Task.yield()
+        XCTAssertEqual(preparations, 0)
+        XCTAssertFalse(video.isActive)
+        XCTAssertTrue(fixture.sessions.isSessionActive, "Same picker keeps its session and target")
+        video.onCountdown = nil
+    }
+
+    func testSharedCountdownEndsBeforePreparationAndSlowPreparationShowsSeparateFeedback() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let clock = CountdownTestClock()
+        var preparation: CheckedContinuation<VideoRecording, Error>?
+        var directory: URL?
+        var numbers: [Int] = []
+        var feedback: [String] = []
+        var dismissed = false
+        let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
+            prepare: { urlRect, url in
+                XCTAssertEqual(urlRect, self.rectangle)
+                directory = url
+                return try await withCheckedThrowingContinuation { preparation = $0 }
+            }, resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
+            presentsControls: false, reportError: { _, _ in })
+        video.onCountdownFrame = { if let frame = $0 { numbers.append(frame.number) } }
+        video.onCountdown = { feedback.append($0) }
+        video.onDismissPicker = { dismissed = true }
+        try begin(video, fixture)
+        try await eventually { numbers == [3] }
+        XCTAssertNil(preparation)
+        clock.advance(to: 1)
+        clock.advance(to: 2)
+        XCTAssertEqual(numbers, [3, 2, 1])
+        XCTAssertNil(preparation)
+        clock.advance(to: 3)
+        try await eventually { preparation != nil }
+        XCTAssertTrue(feedback.last?.contains("Preparing") == true)
+        XCTAssertFalse(dismissed)
+        let recorder = try Recorder(directory: XCTUnwrap(directory))
+        preparation?.resume(returning: recorder)
+        try await eventually { recorder.starts == 1 }
+        XCTAssertTrue(dismissed)
+        video.stop()
+        try await eventually { !fixture.sessions.isSessionActive }
+    }
+
     func testSDKPermissionDenialDuringSuspendedPreparationOffersPersistentRecovery() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -66,7 +211,7 @@ import ScreenCaptureKit
         var reports = 0
         let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
             resolve: { _ in throw SettingsError(message: "Target disappeared") },
-            countdownTick: {}, presentsControls: false, reportError: { _, _ in reports += 1 })
+            countdown: immediateCountdown(), presentsControls: false, reportError: { _, _ in reports += 1 })
         video.onDismissPicker = { fixture.sessions.dismissPresentation(fixture.id) }
         try begin(video, fixture)
         try await eventually { !fixture.sessions.isSessionActive }
@@ -358,9 +503,15 @@ import ScreenCaptureKit
                              report: @escaping (String) -> Void = { _ in }) -> VideoSession {
         let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
             prepare: { _, directory in try await prepare(directory) }, resolve: { _ in self.rectangle },
-            countdownTick: {}, presentsControls: false, reportError: { message, _ in report(message) })
+            countdown: immediateCountdown(), presentsControls: false, reportError: { message, _ in report(message) })
         video.onDismissPicker = { fixture.sessions.dismissPresentation(fixture.id) }
         return video
+    }
+
+    private func immediateCountdown() -> CaptureCountdown {
+        CaptureCountdown(schedule: { _, action in
+            CaptureCountdown.scheduleOnMain(0, action)
+        })
     }
 
     private func begin(_ video: VideoSession, _ fixture: Fixture) throws {

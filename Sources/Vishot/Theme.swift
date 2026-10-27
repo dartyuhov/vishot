@@ -61,6 +61,7 @@ struct ResolvedTheme {
     var history: HistoryStyle { styles.history }
     var settings: SettingsStyle { styles.settings }
     var watermark: WatermarkStyle { styles.watermark }
+    var countdown: CountdownStyle { styles.countdown }
 
     fileprivate init(definition: ThemeDefinition, colorScheme: ColorScheme, styles: ThemeStyles) {
         style = VisualStyle(definition: definition)
@@ -80,6 +81,16 @@ struct ThemeStyles {
     let history: HistoryStyle
     let settings: SettingsStyle
     let watermark: WatermarkStyle
+    let countdown: CountdownStyle
+}
+
+struct CountdownStyle {
+    enum Motion { case stepped, fluid }
+    let plate: PanelStyle
+    let font: NSFont
+    let text: NSColor
+    let size: CGSize
+    let motion: Motion
 }
 
 struct ThemeDefinition {
