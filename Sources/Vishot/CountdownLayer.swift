@@ -56,12 +56,14 @@ final class CountdownLayer {
         opacity.isRemovedOnCompletion = false
         opacity.fillMode = .forwards
         root.add(opacity, forKey: "countdown.opacity")
-        let pop = CAKeyframeAnimation(keyPath: "transform.scale")
-        pop.values = stepped ? [0.875, 1, 1, 0.9375] : [0.94, 1, 1, 1.035]
+        // Pixel's whole plate (including glyphs and hard shadow) must never be
+        // resampled. Move by whole 4 pt cells instead of fractionally scaling it.
+        let pop = CAKeyframeAnimation(keyPath: stepped ? "transform.translation.y" : "transform.scale")
+        pop.values = stepped ? [8, 0, 0, -4] : [0.94, 1, 1, 1.035]
         pop.keyTimes = [0, 0.16, 0.78, 1]
         pop.calculationMode = stepped ? .discrete : .linear
         if !stepped { pop.timingFunctions = [.init(name: .easeOut), .init(name: .linear), .init(name: .easeIn)] }
         pop.duration = 1
-        root.add(pop, forKey: "countdown.scale")
+        root.add(pop, forKey: "countdown.pop")
     }
 }
