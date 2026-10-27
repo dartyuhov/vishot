@@ -72,7 +72,15 @@ final class AnnotationCLITests: XCTestCase {
         let source = try XCTUnwrap(CGImageSourceCreateWithURL(
             URL(fileURLWithPath: try XCTUnwrap(annotation["path"] as? String)) as CFURL, nil))
         let actual = try rgba(try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil)))
-        Fonts.register(resourceDirectory: app.appendingPathComponent("Contents/Resources"))
+        // The helper registers its fixture's bundled fonts in its own process. The test runner
+        // must use persistent source files: registering a temporary app here and then deleting
+        // it leaves later GUI tests with process-wide fonts backed by missing files.
+        let fonts = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("site/fonts")
+        for file in ["silkscreen-latin-400-normal.woff2", "jetbrains-mono-latin-400-normal.woff2",
+                     "jetbrains-mono-latin-700-normal.woff2"] {
+            CTFontManagerRegisterFontsForURL(fonts.appendingPathComponent(file) as CFURL, .process, nil)
+        }
         var style = AnnotationCatalog.annotation(.pixel)
         XCTAssertEqual(CTFontCopyPostScriptName(style.font) as String, "Silkscreen-Regular")
         style.snapsTextToGrid = false
