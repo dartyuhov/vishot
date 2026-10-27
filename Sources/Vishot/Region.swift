@@ -108,6 +108,10 @@ final class RegionSelector {
     /// In CoreGraphics global space.
     var cursor: CGPoint { keyboard.position }
 
+    var hudState: PickerHUD.RegionState {
+        selection.anchor != nil ? .drawing : selection.region != nil ? .ready : .empty
+    }
+
     /// The region shown, being drawn or finished, as something to capture.
     var target: CaptureTarget? {
         guard let rect = selection.rect(to: cursor) else { return nil }
@@ -122,9 +126,9 @@ final class RegionSelector {
         )
     }
 
-    var status: String {
+    func status(captureType: PickerHUD.CaptureType) -> String {
         if selection.anchor != nil { return "move, then v to finish · esc cancel" }
-        if selection.region != nil { return "v or drag to redraw · click it to copy · 0 $ g G M jump" }
+        if selection.region != nil { return "v or drag to redraw · click it to \(captureType == .video ? "record" : "copy") · 0 $ g G M jump" }
         return "v or drag to start · 0 $ g G M jump"
     }
 
