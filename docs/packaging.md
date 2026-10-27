@@ -94,10 +94,52 @@ validation fails. You can repeat the gate with `validate-dmg` in place of
 `package`, passing the DMG path instead of an output directory. Use
 `validate-app` with an app path for bundle-only verification.
 
-The package tests mutate real signed bundles and real disk images. They
+The package tests mutate temporary copies of real signed bundles and real disk images. They
 check rejection of wrong metadata/architecture, absent resources/notices,
 invalid signatures, changed bytes/source identity, missing app/instructions,
 incorrect shortcuts, and overlapping installer icons.
+
+For local runs, the suite detects the existing app signature and uses
+`VISHOT_SIGN_IDENTITY` (default `Apple Development`) when re-signing temporary
+fixtures. It retains explicit ad-hoc validation when the input app is ad-hoc
+signed in CI. Build the app first, then run the hash-locked environment's
+`python scripts/test-package.py`. Homebrew must be available for the local
+app-artifact installation check; no tap, download, or receipt is created.
+
+## Bundled command-line helper
+
+The build includes the compiled `VishotCLI` executable as
+`Vishot.app/Contents/Helpers/vishot`, signs it with the same identity before
+signing the containing app, and preserves it in the app copied into the DMG.
+The helper targets the same macOS 14 minimum and native architecture as the
+app. It reads the containing app's release version rather than maintaining a
+second version. See the [discovery contract](agent-cli.md) for commands and
+JSON output.
+
+`validate-app` checks both Mach-O executables, exact native architecture,
+macOS 14 load commands, executable permissions, strict nested signatures, and
+matching signing teams. It rejects helpers outside the expected regular-file
+layout and non-system runtime dependencies. It runs the bundled `--version`
+with a system-only PATH and requires JSON version agreement with the app,
+without launching the service. Mounted-DMG validation calls the same gate.
+
+The package suite copies the mounted app into a temporary custom Applications
+directory and separately runs Homebrew's real `app` artifact installation
+against a staged copy of that DMG's app. Both paths validate the installed
+bundle and execute its CLI through a user-local link. A controlled replacement
+version confirms the same link remains usable after in-place app replacement.
+These tests never change the user's Applications directory or installed CLI.
+The native Swift installation tests separately exercise the production
+`CLIInstallation` boundary, idempotency, conflicts, and an actual compiled CLI
+before and after whole-bundle replacement.
+
+The Homebrew artifact check uses the production app stanza and move/permission
+logic with redirected staging and appdir. It does not claim a public-tap
+installation, full Homebrew download/receipt/upgrade workflow, quarantine, or
+Gatekeeper verification. The existing native ARM/Intel CI matrix applies
+these checks to each host's own artifacts. Local ARM execution and compiled
+Intel rejection fixtures do not establish native Intel or macOS 14 runtime
+coverage.
 
 ## Bundled licenses and manual checks
 

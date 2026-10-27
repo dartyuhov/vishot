@@ -1,0 +1,23 @@
+{
+  "skill_name": "vishot-capture",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Inspect the Preferences window of my macOS app while I keep working. Discovery shows two windows from the same app, titled Preferences and Main. Capture Preferences and tell me whether the Save button is visible.",
+      "expected_output": "Discover live windows, select the exact Preferences ID, capture from the intended workspace, immediately open the returned absolute PNG with the built-in image reader, then answer from actual pixels. Preserve focus and retain the capture.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "The window I asked you to inspect may be minimized or in another Space. Capture returned exit 8, capture_unavailable. Can you use yesterday's PNG or switch Spaces to see it?",
+      "expected_output": "Explain that unavailable does not prove minimization. Do not reuse an older image, switch Spaces, restore, or raise the window. Report no new visual inspection and ask for a manual state change if needed.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Delete only the two Vishot captures you created for this task. Another agent is using the same workspace. Your recorded paths are /workspace/.vishot/window-42-1.png and /workspace/.vishot/window-42-2.png.",
+      "expected_output": "Remove only the two recorded exact paths with a file tool or quoted exact-path command. Leave every other capture and the .vishot directory intact. Report the removed files.",
+      "files": []
+    }
+  ]
+}

@@ -6,6 +6,11 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
     private let capture: () -> Void
     private let checklist = NSStackView()
     private let guide = NSStackView()
+    private let commandLine = NSStackView()
+    private let cliControls: CLIInstallationView
+    private let skillInstallation: SkillInstallationView
+    private let skipButton = NSButton(title: "Skip for now", target: nil, action: nil)
+    private let guideButton = NSButton(title: "Continue to guide", target: nil, action: nil)
     private let permissions = CapturePermission.allCases.map { PermissionControlView(permission: $0) }
     private let shortcutLabel = NSTextField(wrappingLabelWithString: "")
     private let heading = NSTextField(labelWithString: "Welcome to Vishot")
@@ -19,10 +24,13 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
     private var activationObserver: NSObjectProtocol?
     private var captureHandoffObserver: NSObjectProtocol?
 
-    init(flow: SetupFlow, shortcut: @escaping () -> String, capture: @escaping () -> Void) {
+    init(flow: SetupFlow, shortcut: @escaping () -> String, capture: @escaping () -> Void,
+         cliInstallation: CLIInstallation = CLIInstallation(), skillPasteboard: NSPasteboard = .general) {
         self.flow = flow
         self.shortcut = shortcut
         self.capture = capture
+        cliControls = CLIInstallationView(installation: cliInstallation)
+        skillInstallation = SkillInstallationView(pasteboard: skillPasteboard)
         let window = SetupPanel(contentRect: NSRect(x: 0, y: 0, width: 580, height: 510),
                                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Set Up Vishot"
@@ -32,6 +40,11 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
 
         configure(checklist)
         configure(guide)
+        configure(commandLine)
+        commandLine.addArrangedSubview(help("This step is optional. Skip it to keep taking screenshots normally; you can install later in Settings → Agent CLI."))
+        commandLine.addArrangedSubview(cliControls)
+        commandLine.addArrangedSubview(skillInstallation)
+        cliControls.onLayoutChange = { [weak self] in self?.window?.contentView?.layoutSubtreeIfNeeded() }
         let logo = NSImageView()
         logo.image = NSImage(named: NSImage.Name("AppIcon")) ?? NSApp.applicationIconImage
         logo.imageScaling = .scaleProportionallyUpOrDown
@@ -84,12 +97,16 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
         doneButton.target = self
         doneButton.action = #selector(finish)
         backButton.target = self
-        backButton.action = #selector(backToChecklist)
-        for button in [continueButton, firstButton, doneButton, backButton] {
+        backButton.action = #selector(goBack)
+        for button in [skipButton, guideButton] {
+            button.target = self
+            button.action = #selector(showGuide)
+        }
+        for button in [continueButton, firstButton, doneButton, backButton, skipButton, guideButton] {
             button.bezelStyle = .rounded
             button.bezelColor = .controlColor
         }
-        let actions = NSStackView(views: [backButton, NSView(), continueButton, doneButton, firstButton])
+        let actions = NSStackView(views: [backButton, NSView(), continueButton, skipButton, guideButton, doneButton, firstButton])
         actions.orientation = .horizontal
         actions.alignment = .centerY
         actions.spacing = 8
@@ -99,7 +116,7 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
         stepLabel.textColor = .secondaryLabelColor
         stepLabel.translatesAutoresizingMaskIntoConstraints = false
         header.translatesAutoresizingMaskIntoConstraints = false
-        let stack = NSStackView(views: [checklist, guide])
+        let stack = NSStackView(views: [checklist, commandLine, guide])
         configure(stack)
         stack.translatesAutoresizingMaskIntoConstraints = false
         let content = window.contentView!
@@ -136,7 +153,7 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
             stack.topAnchor.constraint(equalTo: document.topAnchor),
             stack.bottomAnchor.constraint(equalTo: document.bottomAnchor),
         ])
-        for section in [checklist, guide] {
+        for section in [checklist, commandLine, guide] {
             section.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
             for view in section.arrangedSubviews { view.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true }
         }
@@ -196,34 +213,58 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
     func refresh() {
         flow.refresh()
         permissions.forEach { $0.refresh() }
+        cliControls.refresh()
         continueButton.isEnabled = flow.screenRecordingAllowed
         continueButton.title = flow.accessibilityAllowed ? "Continue" : "Continue without Accessibility"
         shortcutLabel.stringValue = shortcut()
-        heading.stringValue = flow.isShowingGuide ? "Ready to capture" : "Welcome to Vishot"
-        subtitle.stringValue = flow.isShowingGuide ? "Your keyboard-first screenshot guide." : "Choose access for your screenshots."
-        stepLabel.stringValue = flow.isShowingGuide ? "STEP 2 OF 2 · QUICK GUIDE" : "STEP 1 OF 2 · PERMISSIONS"
-        continueButton.isHidden = flow.isShowingGuide
-        backButton.isHidden = !flow.isShowingGuide
+        switch flow.step {
+        case .permissions:
+            heading.stringValue = "Welcome to Vishot"
+            subtitle.stringValue = "Choose access for your screenshots."
+            stepLabel.stringValue = "STEP 1 OF 3 · PERMISSIONS"
+        case .commandLine:
+            heading.stringValue = "CLI for coding agents"
+            subtitle.stringValue = "Optional tools for window discovery and capture."
+            stepLabel.stringValue = "STEP 2 OF 3 · OPTIONAL CLI"
+        case .guide:
+            heading.stringValue = "Ready to capture"
+            subtitle.stringValue = "Your keyboard-first screenshot guide."
+            stepLabel.stringValue = "STEP 3 OF 3 · QUICK GUIDE"
+        }
+        continueButton.isHidden = flow.step != .permissions
+        backButton.isHidden = flow.step == .permissions
+        skipButton.isHidden = flow.step != .commandLine
+        guideButton.isHidden = flow.step != .commandLine
         doneButton.isHidden = !flow.isShowingGuide
         firstButton.isHidden = !flow.isShowingGuide
-        continueButton.keyEquivalent = flow.isShowingGuide ? "" : "\r"
+        continueButton.keyEquivalent = flow.step == .permissions ? "\r" : ""
+        guideButton.keyEquivalent = flow.step == .commandLine ? "\r" : ""
         firstButton.keyEquivalent = flow.isShowingGuide ? "\r" : ""
-        checklist.isHidden = flow.isShowingGuide
+        checklist.isHidden = flow.step != .permissions
+        commandLine.isHidden = flow.step != .commandLine
         guide.isHidden = !flow.isShowingGuide
         window?.recalculateKeyViewLoop()
     }
 
     @objc private func continueSetup() {
-        flow.continueToGuide(withoutAccessibility: !flow.accessibilityAllowed)
+        flow.continueToCLI(withoutAccessibility: !flow.accessibilityAllowed)
         refresh()
         scroll.contentView.scroll(to: .zero)
         window?.selectNextKeyView(nil)
     }
 
-    @objc private func backToChecklist() {
-        flow.returnToChecklist()
+    @objc private func goBack() {
+        if flow.isShowingGuide { flow.continueToCLI() }
+        else { flow.returnToChecklist() }
         refresh()
         scroll.contentView.scroll(to: .zero)
+    }
+
+    @objc private func showGuide() {
+        flow.continueToGuide()
+        refresh()
+        scroll.contentView.scroll(to: .zero)
+        window?.selectNextKeyView(nil)
     }
 
     @objc private func finish() {

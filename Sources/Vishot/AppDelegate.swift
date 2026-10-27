@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import ServiceManagement
+import VishotAgent
 
 enum Config {
     /// Where macOS saves screenshots (set in the Screenshot app's options), or the Desktop.
@@ -51,8 +52,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var launchAtLoginItem: NSMenuItem?
     private lazy var setup = SetupFlow.live()
     private var setupWindow: SetupWindow?
+    private var agentServer: AgentServer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let backgroundLaunch = ProcessInfo.processInfo.arguments.contains(AgentEndpoint.backgroundArgument)
+        do { agentServer = try AgentService.start() }
+        catch {
+            NSLog("Vishot: agent service could not start: \(error)")
+            // Concurrent CLI startup can launch more than one instance. Only the
+            // endpoint owner may proceed to app initialization in the background.
+            if backgroundLaunch { NSApp.terminate(nil); return }
+        }
         // Before the overlay builds its panels, which ask for the fonts.
         Fonts.register()
         let overlay = OverlayController()
@@ -81,8 +91,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.start()
         overlay.historyLibrary.start()
 
-        if setup.needsSetup { presentSetup() }
+        if !backgroundLaunch, setup.needsSetup {
+            presentSetup()
+        }
     }
+
+    func applicationWillTerminate(_ notification: Notification) { agentServer?.stop() }
 
     private func setUpStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
