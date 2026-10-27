@@ -67,10 +67,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         video.onReturnToPicker = { [weak overlay] in overlay?.videoReturnToPicker($0) }
         video.onDismissPicker = { [weak overlay] in overlay?.dismissForVideo() }
         video.onChange = { [weak self] in self?.settingsChanged() }
+        video.onPermissionSettings = { [weak self] in self?.openSettings() }
         sessions.onCapture = { [weak overlay] in overlay?.show(session: $0) ?? false }
         sessions.onHistory = { [weak overlay] in overlay?.showHistory(session: $0) ?? false }
         sessions.onCaptureAgain = { [weak overlay] in overlay?.toggle(session: $0) }
         sessions.onQuitReady = { NSApp.reply(toApplicationShouldTerminate: true) }
+        sessions.onQuitCancelled = { NSApp.reply(toApplicationShouldTerminate: false) }
         let settings = SettingsStore(registerHistory: { [weak self] shortcut in
             guard let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.carbonModifiers, action: { [weak self] in
                 if self?.settingsWindow?.recordGlobalShortcut(shortcut) == true { return }
@@ -238,7 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        video?.stop()
+        video?.prepareToQuit()
         return sessions.requestQuit() ? .terminateNow : .terminateLater
     }
 

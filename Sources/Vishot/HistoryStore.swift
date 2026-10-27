@@ -453,6 +453,28 @@ final class HistoryStore {
                      cancelled: () -> Bool = { false },
                      copy: (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }) throws {
         let source = try movieURL(entry)
+        try exportMovie(source, to: destination, cancelled: cancelled, copy: copy)
+    }
+
+    func exportCompletedVideo(_ source: URL, to destination: URL,
+                              cancelled: () -> Bool = { false },
+                              copy: (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }) throws {
+        let directory = source.deletingLastPathComponent()
+        guard directory.deletingLastPathComponent().standardizedFileURL == stagingURL.standardizedFileURL,
+              UUID(uuidString: directory.lastPathComponent) != nil,
+              source.pathExtension == "mp4",
+              directory.resolvingSymlinksInPath().standardizedFileURL == directory.standardizedFileURL else {
+            throw SettingsError(message: "Completed recording is outside its owned session.")
+        }
+        let values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true, (values.fileSize ?? 0) > 0 else {
+            throw SettingsError(message: "Completed recording is unavailable.")
+        }
+        try exportMovie(source, to: destination, cancelled: cancelled, copy: copy)
+    }
+
+    private func exportMovie(_ source: URL, to destination: URL, cancelled: () -> Bool,
+                             copy: (URL, URL) throws -> Void) throws {
         let target = destination.resolvingSymlinksInPath().standardizedFileURL
         let owned = url.resolvingSymlinksInPath().standardizedFileURL.path
         let sessions = stagingURL.resolvingSymlinksInPath().standardizedFileURL.path

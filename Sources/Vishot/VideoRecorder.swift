@@ -3,13 +3,27 @@ import AVFoundation
 import ScreenCaptureKit
 import CoreImage
 
+protocol VideoRecording: AnyObject {
+    var directory: URL { get }
+    var movie: URL { get }
+    var displayID: CGDirectDisplayID { get }
+    var displayFrame: CGRect { get }
+    @MainActor var hasCompletedMovie: Bool { get }
+    @MainActor var onFailure: ((Error) -> Void)? { get set }
+    @MainActor func start() async throws
+    @MainActor func stop(at endpoint: CMTime) async throws -> VideoRecorder.Output
+    func closeIntake(at endpoint: CMTime)
+    func cancelPreparation() async
+}
+
 /// One stream and one serial writer owner. The callback queue retains at most
 /// three pending SC buffers; normalization uses a threshold-bounded owned pool.
-final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
+final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoRecording {
     struct Output {
         let directory: URL
         let movie: URL
         let video: HistoryVideo
+        var interruption: Error? = nil
     }
     let directory: URL
     let movie: URL
@@ -35,8 +49,8 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private var terminalError: Error?
     private var stopTask: Task<Output, Error>?
     private var streamStart: Task<Void, Error>?
-    private(set) var hasCompletedMovie = false
-    var onFailure: ((Error) -> Void)?
+    @MainActor private(set) var hasCompletedMovie = false
+    @MainActor var onFailure: ((Error) -> Void)?
 
     private init(directory: URL, rectangle: VideoRectangle) throws {
         self.directory = directory
@@ -51,7 +65,7 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     static func prepare(rectangle: VideoRectangle, directory: URL) async throws -> VideoRecorder {
         guard CGPreflightScreenCaptureAccess() else {
-            throw SettingsError(message: "Video needs Screen Recording. Enable it in Vishot Settings.")
+            throw VideoPermissionError()
         }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         guard let display = content.displays.first(where: { $0.displayID == rectangle.display.id }),
@@ -136,8 +150,12 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     func stream(_ stream: SCStream, didOutputSampleBuffer sample: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen, sample.isValid,
               let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
-              let status = attachments.first?[.status] as? Int, status == SCFrameStatus.complete.rawValue,
-              intake.admit(sample.presentationTimeStamp) else { return }
+              let status = attachments.first?[.status] as? Int else { return }
+        if status == SCFrameStatus.suspended.rawValue || status == SCFrameStatus.stopped.rawValue {
+            sourceFailed(SettingsError(message: "Screen recording was suspended or stopped."))
+            return
+        }
+        guard status == SCFrameStatus.complete.rawValue, intake.admit(sample.presentationTimeStamp) else { return }
         media.async {
             defer { self.intake.release() }
             self.append(sample)
@@ -185,7 +203,21 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        media.async { self.fail(error) }
+        sourceFailed(error)
+    }
+
+    private func sourceFailed(_ error: Error) {
+        // Close on the callback thread, then drain already admitted work before
+        // marking the source error. Source loss is not a failed writer append.
+        intake.close(at: CMClockGetTime(CMClockGetHostTimeClock()))
+        callbacks.async {
+            self.media.async {
+                if self.terminalError == nil {
+                    self.terminalError = error
+                    DispatchQueue.main.async { self.onFailure?(error) }
+                }
+            }
+        }
     }
 
     /// Main-thread entry; repeated requests share exactly one finalization task.
@@ -204,13 +236,16 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
             } catch { stopError = error }
             try? self.stream.removeStreamOutput(self, type: .screen)
+            // A callback admitted just before Stop must enqueue its media work
+            // before the finish marker is queued on the separate media worker.
+            self.callbacks.sync {}
             try await self.onMedia { try self.finishFrames(at: endpoint) }
             await self.writer.finishWriting()
             guard self.writer.status == .completed else {
                 throw self.writer.error ?? SettingsError(message: "Recording could not be finalized.")
             }
             try await Self.validateMovie(at: self.movie, width: self.canvas.width, height: self.canvas.height)
-            self.hasCompletedMovie = true
+            await MainActor.run { self.hasCompletedMovie = true }
             // A finalized file remains owned here even if thumbnail or publication fails.
             let asset = AVURLAsset(url: self.movie)
             let duration = try await asset.load(.duration)
@@ -224,8 +259,8 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
             let video = HistoryVideo(movie: self.movie.lastPathComponent, thumbnail: "thumbnail.png",
                 duration: CMTimeGetSeconds(duration), width: self.canvas.width, height: self.canvas.height,
                 displayID: self.displayID, frame: self.frame, scale: self.scale)
-            if let error = stopError ?? self.terminalError { throw error }
-            return Output(directory: self.directory, movie: self.movie, video: video)
+            let interruption = try await self.onMedia { self.terminalError ?? stopError }
+            return Output(directory: self.directory, movie: self.movie, video: video, interruption: interruption)
         }
         stopTask = task
         return try await task.value

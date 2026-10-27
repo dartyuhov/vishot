@@ -3,6 +3,51 @@ import CoreMedia
 @testable import Vishot
 
 final class VideoTests: XCTestCase {
+    func testStartingCannotRegressOrBeginAgainAndTerminalCallbacksAreFenced() {
+        var state = VideoSessionState()
+        let token = state.begin()
+        XCTAssertTrue(state.advance(token, to: .starting))
+        XCTAssertFalse(state.advance(token, to: .countdown))
+        XCTAssertEqual(state.begin(), token, "An active session cannot be replaced")
+        XCTAssertTrue(state.stop())
+        XCTAssertFalse(state.stop())
+        XCTAssertFalse(state.advance(token, to: .recording))
+        state.finish(failed: true)
+        XCTAssertFalse(state.advance(token, to: .recording))
+        XCTAssertEqual(state.begin(), token, "Rescue keeps exclusive ownership")
+        state.finish()
+        let next = state.begin()
+        XCTAssertNotEqual(next, token)
+        XCTAssertFalse(state.advance(token, to: .recording))
+    }
+    func testCompletedRescueRetainsSoleCopyOnCancellationAndDiskFailureThenExportsIndependently() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = HistoryStore(url: root.appendingPathComponent("History"))
+        let directory = try store.stageVideo()
+        let movie = directory.appendingPathComponent("completed.mp4")
+        let bytes = Data([1, 2, 3])
+        try bytes.write(to: movie)
+        let destination = root.appendingPathComponent("saved.mp4")
+        try Data([9]).write(to: destination)
+        XCTAssertThrowsError(try store.exportCompletedVideo(movie, to: destination, cancelled: { true }))
+        XCTAssertThrowsError(try store.exportCompletedVideo(movie, to: destination, copy: { _, temporary in
+            try Data([0]).write(to: temporary)
+            throw CocoaError(.fileWriteOutOfSpace)
+        }))
+        XCTAssertEqual(try Data(contentsOf: movie), bytes)
+        XCTAssertEqual(try Data(contentsOf: destination), Data([9]))
+        XCTAssertThrowsError(try store.exportCompletedVideo(movie, to: movie))
+        let alias = root.appendingPathComponent("alias.mp4")
+        try FileManager.default.linkItem(at: movie, to: alias)
+        XCTAssertThrowsError(try store.exportCompletedVideo(movie, to: alias))
+        try store.exportCompletedVideo(movie, to: destination)
+        try store.recover()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: movie.path))
+        XCTAssertEqual(try Data(contentsOf: destination), bytes)
+        XCTAssertTrue(try store.entries().isEmpty)
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: root.path).contains { $0.hasPrefix(".vishot-export-") })
+    }
     func testSchemaOneScreenshotLoadsAndMigratesOnlyOnWrite() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

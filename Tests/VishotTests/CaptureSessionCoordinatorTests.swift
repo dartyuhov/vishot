@@ -2,6 +2,61 @@ import XCTest
 @testable import Vishot
 
 final class CaptureSessionCoordinatorTests: XCTestCase {
+    func testQuitDuringHistoryExportRepliesWhenCopyFinishesWithoutNeedingBrowserClose() {
+        let coordinator = CaptureSessionCoordinator()
+        var replies = 0
+        coordinator.onHistory = { _ in true }
+        coordinator.onQuitReady = { replies += 1 }
+        coordinator.showHistory()
+        coordinator.beginFileOperation()
+        XCTAssertFalse(coordinator.requestQuit())
+        coordinator.endFileOperation()
+        XCTAssertEqual(replies, 1)
+    }
+    func testHistoryCannotReplaceSessionWhileAnOwnedFileOperationIsPending() {
+        let coordinator = CaptureSessionCoordinator()
+        var id = 0, captures = 0
+        coordinator.onHistory = { id = $0; return true }
+        coordinator.onCapture = { _ in captures += 1; return true }
+        coordinator.showHistory()
+        coordinator.beginFileOperation()
+        coordinator.replaceWithCapture(id)
+        XCTAssertEqual(captures, 0)
+        coordinator.endFileOperation()
+        coordinator.replaceWithCapture(id)
+        XCTAssertEqual(captures, 1)
+    }
+    func testQuitAndSettingsWaitForFileOperationEvenWithVisibleHistory() {
+        let coordinator = CaptureSessionCoordinator()
+        var id = 0, replies = 0
+        coordinator.onHistory = { id = $0; return true }
+        coordinator.onQuitReady = { replies += 1 }
+        coordinator.showHistory()
+        coordinator.beginFileOperation()
+        XCTAssertFalse(coordinator.requestQuit())
+        coordinator.finish(id)
+        XCTAssertTrue(coordinator.isSessionActive)
+        XCTAssertEqual(replies, 0)
+        coordinator.endFileOperation()
+        XCTAssertFalse(coordinator.isSessionActive)
+        XCTAssertEqual(replies, 1)
+    }
+
+    func testFailedQuitCanBeCancelledForRescueWithoutReleasingSession() {
+        let coordinator = CaptureSessionCoordinator()
+        var id = 0, cancellations = 0
+        coordinator.onCapture = { id = $0; return true }
+        coordinator.onQuitCancelled = { cancellations += 1 }
+        coordinator.capture()
+        coordinator.dismissPresentation(id)
+        XCTAssertFalse(coordinator.requestQuit())
+        coordinator.cancelQuit()
+        XCTAssertTrue(coordinator.isSessionActive)
+        XCTAssertEqual(cancellations, 1)
+        coordinator.finish(id)
+        coordinator.capture()
+        XCTAssertTrue(coordinator.isSessionActive)
+    }
     func testShortcutAndRetentionStayFrozenUntilCurrentSessionFinishes() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: url) }

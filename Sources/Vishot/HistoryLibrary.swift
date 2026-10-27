@@ -104,6 +104,16 @@ final class HistoryLibrary {
         }
     }
 
+    /// Staging is owned by VideoSession, outside Clear/expiry. Its caller holds
+    /// the app session through panel, copy and completion delivery.
+    func exportCompletedVideo(_ movie: URL, to destination: URL,
+                              completion: @escaping (Result<Void, Error>) -> Void) {
+        worker.async {
+            let result = Result { try self.store.exportCompletedVideo(movie, to: destination) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     func publishVideo(staging: URL, video: HistoryVideo, label: String,
                       completion: @escaping (Result<HistoryEntry, Error>) -> Void) {
         worker.async {

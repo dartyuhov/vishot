@@ -16,6 +16,19 @@ final class HistoryVideoActionsTests: XCTestCase {
         try? FileManager.default.removeItem(at: root)
     }
 
+    func testCompletedRescueProducesPlayableIndependentMovieAndClearCannotRemoveStaging() async throws {
+        let directory = try store.stageVideo()
+        let movie = directory.appendingPathComponent("completed.mp4")
+        try playableMovie().write(to: movie)
+        try store.clear()
+        let destination = root.appendingPathComponent("rescued.mp4")
+        try store.exportCompletedVideo(movie, to: destination)
+        try store.recover()
+        try await VideoRecorder.validateMovie(at: destination, width: 16, height: 16)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: movie.path))
+        XCTAssertTrue(try store.entries().isEmpty)
+    }
+
     func testCorruptMovieRemainsUnavailableAndDeletableAfterRestart() throws {
         let entry = try publish(movie: Data("not an MP4".utf8))
         try store.recover()

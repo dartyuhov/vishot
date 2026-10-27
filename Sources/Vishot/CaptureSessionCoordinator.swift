@@ -10,12 +10,14 @@ final class CaptureSessionCoordinator {
     private var hasPresentation = false
     private var isQuitting = false
     private var waitingForQuit = false
+    private var fileOperations = 0
     var onCapture: ((Int) -> Bool)?
     var onHistory: ((Int) -> Bool)?
     var onCaptureAgain: ((Int) -> Void)?
     var onSessionChange: ((Bool) -> Void)?
     var onQuitReady: (() -> Void)?
-    var isSessionActive: Bool { sessionID != nil }
+    var onQuitCancelled: (() -> Void)?
+    var isSessionActive: Bool { sessionID != nil || fileOperations > 0 }
     var callbackSession: Int { hasPresentation ? sessionID ?? -1 : -1 }
 
     func capture() {
@@ -24,12 +26,13 @@ final class CaptureSessionCoordinator {
             if hasPresentation { onCaptureAgain?(id) }
             return
         }
+        guard fileOperations == 0 else { return }
         begin(.capture, present: onCapture)
     }
 
     /// History-to-picker handoff reserves availability throughout UI teardown.
     func replaceWithCapture(_ id: Int) {
-        guard !isQuitting, sessionID == id, entry == .history else { return }
+        guard !isQuitting, fileOperations == 0, sessionID == id, entry == .history else { return }
         begin(.capture, present: onCapture)
     }
 
@@ -60,6 +63,26 @@ final class CaptureSessionCoordinator {
         sessionID = nil
         entry = nil
         hasPresentation = false
+        releaseAvailability()
+    }
+
+    func beginFileOperation() {
+        fileOperations += 1
+        onSessionChange?(true)
+    }
+
+    func endFileOperation() {
+        guard fileOperations > 0 else { return }
+        fileOperations -= 1
+        releaseAvailability()
+    }
+
+    private func releaseAvailability() {
+        if waitingForQuit, fileOperations == 0, hasPresentation {
+            waitingForQuit = false
+            onQuitReady?()
+        }
+        guard !isSessionActive else { return }
         onSessionChange?(false)
         if waitingForQuit {
             waitingForQuit = false
@@ -71,8 +94,16 @@ final class CaptureSessionCoordinator {
     /// must release its lifetime before the application replies to termination.
     func requestQuit() -> Bool {
         isQuitting = true
-        guard isSessionActive, !hasPresentation else { return true }
+        guard fileOperations > 0 || (sessionID != nil && !hasPresentation) else { return true }
         waitingForQuit = true
         return false
+    }
+
+    func cancelQuit() {
+        isQuitting = false
+        if waitingForQuit {
+            waitingForQuit = false
+            onQuitCancelled?()
+        }
     }
 }

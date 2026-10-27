@@ -130,6 +130,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         accessibility.start()
         reusableBrowser = HistoryBrowser(library: historyLibrary)
+        reusableBrowser?.onFileOperation = { [sessions] active in
+            if active { sessions.beginFileOperation() } else { sessions.endFileOperation() }
+        }
         raiser.onKey = { [weak self] in $0.type == .keyDown ? self?.handle($0) : self?.keyUp($0) }
         raiser.onActivated = { [weak self] in
             guard let self, isShowing else { return }

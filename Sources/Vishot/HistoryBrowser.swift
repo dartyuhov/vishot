@@ -29,6 +29,7 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
     var onEdit: ((UUID, NSScreen) -> Void)?
     var onYank: ((HistoryEntry) -> Void)?
     var onOpenVideo: ((HistoryEntry) -> Void)?
+    var onFileOperation: ((Bool) -> Void)?
     private(set) var screen: NSScreen?
     private var results: [HistoryEntry] {
         if cachedQuery != query {
@@ -105,7 +106,9 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
         guard entry.canUseVideo else { return }
         busy = true
         actionError = nil
+        onFileOperation?(true)
         library.hold(entry.id) // Includes native panel lifetime, cancellation, and disk copy.
+        let finishOperation = onFileOperation
         let generation = generation
         let save = NSSavePanel()
         save.allowedContentTypes = [.mpeg4Movie]
@@ -118,16 +121,22 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
         save.begin { [weak self] response in
             guard let self else { return }
             self.savePanel = nil
-            guard self.generation == generation else { self.library.release(entry.id); return }
+            guard self.generation == generation else {
+                self.library.release(entry.id)
+                finishOperation?(false)
+                return
+            }
             guard response == .OK, let destination = save.url else {
                 self.library.release(entry.id)
                 self.busy = false
                 self.restoreAfterSavePanel()
+                finishOperation?(false)
                 return
             }
             self.exportRequest = self.library.exportVideo(entry, to: destination) { [weak self] _ in
                 guard let self else { return }
                 self.library.release(entry.id)
+                finishOperation?(false)
                 guard self.generation == generation else { return }
                 self.exportRequest = nil
                 self.busy = false
