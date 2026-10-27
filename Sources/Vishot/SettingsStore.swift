@@ -1,7 +1,17 @@
 import AppKit
+import VishotAgent
 
 /// Main-thread settings state; the returned registration keeps the hotkey alive.
 final class SettingsStore {
+    /// One read-only selection for a local render request. No registration, watching, writes,
+    /// NSApplication, or last-session state; absent configuration uses the normal default.
+    static func annotationStyleSnapshot(url: URL = defaultURL) throws -> VisualStyle {
+        guard FileManager.default.fileExists(atPath: url.path) else { return AppSettings.defaults.style }
+        do { return try AppSettings.parse(String(contentsOf: url, encoding: .utf8)).style }
+        catch {
+            throw AgentFailure(.invalidArguments, "Could not resolve the selected annotation style from \(url.path): \(error.localizedDescription)")
+        }
+    }
     static let defaultURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".config/vishot/config.toml")
     let url: URL

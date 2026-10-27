@@ -59,13 +59,13 @@ struct EditDocument {
     let resolvedAnnotationStyle: AnnotationStyle
 
     init(image: CGImage, scale: CGFloat, annotations: [Annotation] = [], crop: CGRect? = nil,
-         annotationStyle: ThemeID = .pixel) {
+         annotationStyle: ThemeID = .pixel, resolvedStyle: AnnotationStyle? = nil) {
         self.image = image
         self.scale = scale
         self.annotations = annotations
         self.crop = crop
         self.annotationStyle = annotationStyle
-        resolvedAnnotationStyle = ThemeCatalog.annotation(annotationStyle)
+        resolvedAnnotationStyle = resolvedStyle ?? ThemeCatalog.annotation(annotationStyle)
     }
 
     /// In points.

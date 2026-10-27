@@ -40,6 +40,17 @@ private func run() -> Int32 {
     let response: AgentResponse
     do {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.first == "annotate" {
+            _ = try AgentAnnotationArguments(Array(arguments.dropFirst()))
+            let app = try AgentEndpoint.containingApp(executableURL: executableURL())
+            let renderer = app.appendingPathComponent("Contents/MacOS/Vishot")
+            // Replace this process: no app launch, service, authorization, or unbounded IPC wait.
+            let values = [renderer.path, AgentAnnotationArguments.renderArgument] + Array(arguments.dropFirst())
+            let pointers = values.map { strdup($0) } + [nil]
+            defer { pointers.forEach { free($0) } }
+            pointers.withUnsafeBufferPointer { _ = execv(renderer.path, $0.baseAddress!) }
+            throw AgentFailure(.startupFailed, "Could not execute the containing app's local PNG renderer.")
+        }
         if arguments == ["--version"] {
             let app = try AgentEndpoint.containingApp(executableURL: executableURL())
             guard let version = Bundle(url: app)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String else {

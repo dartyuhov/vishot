@@ -3,6 +3,12 @@ import CoreText
 
 /// Shared styled drawing and measurement for preview and export.
 enum AnnotationRenderer {
+    /// Converts the CLI's top-left text-box anchor into the editor's left/vertical-centre point.
+    /// Use a style with snapsTextToGrid=false when exact external coordinates are required.
+    static func textAnchor(topLeft: CGPoint, text: String, style: AnnotationStyle) -> CGPoint {
+        let origin = textBounds(text, at: .zero, style: style).origin
+        return CGPoint(x: topLeft.x - origin.x, y: topLeft.y - origin.y)
+    }
     /// Draws in image space: the context's user space must have its origin at the image's top-left,
     /// y down, in points.
     static func draw(_ annotations: [Annotation], in context: CGContext, style: AnnotationStyle) {
@@ -202,14 +208,19 @@ enum AnnotationRenderer {
         return drawn.cropping(to: cropRect)
     }
 
-    /// A bitmap the size of `image`, in its color space, with `image` drawn in and user space set to
+    /// A bitmap the size of `image`, in its output-capable RGB color space (otherwise sRGB), with
+    /// integer 16-bit components for 16-bit input, so PNG export retains unmarked RGB precision.
+    /// `image` is drawn in and user space set to
     /// image space (points from the top-left, y down), ready to draw over it.
     static func imageSpaceContext(drawing image: CGImage, scale: CGFloat) -> CGContext? {
         let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
-        let space = image.colorSpace.flatMap { $0.supportsOutput ? $0 : nil } ?? sRGB
-        let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        let space = image.colorSpace.flatMap { $0.model == .rgb && $0.supportsOutput ? $0 : nil } ?? sRGB
+        let bits = image.bitsPerComponent == 16 ? 16 : 8
+        let bitmapInfo = bits == 16
+            ? CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder16Little.rawValue
+            : CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         guard let context = CGContext(
-            data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+            data: nil, width: image.width, height: image.height, bitsPerComponent: bits, bytesPerRow: 0,
             space: space, bitmapInfo: bitmapInfo
         ) else { return nil }
         context.interpolationQuality = .none

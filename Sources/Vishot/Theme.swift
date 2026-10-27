@@ -309,11 +309,13 @@ struct AnnotationStyle {
     let headSpread: CGFloat
     let textHaloWidth: CGFloat
     let shadow: CGColor
+    /// Interactive Pixel aiming snaps to cells; externally anchored pixel coordinates are exact.
+    var snapsTextToGrid = true
 
     func baseline(at point: CGPoint) -> CGPoint {
         let baseline = CGPoint(x: point.x, y: point.y + CTFontGetCapHeight(font) / 2)
         switch treatment {
-        case .cells: return PixelArt.snapped(baseline)
+        case .cells: return snapsTextToGrid ? PixelArt.snapped(baseline) : baseline
         case .vector: return baseline
         }
     }

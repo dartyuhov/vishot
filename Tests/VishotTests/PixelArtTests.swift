@@ -46,4 +46,16 @@ final class PixelArtTests: XCTestCase {
     func testTinyOutlineIsFilled() {
         XCTAssertEqual(Set(PixelArt.outline(CGRect(x: 0, y: 0, width: 5, height: 5))).count, 4)
     }
+
+    func testSmallOutlinesLeaveInteriorCellsWhenThereIsRoom() {
+        for size: CGFloat in [9, 12] {
+            let cells = Set(PixelArt.outline(CGRect(x: 0, y: 0, width: size, height: size)))
+            XCTAssertTrue(cells.contains(Cell(x: 1, y: 0)))
+            XCTAssertTrue(cells.contains(Cell(x: 0, y: 1)))
+            XCTAssertFalse(cells.contains(Cell(x: 1, y: 1)), "A small rectangle is still an outline")
+        }
+        let narrow = Set(PixelArt.outline(CGRect(x: 0, y: 0, width: 9, height: 30)))
+        XCTAssertFalse(narrow.contains(Cell(x: 1, y: 5)))
+        XCTAssertTrue(narrow.contains(Cell(x: 0, y: 5)))
+    }
 }

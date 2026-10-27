@@ -15,8 +15,56 @@
     },
     {
       "id": 3,
-      "prompt": "Delete only the two Vishot captures you created for this task. Another agent is using the same workspace. Your recorded paths are /workspace/.vishot/window-42-1.png and /workspace/.vishot/window-42-2.png.",
-      "expected_output": "Remove only the two recorded exact paths with a file tool or quoted exact-path command. Leave every other capture and the .vishot directory intact. Report the removed files.",
+      "prompt": "Delete only the original capture and annotated explanation you created for this task. Another agent is using the same workspace. Your recorded paths are /workspace/.vishot/window-42-1.png and /workspace/.vishot/annotation-2.png.",
+      "expected_output": "Remove only the two recorded exact paths with a file tool or quoted exact-path command. Leave every other capture, annotation, and the .vishot directory intact. Report the removed files.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Explain how to save changes in the Editor Preferences window. Capture it, point at the Save button with an arrow, outline its section, add a short text label, and show me the explanation. The window may change while you work. Use only the approved terminal and built-in image reader.",
+      "expected_output": "Discover and select the exact Preferences window ID, capture it once, immediately read capture.path as visual input, then use that exact original path as annotate --input. Choose image-pixel geometry from the read, send one schemaVersion 1 mixed rect/arrow/text batch with inline --annotations and --open, and read annotation.path to inspect the result. Do not recapture before annotation, create a JSON file by default, use a separate viewer command, or infer visual success from openingStatus accepted. Retain the original and flattened output; preserve clipboard and Capture history and add no watermark.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "Use my existing /workspace/fixture.png to draft an explanation without opening a viewer. It is 1600 by 1200 pixels at 144 DPI. Vishot Settings selects Smooth, but Screen Recording permission is disabled. Save a draft, then move the label in a revision. I already have a batch at /workspace/explanation.json if you want to use it.",
+      "expected_output": "Read the local PNG with the built-in image reader, annotate without discovery or capture authorization, and omit --open for the draft. Inline JSON is the default, with --annotations-file an optional mutually exclusive source for the existing batch. Use pixel coordinates and top-left text anchors; valid square 144 DPI gives 2x theme sizing without resizing. Resolve Smooth from the read-only settings snapshot and check style smooth, dimensions 1600x1200, and openingStatus not_requested. Read the result and render the complete revision against fixture.png, not the flattened draft. Retain all files until scoped cleanup.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "My mixed batch against /workspace/original.png failed with exit 2: {\"schemaVersion\":1,\"ok\":false,\"error\":{\"code\":\"invalid_annotations\",\"message\":\"Invalid annotation batch.\",\"problems\":[{\"index\":1,\"field\":\"annotations[1].to.x\",\"reason\":\"Expected a finite image-pixel number in [0, 1600).\"},{\"index\":2,\"field\":\"annotations[2].color\",\"reason\":\"Allowed colors: red, yellow, green, purple, white, black (default purple).\"}]}}. Can you keep the valid marks and just fix these?",
+      "expected_output": "Explain complete-batch rejection: no partial result was saved. Use zero-based index 1 to fix the second annotation's to.x within [0,1600) and index 2 to fix the third annotation's color to one of the six exact names or omit it for purple. Correct every problem and resubmit the whole batch against original.png, retaining valid entries in that batch. Do not recapture or invent a partial output. Note batch-level problems may omit index and malformed JSON need not have problems when relevant.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "The explanation command used --open and exited 11 with {\"schemaVersion\":1,\"ok\":false,\"annotation\":{\"path\":\"/workspace/.vishot/annotation-result.png\",\"width\":1600,\"height\":1200,\"style\":\"pixel\",\"openingStatus\":\"failed\"},\"error\":{\"code\":\"opening_failed\",\"message\":\"The PNG was saved, but macOS did not accept the open request.\"}}. Did we lose the result?",
+      "expected_output": "Identify opening_failed as the retained-output exception: the complete PNG remains at annotation.path despite ok false and exit 11. Read that exact saved image with the built-in image reader, report its path and the viewer-opening failure separately, and suggest checking the default PNG application manually. Do not claim a viewer opened, delete the file, recapture, rerender marks, or introduce a separate unapproved open command.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "On an inspected 800 by 600 PNG, put a long text label at x=790,y=590, draw an arrow to x=800,y=600, and outline a rect at x=790,y=590,width=20,height=20. Use blue and fontSize=40. Its DPI metadata is 144 horizontally and 72 vertically. Can the CLI clip everything for me?",
+      "expected_output": "Distinguish geometry validation from rendered overflow. The inside text anchor is valid and text overflow clips, but the arrow endpoint is outside the half-open bounds and the rect extends beyond the canvas, so the full batch must be corrected before any output. Blue is unsupported and fontSize is an unknown field; choose red/yellow/green/purple/white/black with purple default and retain theme-defined sizing. Nonsquare DPI falls back to 1x, never resizes the 800x600 image, and never changes pixel-coordinate interpretation. Square tolerance is 0.02 DPI. Finite positive square DPI supports 9..2304 inclusive with 0.013 DPI endpoint quantization tolerance and horizontal clamping; outside that tolerance it fails invalid_image with no output rather than falling back.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "I want 257 annotations, including one 17 KiB UTF-8 text label, and 270 KiB total text. The JSON file is over 1 MiB. Can we send it anyway or hide it in an annotations-file instead of inline JSON?",
+      "expected_output": "Explain the same limits apply to inline and file JSON: 1 MiB JSON, 1..256 annotations, 16 KiB UTF-8 per text, and 256 KiB combined text. Reduce and prioritize marks/text within all limits, then submit a complete valid batch against the original inspected input. A file source does not bypass validation; do not promise partial rendering or layer repeated batches onto flattened marks.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "Explain the annotation DPI behavior for PNGs with square DPI 2304, square DPI 2304.01, square DPI 2400, square DPI 8, missing DPI, zero DPI, and mismatched axes 2400/72. Should all unsupported DPI just use 1x?",
+      "expected_output": "Use finite positive square axes within 0.02 DPI difference. The inclusive supported range is 9..2304, accepting endpoint quantization only when both axes are within 8.987..2304.013; clamp horizontal DPI to 9..2304 then divide by 72. Thus 2304 gives 32x and 2304.01 clamps to 32x. Square 2400 and square 8 fail exit 2 invalid_image with no output; correct source metadata before retrying. Missing, invalid/nonpositive, or nonsquare DPI uses 1x, so missing, zero, and 2400/72 use 1x. Pixel coordinates and dimensions never resize.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "Annotate my inspected grayscale PNG with a red rectangle, and my inspected 16-bit RGB PNG with a purple label. Also draw a one-pixel-wide rectangle in Pixel style. Can you promise an empty interior for that thin rectangle and 8-bit output for both images?",
+      "expected_output": "Use each original inspected input without recapture. Grayscale renders in RGB so colored marks remain colored, while 16-bit input retains 16-bit components rather than reducing precision to 8 bits. Preserve original files and pixel dimensions. Rectangles use outline treatment, but very thin geometry may have no visible interior after border rendering; do not promise an impossible empty interior or invent a fill option. Read each saved result with the built-in image reader.",
       "files": []
     }
   ]

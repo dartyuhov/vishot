@@ -94,10 +94,24 @@ the integrating owner to wire once their new layout exists.
 
 ## Skill validation
 
-The CLI-boundary test executes the shell examples from the shipped skill
-against the compiled CLI with a controlled service, then decodes the returned
-PNG. The [evaluation prompts](../skills/vishot-capture/evals/evals.json) cover
-exact-window visual inspection, unavailable/minimized/Space behavior, and
-task-scoped cleanup. They are review scenarios, not a claimed independent
-model benchmark. Complete the signed-app agent/image-reader walkthrough as
-part of the end-to-end validation ticket.
+The capture CLI-boundary test executes the first discovery/capture shell block
+from the shipped skill against the compiled CLI with a controlled service, then
+decodes the returned PNG. The
+[evaluation prompts](../skills/vishot-capture/evals/evals.json) cover
+exact-window visual inspection, unavailable/minimized/Space behavior,
+task-scoped capture/annotation cleanup, and the explanation workflow: capture,
+built-in image read, mixed-mark annotation of that exact original, result read,
+and `--open` presentation. They also cover save-only drafts, optional JSON
+files, indexed validation correction, retained output after opening failure,
+geometry versus clipping, DPI fallback, and batch limits. They are review
+scenarios, not a claimed independent model benchmark or live verification.
+
+For the signed-app walkthrough, use a non-private fixture and record the
+platform, selected Pixel/Smooth style, input/output dimensions, built-in reads,
+and observable default-app opening. Check representative 1x/Retina DPI,
+unchanged original and dimensions, no watermark, unchanged clipboard/history,
+and local PNG annotation without capture permission. Record unavailable checks
+as gaps; JSON `openingStatus: accepted` alone does not establish visual success.
+The contract and examples are in [Agent CLI](agent-cli.md). Documentation and
+evaluation updates do not close existing native Intel/macOS 14 or native
+cross-Space verification gaps.

@@ -71,11 +71,12 @@ enum PixelArt {
     }
 
     /// A one-cell ring around the cells `rect` touches, with the outer corner cells left out and the
-    /// inner ones filled, like the selection border. Too small for a ring, the cells are all filled.
+    /// inner ones filled, like the selection border. Small rings omit the inner corner accents
+    /// to keep their interior open; fewer than three cells across cannot have an interior.
     static func outline(_ rect: CGRect) -> [Cell] {
         let low = cell(at: CGPoint(x: rect.minX, y: rect.minY))
         let high = cell(at: CGPoint(x: max(rect.minX, rect.maxX - cell / 2), y: max(rect.minY, rect.maxY - cell / 2)))
-        guard high.x - low.x >= 3, high.y - low.y >= 3 else {
+        guard high.x - low.x >= 2, high.y - low.y >= 2 else {
             return (low.y...high.y).flatMap { y in (low.x...high.x).map { Cell(x: $0, y: y) } }
         }
         var cells: [Cell] = []
@@ -85,10 +86,12 @@ enum PixelArt {
         for y in (low.y + 1)...(high.y - 1) {
             cells += [Cell(x: low.x, y: y), Cell(x: high.x, y: y)]
         }
-        cells += [
-            Cell(x: low.x + 1, y: low.y + 1), Cell(x: high.x - 1, y: low.y + 1),
-            Cell(x: low.x + 1, y: high.y - 1), Cell(x: high.x - 1, y: high.y - 1),
-        ]
+        if high.x - low.x >= 4, high.y - low.y >= 4 {
+            cells += [
+                Cell(x: low.x + 1, y: low.y + 1), Cell(x: high.x - 1, y: low.y + 1),
+                Cell(x: low.x + 1, y: high.y - 1), Cell(x: high.x - 1, y: high.y - 1),
+            ]
+        }
         return cells
     }
 }
