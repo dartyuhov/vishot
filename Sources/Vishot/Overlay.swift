@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 
 final class OverlayController: NSObject, NSWindowDelegate {
-    private enum Mode {
+    private enum Mode: CaseIterable {
         case window, element, hint, screen, region
 
         var name: String {
@@ -48,13 +48,33 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private var panels: [OverlayPanel] = []
+    private var preparedTheme = ThemeCatalog.pixel
+    /// One immutable resolved value for the entire picker/history/editor lifetime.
+    /// History-to-editor and editor-to-history transitions deliberately retain it.
+    private(set) var sessionTheme: ResolvedTheme?
+    private var sessionOutput: OutputStyle?
+
+    func prepareTheme(style: VisualStyle, colorScheme: ColorScheme) {
+        guard !isSessionActive,
+              preparedTheme.style != style || preparedTheme.colorScheme != ThemeCatalog.colorScheme(style: style, requested: colorScheme) else { return }
+        preparedTheme = ThemeCatalog.resolve(style: style, colorScheme: colorScheme)
+        preparePickerPanels()
+        reusableBrowser.prepare(theme: preparedTheme)
+    }
+
+    private func preparePickerPanels() {
+        let modes = Mode.allCases.flatMap { mode in
+            [false, true].map { (name: mode.name, keys: mode.keys(accessibilityAvailable: $0)) }
+        }
+        panels.forEach { $0.prepare(theme: preparedTheme, modes: modes) }
+    }
     private var isShowing = false
     private let capturer = Capturer()
     let historyLibrary = HistoryLibrary()
     private lazy var screenshotCompletion = ScreenshotCompletion(history: historyLibrary, save: { [capturer] in
-        capturer.save($0, scale: $1, to: $2, watermark: $3, completion: $4)
-    }) { [capturer] image, scale, watermark in
-        capturer.copy(image, scale: scale, watermark: watermark)
+        capturer.save($0, scale: $1, to: $2, output: $3, completion: $4)
+    }) { [capturer] image, scale, output in
+        capturer.copy(image, scale: scale, output: output)
     }
     private var browser: HistoryBrowser?
     private var reusableBrowser: HistoryBrowser!
@@ -63,10 +83,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var captureWindowTitle = ""
     var isSessionActive: Bool { isShowing || browser != nil }
     var onSessionChange: ((Bool) -> Void)?
-    var watermark: Bool {
-        get { capturer.watermark }
-        set { capturer.watermark = newValue }
-    }
+    var watermark = true
     private let elements = ElementCatalog()
     private let accessibility = AccessibilityAvailability()
     private let raiser = WindowRaiser()
@@ -156,15 +173,17 @@ final class OverlayController: NSObject, NSWindowDelegate {
         appToReactivate = NSWorkspace.shared.frontmostApplication
         let browser = reusableBrowser!
         self.browser = browser
+        sessionTheme = preparedTheme
+        sessionOutput = OutputStyle(watermark: watermark, style: preparedTheme.watermark)
         browser.onClose = { [weak self] in self?.closeHistory() }
         browser.onEdit = { [weak self] in self?.editHistory($0, on: $1) }
         browser.onYank = { [weak self, weak browser] entry in
-            guard let self, !isCapturing else { return }
+            guard let self, !isCapturing, let output = sessionOutput else { return }
             let session = session
             browser?.yank(entry) { [weak self] image in
                 guard let self, self.session == session, self.browser === browser else { return }
                 guard let image else { return }
-                self.capturer.copy(image, scale: entry.scale)
+                self.capturer.copy(image, scale: entry.scale, output: output)
                 self.closeHistory()
             }
         }
@@ -201,7 +220,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
             browser.suspend()
             self.isShowing = true
             let capture = Capture(image: loaded.document.image, scale: loaded.document.scale, frame: frame, initialCrop: loaded.document.crop)
-            let editor = EditorController(capture: capture, restored: loaded, viewScale: scale)
+            guard let theme = self.sessionTheme else { self.historyLibrary.release(id); return }
+            let editor = EditorController(capture: capture, restored: loaded, viewScale: scale, theme: theme)
             editor.onFinish = { [weak self] in self?.finishEditing($0, export: $1) }
             editor.onChange = { [weak self] in self?.render() }
             self.editor = editor
@@ -236,6 +256,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         accessibilityAvailable = accessibility.isAllowed
         enterWindowMode()
         isShowing = true
+        sessionTheme = preparedTheme
+        sessionOutput = OutputStyle(watermark: watermark, style: preparedTheme.watermark)
         onSessionChange?(true)
         render()
         panels.forEach { $0.orderFrontRegardless() }
@@ -249,6 +271,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
             historyLibrary.finishSession()
         }
         isShowing = false
+        sessionTheme = nil
+        sessionOutput = nil
         session += 1
         sourcePreparation.cancel()
         isCapturing = false
@@ -280,13 +304,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func confirm() {
-        guard !isCapturing, let target = selection else { return }
+        guard !isCapturing, let target = selection, let output = sessionOutput else { return }
         captureMetadata(for: target)
-        let label = captureLabel, title = captureWindowTitle, watermark = capturer.watermark
+        let label = captureLabel, title = captureWindowTitle
         prepareSource(for: target) { [self] capture in
-            let document = EditDocument(image: capture.image, scale: capture.scale, crop: capture.initialCrop)
+            let document = EditDocument(image: capture.image, scale: capture.scale, crop: capture.initialCrop,
+                annotationStyle: sessionTheme?.id ?? .pixel)
             guard let request = screenshotCompletion.prepare(document: document, undo: [], label: label,
-                windowTitle: title, session: session, watermark: watermark)
+                windowTitle: title, session: session, output: output)
             else { status = "export failed"; render(); return }
             present(request.copy(currentSession: self.session))
         }
@@ -324,7 +349,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func startEditing(_ capture: Capture) {
-        let editor = EditorController(capture: capture)
+        guard let theme = sessionTheme else { return }
+        let editor = EditorController(capture: capture, theme: theme)
         editor.onFinish = { [weak self] in self?.finishEditing($0, export: $1) }
         editor.onChange = { [weak self] in self?.render() }
         self.editor = editor
@@ -338,9 +364,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
             if let id = historyEditingID { returnToHistory(id) } else { hide() }
             return
         }
-        guard let editor, let request = screenshotCompletion.prepare(document: editor.document, undo: editor.history.snapshots,
+        guard let editor, let output = sessionOutput,
+            let request = screenshotCompletion.prepare(document: editor.document, undo: editor.history.snapshots,
             label: captureLabel, windowTitle: captureWindowTitle, id: historyEditingID,
-            session: session, watermark: capturer.watermark, exported: image) else { return }
+            session: session, output: output, exported: image) else { return }
         switch finish {
         case .copy:
             present(request.copy(currentSession: session))
@@ -765,7 +792,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func rebuildPanels() {
         panels.forEach { $0.close() }
         panels = NSScreen.screens.map { screen in
-            let panel = OverlayPanel(screen: screen)
+            let panel = OverlayPanel(screen: screen, theme: preparedTheme)
             panel.delegate = self
             panel.onKeyDown = { [weak self] in self?.handle($0) }
             panel.onKeyUp = { [weak self] in self?.keyUp($0) }
@@ -775,6 +802,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             panel.onMouseUp = { [weak self] in self?.mouseUp(at: $0) }
             return panel
         }
+        preparePickerPanels()
     }
 
     /// Clicking elsewhere or switching Spaces cancels the selection. A click on another screen's

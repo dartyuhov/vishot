@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// Main-thread settings state; the returned registration keeps the hotkey alive.
 final class SettingsStore {
@@ -9,8 +9,15 @@ final class SettingsStore {
     private(set) var configured: AppSettings?
     private(set) var error: String?
     private(set) var isSessionActive = false
+    private(set) var activeColorScheme = ColorScheme.light
+    private var systemColorScheme = ColorScheme.light
+    private var appearanceObservation: NSKeyValueObservation?
+    var hasPendingAppearance: Bool {
+        configured.map { effectiveColorScheme($0) != activeColorScheme } ?? false
+    }
     var onChange: (() -> Void)?
     private let register: (CaptureShortcut) throws -> AnyObject
+    private let resolveColorScheme: (VisualStyle, ColorScheme) -> ColorScheme
     private var registration: AnyObject?
     private let registerHistory: ((CaptureShortcut) throws -> AnyObject)?
     private var historyRegistration: AnyObject?
@@ -19,16 +26,25 @@ final class SettingsStore {
     private var lastTarget: URL?
     private var lastReadError: String?
 
-    init(url: URL = defaultURL, registerHistory: ((CaptureShortcut) throws -> AnyObject)? = nil,
+    init(url: URL = defaultURL,
+         resolveColorScheme: @escaping (VisualStyle, ColorScheme) -> ColorScheme = ThemeCatalog.colorScheme,
+         registerHistory: ((CaptureShortcut) throws -> AnyObject)? = nil,
          register: @escaping (CaptureShortcut) throws -> AnyObject) {
         self.url = url
         self.register = register
         self.registerHistory = registerHistory
+        self.resolveColorScheme = resolveColorScheme
     }
 
     deinit { timer?.cancel() }
 
     func start(watching: Bool = true) {
+        systemColorScheme = NSApp?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
+        activeColorScheme = effectiveColorScheme(active)
+        appearanceObservation = NSApp?.observe(\.effectiveAppearance, options: [.new]) { [weak self] app, _ in
+            let scheme: ColorScheme = app.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
+            DispatchQueue.main.async { self?.systemAppearanceChanged(scheme) }
+        }
         reload()
         if registration == nil {
             do { registration = try register(active.shortcut) }
@@ -103,7 +119,16 @@ final class SettingsStore {
 
     func setSessionActive(_ active: Bool) {
         isSessionActive = active
-        if !active { applyConfigured() }
+        if !active {
+            applyConfigured()
+            activeColorScheme = effectiveColorScheme(self.active)
+        }
+        onChange?()
+    }
+
+    func systemAppearanceChanged(_ scheme: ColorScheme) {
+        systemColorScheme = scheme
+        if !isSessionActive { activeColorScheme = effectiveColorScheme(active) }
         onChange?()
     }
 
@@ -122,18 +147,24 @@ final class SettingsStore {
             registration = nextCapture
             historyRegistration = nextHistory
             active = candidate
+            activeColorScheme = effectiveColorScheme(candidate)
             error = nil
         } catch { self.error = error.localizedDescription }
     }
 
+    private func effectiveColorScheme(_ settings: AppSettings) -> ColorScheme {
+        resolveColorScheme(settings.style, settings.appearance.resolve(system: systemColorScheme))
+    }
+
     /// Edits only the requested preference on fresh source, retaining external edits.
-    func update(watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
+    func update(appearance: AppearancePreference? = nil, style: VisualStyle? = nil,
+                watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
                 historyRetention: HistoryRetention? = nil, historyShortcut: CaptureShortcut? = nil,
                 clearHistoryShortcut: Bool = false) {
         do {
             let target = url.resolvingSymlinksInPath()
             let original = try String(contentsOf: target, encoding: .utf8)
-            let edited = try AppSettings.edit(original, watermark: watermark, shortcut: shortcut,
+            let edited = try AppSettings.edit(original, appearance: appearance, style: style, watermark: watermark, shortcut: shortcut,
                 historyRetention: historyRetention, historyShortcut: historyShortcut, clearHistoryShortcut: clearHistoryShortcut)
             guard url.resolvingSymlinksInPath() == target,
                   try String(contentsOf: target, encoding: .utf8) == original else {
