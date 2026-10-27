@@ -44,23 +44,18 @@ public struct AgentFailure: Codable, Error, Equatable {
         case minimizedUnsupported = "minimized_unsupported"
         case encodingFailed = "encoding_failed"
         case outputWriteFailed = "output_write_failed"
+        case invalidAnnotations = "invalid_annotations"
+        case invalidJSON = "invalid_json"
+        case invalidImage = "invalid_image"
+        case renderingFailed = "rendering_failed"
+        case openingFailed = "opening_failed"
     }
 
     public let code: Code
     public let message: String
-    public init(_ code: Code, _ message: String) { self.code = code; self.message = message }
-    public var exitStatus: Int32 {
-        switch code {
-        case .invalidArguments: return 2
-        case .permissionDenied: return 3
-        case .startupFailed: return 4
-        case .timeout: return 5
-        case .serviceFailure: return 6
-        case .targetUnavailable: return 7
-        case .captureUnavailable, .minimizedUnsupported: return 8
-        case .encodingFailed: return 9
-        case .outputWriteFailed: return 10
-        }
+    public let problems: [AgentValidationProblem]?
+    public init(_ code: Code, _ message: String, problems: [AgentValidationProblem]? = nil) {
+        self.code = code; self.message = message; self.problems = problems
     }
 }
 
@@ -85,6 +80,13 @@ public struct AgentResponse: Codable {
     public let error: AgentFailure?
     public let image: AgentCapturedImage?
     public let capture: AgentCaptureFile?
+    public var annotation: AgentAnnotationFile? = nil
+
+    public static func annotated(_ file: AgentAnnotationFile, error: AgentFailure? = nil) -> Self {
+        var response = Self(schemaVersion: 1, ok: error == nil, windows: nil, error: error, image: nil, capture: nil)
+        response.annotation = file
+        return response
+    }
 
     public static func windows(_ windows: [AgentWindow]) -> Self {
         Self(schemaVersion: 1, ok: true, windows: windows, error: nil, image: nil, capture: nil)

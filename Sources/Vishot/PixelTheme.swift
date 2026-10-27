@@ -1,8 +1,10 @@
 import AppKit
+import VishotRendering
+import VishotConfiguration
 
 enum PixelTheme {
     static let definition = ThemeDefinition(id: "pixel", label: "Pixel",
-        annotationID: .pixel, appearances: .both, makeStyles: makeStyles)
+        annotationID: VisualStyle.pixel.annotationID, appearances: .both, makeStyles: makeStyles)
 
     private static func makeStyles(_ colorScheme: ColorScheme) -> ThemeStyles {
         let light = colorScheme == .light

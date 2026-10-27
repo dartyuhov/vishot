@@ -1,4 +1,5 @@
 import XCTest
+import VishotRendering
 @testable import Vishot
 
 @MainActor

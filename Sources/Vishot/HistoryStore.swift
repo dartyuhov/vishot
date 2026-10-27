@@ -1,10 +1,7 @@
 import AppKit
+import VishotRendering
 import ImageIO
-
-enum HistoryRetention: Int, CaseIterable {
-    case off = 0, oneDay = 1, threeDays = 3, sevenDays = 7, thirtyDays = 30
-    var label: String { self == .off ? "Off" : "\(rawValue) \(rawValue == 1 ? "day" : "days")" }
-}
+import VishotConfiguration
 
 struct HistoryEntry: Codable, Equatable {
     var schema = 1
@@ -26,7 +23,7 @@ struct HistoryEntry: Codable, Equatable {
     var searchFields: [String] {
         // Fully visible annotation strings are exact searchable data even before OCR completes.
         // Partially clipped strings rely on rendered OCR so hidden characters never leak.
-        let style = ThemeCatalog.annotation(annotationStyleID)
+        let style = AnnotationCatalog.annotation(annotationStyleID)
         let text = snapshot.annotations.compactMap { annotation -> String? in
             guard case let .text(text, at, _) = annotation else { return nil }
             if let crop = snapshot.crop, !crop.contains(AnnotationRenderer.textBounds(text, at: at, style: style)) { return nil }

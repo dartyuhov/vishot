@@ -1,55 +1,13 @@
 import AppKit
-import CoreText
+import VishotRendering
+import VishotConfiguration
 
-enum AppearancePreference: String, CaseIterable {
-    case system, light, dark
-    var label: String { rawValue.capitalized }
-    func resolve(system: ColorScheme) -> ColorScheme {
-        switch self {
-        case .system: return system
-        case .light: return .light
-        case .dark: return .dark
-        }
-    }
-}
-
-enum ColorScheme: Equatable {
-    case light, dark
+extension ColorScheme {
     var appearance: NSAppearance { NSAppearance(named: self == .dark ? .darkAqua : .aqua)! }
 }
 
-struct VisualStyle: RawRepresentable, Equatable, CaseIterable {
-    let definition: ThemeDefinition
-    var rawValue: String { definition.id }
-    fileprivate init(definition: ThemeDefinition) { self.definition = definition }
-    init?(rawValue: String) {
-        guard let definition = ThemeCatalog.definitions.first(where: { $0.id == rawValue }) else { return nil }
-        self.definition = definition
-    }
-    static var allCases: [VisualStyle] { ThemeCatalog.definitions.map { VisualStyle(definition: $0) } }
-    static let pixel = VisualStyle(definition: PixelTheme.definition)
-    static let smooth = VisualStyle(definition: SmoothTheme.definition)
-    static func == (lhs: VisualStyle, rhs: VisualStyle) -> Bool { lhs.rawValue == rhs.rawValue }
-    var label: String { definition.label }
-    var annotationID: ThemeID { definition.annotationID }
-    init(annotationID: ThemeID) {
-        // Legacy application preferences, not a reverse lookup for new theme definitions.
-        switch annotationID {
-        case .pixel: self = .pixel
-        case .clean: self = .smooth
-        }
-    }
-}
-
-/// Stable persisted annotation presets, not the list of selectable interface themes.
-enum ThemeID: String, Codable, CaseIterable {
-    case pixel
-    case clean
-
-}
-
 struct ResolvedTheme {
-    let style: VisualStyle
+    let definition: ThemeDefinition
     let id: ThemeID
     let colorScheme: ColorScheme
     let annotation: AnnotationStyle
@@ -63,10 +21,10 @@ struct ResolvedTheme {
     var watermark: WatermarkStyle { styles.watermark }
 
     fileprivate init(definition: ThemeDefinition, colorScheme: ColorScheme, styles: ThemeStyles) {
-        style = VisualStyle(definition: definition)
+        self.definition = definition
         id = definition.annotationID
         self.colorScheme = colorScheme
-        annotation = ThemeCatalog.annotation(definition.annotationID)
+        annotation = AnnotationCatalog.annotation(definition.annotationID)
         self.styles = styles
     }
 }
@@ -299,26 +257,6 @@ struct SettingsStyle {
     }
 }
 
-struct AnnotationStyle {
-    enum Treatment { case cells, vector }
-    let treatment: Treatment
-    let font: CTFont
-    let lineHeight: CGFloat
-    let strokeWidth: CGFloat
-    let headLength: CGFloat
-    let headSpread: CGFloat
-    let textHaloWidth: CGFloat
-    let shadow: CGColor
-
-    func baseline(at point: CGPoint) -> CGPoint {
-        let baseline = CGPoint(x: point.x, y: point.y + CTFontGetCapHeight(font) / 2)
-        switch treatment {
-        case .cells: return PixelArt.snapped(baseline)
-        case .vector: return baseline
-        }
-    }
-}
-
 struct WatermarkStyle {
     enum Treatment { case pixelGlyphs, systemText }
     let treatment: Treatment
@@ -330,15 +268,22 @@ struct WatermarkStyle {
 }
 
 enum ThemeCatalog {
-    /// The only registration list. Factories run at resolution time, after Fonts.register().
+    /// GUI registration list. Factories run at resolution time, after font registration.
     static let definitions = [PixelTheme.definition, SmoothTheme.definition]
 
+    static func definition(for style: VisualStyle) -> ThemeDefinition {
+        guard let definition = definitions.first(where: { $0.id == style.rawValue }) else {
+            preconditionFailure("No GUI theme registered for \(style.rawValue)")
+        }
+        return definition
+    }
+
     static func colorScheme(style: VisualStyle, requested: ColorScheme) -> ColorScheme {
-        style.definition.appearances.resolve(requested)
+        definition(for: style).appearances.resolve(requested)
     }
 
     static func resolve(style: VisualStyle, colorScheme: ColorScheme) -> ResolvedTheme {
-        resolve(style.definition, colorScheme: colorScheme)
+        resolve(definition(for: style), colorScheme: colorScheme)
     }
 
     static func resolve(_ definition: ThemeDefinition, colorScheme: ColorScheme) -> ResolvedTheme {
@@ -350,7 +295,7 @@ enum ThemeCatalog {
                         system: ColorScheme) -> ResolvedTheme {
         resolve(definition, colorScheme: appearance.resolve(system: system))
     }
-    // Computed definitions avoid freezing fallback fonts before Fonts.register(). Owners keep the
+    // Computed definitions avoid freezing fallback fonts before font registration. Owners keep the
     // resolved value for their lifetime; rendering never resolves resources or consults settings.
     static func resolve(_ id: ThemeID) -> ResolvedTheme {
         switch id {
@@ -362,23 +307,4 @@ enum ThemeCatalog {
     static var pixel: ResolvedTheme { resolve(style: .pixel, colorScheme: .dark) }
     static var clean: ResolvedTheme { resolve(style: .smooth, colorScheme: .dark) }
 
-    /// Persisted markup presets are independent of selectable interface identities.
-    static func annotation(_ id: ThemeID) -> AnnotationStyle {
-        switch id {
-        case .pixel:
-            let font = Fonts.pixel(24) as CTFont
-            let height = CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font)
-            return AnnotationStyle(treatment: .cells, font: font,
-                lineHeight: ceil(height / 3) * 3 + 3, strokeWidth: 3,
-                headLength: 24, headSpread: 0.6, textHaloWidth: 1,
-                shadow: NSColor(white: 0, alpha: 0.35).cgColor)
-        case .clean:
-            let font = NSFont.systemFont(ofSize: 24, weight: .semibold) as CTFont
-            let height = CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font)
-            return AnnotationStyle(treatment: .vector, font: font,
-                lineHeight: ceil(height) + 3, strokeWidth: 3,
-                headLength: 18, headSpread: 0.45, textHaloWidth: 1,
-                shadow: NSColor(white: 0, alpha: 0.35).cgColor)
-        }
-    }
 }

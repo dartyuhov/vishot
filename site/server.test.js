@@ -77,13 +77,37 @@ test('serves a signup-free page and browser bundle with working local navigation
   }
 });
 
-test('describes history as a release-gated preview and CLI as planned', async () => {
+test('describes history as a release-gated preview', async () => {
   const html = await (await fetch(base + '/')).text();
   assert.match(html, /Capture history/);
   assert.match(html, /History preview: release availability is not yet verified/);
-  assert.match(html, /CLI[^<]*<span[^>]*>Coming soon/);
   assert.doesNotMatch(html, /vishot capture --app|agent captures the chat|every key will be remappable/);
   assert.match(html, /Capture History[^]*?<kbd>h<\/kbd><kbd>l<\/kbd>[^]*?<kbd>y<\/kbd>/);
+});
+
+test('explains exact-ID capture and annotation as available CLI features', async () => {
+  const html = await (await fetch(base + '/')).text();
+  const card = html.match(/<li id="agent-cli"[^]*?<\/li>/)?.[0];
+  const workflow = html.match(/<details id="cli-workflow">[^]*?<\/details>/)?.[0];
+  assert.ok(card, 'CLI discovery card');
+  assert.ok(workflow, 'CLI workflow FAQ');
+  assert.match(card, /data-seg="6"/);
+  assert.match(card, /<button type="button" class="feature-head"><span class="hint">07<\/span>/);
+  assert.match(card, /<span class="progress" aria-hidden="true"><\/span>/);
+  assert.match(card, /capture a window and explain what to do next/);
+  assert.match(card, /text, arrows, and rectangle outlines/);
+  assert.match(card, /href="#cli-workflow"/);
+  assert.doesNotMatch(html, /Coming soon|Planned command-line capture|Not available yet/);
+  assert.doesNotMatch(card + workflow, /unreleased|Annotation preview|development build|Coming soon/);
+  assert.match(workflow, /Install Vishot and allow Screen Recording/);
+  assert.match(workflow, /<code[^>]*data-skill-command>npx skills add dartyuhov\/vishot --skill vishot-capture<\/code>/);
+  assert.match(workflow, /<button[^>]*data-copy-skill[^>]*>Copy<\/button>/);
+  assert.match(workflow, /data-skill-copy-status role="status" aria-live="polite"/);
+  assert.match(workflow, /Choose your coding agent when prompted/);
+  assert.match(workflow, /Prompt example:/);
+  assert.match(workflow, /data-example-prompt>Can you show me how I can update my account details using Vishot\?<\/code>/);
+  assert.match(workflow, /<button[^>]*data-copy-prompt[^>]*>Copy<\/button>/);
+  assert.doesNotMatch(workflow, /schemaVersion|--annotations|Contents\/Helpers|capture\.path/);
 });
 
 test('FAQ explains chip-specific installation, per-app approval and real shortcut configuration', async () => {

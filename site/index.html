@@ -68,7 +68,7 @@
       <figure class="screen">
         <div class="monitor">
           <canvas id="scene" width="192" height="120" role="img"
-                  aria-label="Pixel-art demo: open the picker, move between windows with j and h, label elements with f, select a chart, draw an arrow in the editor, and copy with y. History preview, not yet verified in a public release: open Capture History from the menu bar, browse earlier screenshots with l and h, and copy the selected screenshot with y."></canvas>
+                  aria-label="Pixel-art demo: open the picker, move between windows with j and h, label elements with f, select a chart, draw an arrow in the editor, and copy with y. History preview, not yet verified in a public release: open Capture History from the menu bar, browse earlier screenshots with l and h, and copy the selected screenshot with y. CLI for coding agents: discover a window, capture its exact ID, read the PNG, then annotate and open the explanation."></canvas>
         </div>
         <figcaption class="keycast">
           <span class="keycast-keys" aria-hidden="true"></span>
@@ -111,9 +111,11 @@
           <p><kbd>y</kbd> copies it, <kbd>s</kbd> saves a PNG to your screenshot folder, <kbd>S</kbd> does both. Nothing is uploaded: Vishot makes no network requests.</p>
           <span class="progress" aria-hidden="true"></span>
         </li>
-        <li class="feature planned">
-          <div class="feature-head"><span class="hint">—</span>CLI <span class="feature-note">Coming soon</span></div>
-          <p>Planned command-line capture for scripts and coding agents. Not available yet.</p>
+        <li id="agent-cli" class="feature cli" data-seg="6">
+          <button type="button" class="feature-head"><span class="hint">07</span>CLI for coding agents</button>
+          <p>Let your agent capture a window and explain what to do next. Discover windows, capture an exact ID, and inspect the PNG.</p>
+          <p>Mark that same image with text, arrows, and rectangle outlines, then open the explanation for you. <a href="#cli-workflow">CLI workflow and skill →</a></p>
+          <span class="progress" aria-hidden="true"></span>
         </li>
       </ol>
     </section>
@@ -162,6 +164,19 @@
         <details>
           <summary>Where do my screenshots go?</summary>
           <p>To the clipboard, or as a timestamped PNG in your macOS screenshot folder (the Desktop unless you changed it). <kbd>⌘</kbd><kbd>S</kbd> in the editor lets you pick the place.</p>
+        </details>
+        <details id="cli-workflow">
+          <summary>How can a coding agent use Vishot?</summary>
+          <p>Your agent can capture a window, inspect it, and explain it with arrows, boxes and text. Install Vishot and allow Screen Recording, then add the skill from your project’s terminal. Choose your coding agent when prompted.</p>
+          <div class="cli-install">
+            <div class="brew"><code tabindex="0" data-skill-command>npx skills add dartyuhov/vishot --skill vishot-capture</code><button type="button" data-copy-skill hidden>Copy</button></div>
+            <span class="copy-status" data-skill-copy-status role="status" aria-live="polite"></span>
+          </div>
+          <p>Prompt example:</p>
+          <div class="cli-install">
+            <div class="brew"><code tabindex="0" data-example-prompt>Can you show me how I can update my account details using Vishot?</code><button type="button" data-copy-prompt hidden>Copy</button></div>
+            <span class="copy-status" data-prompt-copy-status role="status" aria-live="polite"></span>
+          </div>
         </details>
         <details>
           <summary>Are my screenshots uploaded anywhere?</summary>

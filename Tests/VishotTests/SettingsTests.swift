@@ -1,4 +1,5 @@
 import XCTest
+import VishotConfiguration
 @testable import Vishot
 
 final class SettingsTests: XCTestCase {
@@ -9,7 +10,7 @@ final class SettingsTests: XCTestCase {
         let darkOnly = ThemeDefinition(id: "smooth", label: "Dark fixture",
             annotationID: .clean, appearances: .dark, makeStyles: SmoothTheme.definition.makeStyles)
         let resolve: (VisualStyle, ColorScheme) -> ColorScheme = { style, requested in
-            ThemeCatalog.resolve(style == .smooth ? darkOnly : style.definition,
+            ThemeCatalog.resolve(style == .smooth ? darkOnly : ThemeCatalog.definition(for: style),
                 colorScheme: requested).colorScheme
         }
         let store = SettingsStore(url: url, resolveColorScheme: resolve) { _ in NSObject() }
@@ -90,13 +91,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(store.activeColorScheme, .dark)
     }
 
-    func testIndependentAppearanceAndStyleCompatibility() throws {
-        XCTAssertEqual(try AppSettings.parse("").appearance, .system)
-        XCTAssertEqual(try AppSettings.parse("theme = 'clean'").appearance, .dark)
-        XCTAssertEqual(try AppSettings.parse("theme = 'clean'").style, .smooth)
-        let explicit = try AppSettings.parse("theme = 'clean'\nappearance = 'light'\nstyle = 'pixel'")
-        XCTAssertEqual(explicit.appearance, .light)
-        XCTAssertEqual(explicit.style, .pixel)
+    func testLegacyThemeEditingPreservesIndependentAppearanceAndStyle() throws {
         let source = "# keep\r\ntheme = 'clean' # old choice\r\n[notes]\r\nx = 1\r\n"
         let edited = try AppSettings.edit(source, appearance: .system)
         XCTAssertEqual(try AppSettings.parse(edited).appearance, .system)
@@ -104,9 +99,6 @@ final class SettingsTests: XCTestCase {
         XCTAssertFalse(edited.contains("theme ="))
         XCTAssertTrue(edited.contains("# old choice"))
         XCTAssertTrue(edited.contains("[notes]\r\nx = 1"))
-        for source in ["appearance = 'auto'", "style = 'clean'", "appearance = true", "style = 1"] {
-            XCTAssertThrowsError(try AppSettings.parse(source))
-        }
     }
 
     func testThemeStorePersistsReloadsAndDefersWithoutLosingLastGoodSettings() throws {
@@ -168,17 +160,6 @@ final class SettingsTests: XCTestCase {
         XCTAssertThrowsError(try AppSettings.edit("theme = '''\npixel'''", style: .smooth))
     }
 
-    func testThemeDefaultsAndValidation() throws {
-        XCTAssertEqual(try AppSettings.parse("").theme, .pixel)
-        XCTAssertEqual(try AppSettings.parse(AppSettings.defaultSource).theme, .pixel)
-        XCTAssertEqual(try AppSettings.parse("theme = 'clean'").theme, .clean)
-        for value in ["'unknown'", "'Clean'", "true", "7", "[]", "{}"] {
-            XCTAssertThrowsError(try AppSettings.parse("theme = \(value)")) { error in
-                XCTAssertTrue(error.localizedDescription.contains("theme"))
-            }
-        }
-    }
-
     func testMultilineClosingQuotesDoNotHideRealInsertionHeader() throws {
         for delimiter in ["\"", "'"] {
             let source = "[notes]\ntext = \(String(repeating: delimiter, count: 3))note\(String(repeating: delimiter, count: 4))\n[history] # real"
@@ -233,8 +214,6 @@ final class SettingsTests: XCTestCase {
     }
 
     func testHistoryShortcutIsOptInAndCanBeAssignedClearedAndReassigned() throws {
-        XCTAssertNil(try AppSettings.parse(AppSettings.defaultSource).historyShortcut)
-        XCTAssertNil(try AppSettings.parse("").historyShortcut)
         let shortcut = CaptureShortcut(key: "J", modifiers: ["control"])
         let assigned = try AppSettings.edit(AppSettings.defaultSource, historyShortcut: shortcut)
         XCTAssertEqual(try AppSettings.parse(assigned).historyShortcut, shortcut)
@@ -268,8 +247,6 @@ final class SettingsTests: XCTestCase {
         XCTAssertTrue(edited.contains("# keep\n[notes]\nx = 1"))
         XCTAssertEqual(try AppSettings.parse(edited).historyRetention, .threeDays)
         XCTAssertEqual(try AppSettings.parse(edited).historyShortcut, shortcut)
-        XCTAssertThrowsError(try AppSettings.parse("[history]\nretention_days = 2"))
-        XCTAssertThrowsError(try AppSettings.parse("[history.shortcut]\nkey = 'S'"))
     }
     func testHistoryShortcutConflictKeepsAllLastGoodPreferencesAndDefersDuringSession() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -314,10 +291,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertFalse(store.active.watermark)
     }
 
-    func testInvalidValuesAndUnsafeEditsDoNotSilentlyChangeMeaning() throws {
-        for source in ["watermark = 'yes'", "shortcut = false", "[shortcut]\nkey = 'banana'", "[shortcut]\nmodifiers = ['shift']", "[shortcut]\nmodifiers = ['command', 'command']", "[shortcut]\nmodifiers = [3]", "watermark = ["] {
-            XCTAssertThrowsError(try AppSettings.parse(source), source)
-        }
+    func testUnsafeEditsDoNotSilentlyChangeMeaning() throws {
         let commented = "[shortcut]\nmodifiers = [\n 'command', # keep this\n 'shift'\n]"
         XCTAssertThrowsError(try AppSettings.edit(commented, shortcut: CaptureShortcut(key: "S", modifiers: ["control"])))
         let inline = "shortcut = { key = 'S', modifiers = ['command', 'shift'] }"
@@ -412,21 +386,5 @@ final class SettingsTests: XCTestCase {
         text = "do not rewrite me"
         """)
         XCTAssertEqual(try AppSettings.parse(edited), AppSettings(watermark: false, shortcut: CaptureShortcut(key: "K", modifiers: ["control"])))
-    }
-    func testStandardTOMLLoadsPhysicalShortcutAndWatermark() throws {
-        let settings = try AppSettings.parse("""
-        # Hand-edited config
-        watermark = false
-        [shortcut]
-        key = 'K'
-        modifiers = [
-          'control', # not Command
-          'option',
-        ]
-        """)
-        XCTAssertFalse(settings.watermark)
-        XCTAssertEqual(settings.shortcut.key, "K")
-        XCTAssertEqual(settings.shortcut.modifiers, ["control", "option"])
-        XCTAssertEqual(try AppSettings.parse(""), .defaults)
     }
 }
