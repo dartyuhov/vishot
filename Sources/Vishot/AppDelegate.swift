@@ -48,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var historyItem: NSMenuItem?
     private var settingsItem: NSMenuItem?
     private var overlay: OverlayController?
+    private let sessions = CaptureSessionCoordinator()
     private var launchAtLoginItem: NSMenuItem?
     private lazy var setup = SetupFlow.live()
     private var setupWindow: SetupWindow?
@@ -55,8 +56,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Before the overlay builds its panels, which ask for the fonts.
         Fonts.register()
-        let overlay = OverlayController()
+        let overlay = OverlayController(sessions: sessions)
         self.overlay = overlay
+        sessions.onCapture = { [weak overlay] in overlay?.show(session: $0) ?? false }
+        sessions.onHistory = { [weak overlay] in overlay?.showHistory(session: $0) ?? false }
+        sessions.onCaptureAgain = { [weak overlay] in overlay?.toggle(session: $0) }
+        sessions.onQuitReady = { NSApp.reply(toApplicationShouldTerminate: true) }
         let settings = SettingsStore(registerHistory: { [weak self] shortcut in
             guard let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.carbonModifiers, action: { [weak self] in
                 if self?.settingsWindow?.recordGlobalShortcut(shortcut) == true { return }
@@ -71,7 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return hotKey
         }
         self.settings = settings
-        overlay.onSessionChange = { [weak settings] in settings?.setSessionActive($0) }
+        sessions.onSessionChange = { [weak settings] in settings?.setSessionActive($0) }
         settings.onChange = { [weak self] in self?.settingsChanged() }
         overlay.historyLibrary.onChange = { [weak self, weak overlay] in
             overlay?.refreshHistory()
@@ -155,8 +160,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func historyFromMenu() { DispatchQueue.main.async { self.showHistory() } }
 
     private func capture() {
-        if overlay?.isSessionActive != true,
-           setupWindow?.window?.isVisible == true, setup.isShowingGuide {
+        if sessions.isSessionActive { sessions.capture(); return }
+        if setupWindow?.window?.isVisible == true, setup.isShowingGuide {
             setupWindow?.takeFirstScreenshot()
             return
         }
@@ -165,19 +170,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             else { presentSetup() }
             return
         }
-        overlay?.toggle()
+        sessions.capture()
     }
 
     private func showHistory() {
+        guard !sessions.isSessionActive else { return }
         guard !setup.needsSetup else { presentSetup(); return }
-        overlay?.showHistory()
+        sessions.showHistory()
     }
 
     private func presentSetup() {
         if setupWindow == nil {
             setupWindow = SetupWindow(flow: setup, shortcut: { [weak self] in
                 self?.settings?.active.shortcut.display ?? CaptureShortcut.defaults.display
-            }, capture: { [weak self] in self?.overlay?.toggle() })
+            }, capture: { [weak self] in self?.sessions.capture() })
         }
         setupWindow?.present()
     }
@@ -212,5 +218,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("Vishot: launch at login failed: \(error)")
         }
         launchAtLoginItem?.state = SMAppService.mainApp.status == .enabled ? .on : .off
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        sessions.requestQuit() ? .terminateNow : .terminateLater
     }
 }

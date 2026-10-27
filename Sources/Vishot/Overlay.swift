@@ -61,8 +61,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var historyEditingID: UUID?
     private var captureLabel = ""
     private var captureWindowTitle = ""
-    var isSessionActive: Bool { isShowing || browser != nil }
-    var onSessionChange: ((Bool) -> Void)?
+    private let sessions: CaptureSessionCoordinator
     var watermark: Bool {
         get { capturer.watermark }
         set { capturer.watermark = newValue }
@@ -110,14 +109,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// Set while a capture for the editor runs, then the editor until it finishes.
     private var isCapturing = false
     private var editor: EditorController?
-    /// Increases on every hide, so a capture that finishes after the overlay closed is dropped.
-    private var session = 0
+    /// App-owned identity fences presentation callbacks, including delayed teardown.
+    private var session: Int { sessions.callbackSession }
     /// The save panel hides the overlay, which must not cancel the edit.
     private var isPresentingSavePanel = false
     /// The app that was active before the save panel activated Vishot.
     private var appToReactivate: NSRunningApplication?
 
-    override init() {
+    init(sessions: CaptureSessionCoordinator) {
+        self.sessions = sessions
         super.init()
         accessibility.onChange = { [weak self] allowed in
             guard let self else { return }
@@ -138,29 +138,35 @@ final class OverlayController: NSObject, NSWindowDelegate {
         )
     }
 
-    func toggle() {
+    func toggle(session: Int) {
+        guard sessions.acceptsCallbacks(session) else { return }
         guard !isPresentingSavePanel else { return }
         guard !(isCapturing && editor != nil) else { return }
         if browser != nil {
             guard editor == nil, !isCapturing else { return }
             closeHistory()
-            show()
+            sessions.replaceWithCapture(session)
             return
         }
-        isShowing ? hide() : show()
+        if isShowing { hide() }
     }
 
-    func showHistory() {
-        guard !isShowing, browser == nil,
-              let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main else { return }
+    func showHistory(session: Int) -> Bool {
+        guard sessions.acceptsCallbacks(session), !isShowing, browser == nil,
+              let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main else { return false }
         appToReactivate = NSWorkspace.shared.frontmostApplication
         let browser = reusableBrowser!
         self.browser = browser
-        browser.onClose = { [weak self] in self?.closeHistory() }
-        browser.onEdit = { [weak self] in self?.editHistory($0, on: $1) }
+        browser.onClose = { [weak self] in
+            guard let self, sessions.acceptsCallbacks(session) else { return }
+            closeHistory()
+        }
+        browser.onEdit = { [weak self] id, screen in
+            guard let self, sessions.acceptsCallbacks(session) else { return }
+            editHistory(id, on: screen)
+        }
         browser.onYank = { [weak self, weak browser] entry in
-            guard let self, !isCapturing else { return }
-            let session = session
+            guard let self, sessions.acceptsCallbacks(session), !isCapturing else { return }
             browser?.yank(entry) { [weak self] image in
                 guard let self, self.session == session, self.browser === browser else { return }
                 guard let image else { return }
@@ -168,8 +174,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 self.closeHistory()
             }
         }
-        onSessionChange?(true)
         browser.show(on: screen)
+        return true
     }
 
     func refreshHistory() { browser?.libraryChanged() }
@@ -202,8 +208,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             self.isShowing = true
             let capture = Capture(image: loaded.document.image, scale: loaded.document.scale, frame: frame, initialCrop: loaded.document.crop)
             let editor = EditorController(capture: capture, restored: loaded, viewScale: scale)
-            editor.onFinish = { [weak self] in self?.finishEditing($0, export: $1) }
-            editor.onChange = { [weak self] in self?.render() }
+            self.connect(editor, session: session)
             self.editor = editor
             self.panels.forEach { $0.hidePicker(); $0.orderFrontRegardless() }
             self.render()
@@ -221,11 +226,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
         historyLibrary.release(id)
     }
 
-    private func show() {
+    func show(session: Int) -> Bool {
+        guard sessions.acceptsCallbacks(session) else { return false }
         windows = WindowCatalog.visibleWindows()
         guard !windows.isEmpty, let keyPanel = panels.first else {
             NSSound.beep()
-            return
+            return false
         }
         capturer.prefetch()
         raiser.begin(windows)
@@ -236,20 +242,22 @@ final class OverlayController: NSObject, NSWindowDelegate {
         accessibilityAvailable = accessibility.isAllowed
         enterWindowMode()
         isShowing = true
-        onSessionChange?(true)
         render()
         panels.forEach { $0.orderFrontRegardless() }
         keyPanel.makeKey()
+        return true
     }
 
     private func hide() {
+        let session = session
+        guard sessions.acceptsCallbacks(session) else { return }
+        sessions.dismissPresentation(session)
         if browser != nil {
             browser?.close()
             browser = nil
             historyLibrary.finishSession()
         }
         isShowing = false
-        session += 1
         sourcePreparation.cancel()
         isCapturing = false
         editor = nil
@@ -268,10 +276,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         appToReactivate?.activate()
         appToReactivate = nil
         // Activate settings between sessions after presentation has finished unwinding.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, !isSessionActive else { return }
-            onSessionChange?(false)
-        }
+        DispatchQueue.main.async { [sessions] in sessions.finish(session) }
     }
 
     /// What ↵ copies and ⇧↵/e edits. Region mode has nothing until a region is drawn.
@@ -317,6 +322,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         Task { @MainActor [weak self] in
             guard let self, session == self.session else { return }
             await sourcePreparation.prepare(for: target) { capture in
+                guard self.sessions.acceptsCallbacks(session) else { return }
                 self.isCapturing = false
                 receive(capture)
             }
@@ -325,11 +331,21 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     private func startEditing(_ capture: Capture) {
         let editor = EditorController(capture: capture)
-        editor.onFinish = { [weak self] in self?.finishEditing($0, export: $1) }
-        editor.onChange = { [weak self] in self?.render() }
+        connect(editor, session: session)
         self.editor = editor
         status = ""
         render()
+    }
+
+    private func connect(_ editor: EditorController, session: Int) {
+        editor.onFinish = { [weak self] finish, export in
+            guard let self, sessions.acceptsCallbacks(session) else { return }
+            finishEditing(finish, export: export)
+        }
+        editor.onChange = { [weak self] in
+            guard let self, sessions.acceptsCallbacks(session) else { return }
+            render()
+        }
     }
 
     private func finishEditing(_ finish: EditorController.Finish, export: (image: CGImage, scale: CGFloat)?) {
@@ -780,7 +796,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// Clicking elsewhere or switching Spaces cancels the selection. A click on another screen's
     /// panel moves key focus between our own panels, which is not a cancel.
     func windowDidResignKey(_ notification: Notification) {
+        let session = session
         DispatchQueue.main.async { [self] in
+            guard sessions.acceptsCallbacks(session) else { return }
             if isCapturing, editor != nil { return }
             if browser != nil, editor == nil { return }
             if isShowing, !isPresentingSavePanel, !raiser.isSwitchingApps, !panels.contains(where: \.isKeyWindow) { hide() }
