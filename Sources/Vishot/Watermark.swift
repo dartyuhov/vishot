@@ -1,4 +1,5 @@
 import AppKit
+import VishotRendering
 import CoreText
 
 /// The themed "vishot.dev" credit in the bottom-right corner of copied or saved images.

@@ -1,7 +1,9 @@
 import AppKit
+import VishotRendering
 import Carbon.HIToolbox
 import ServiceManagement
 import VishotAgent
+import VishotConfiguration
 
 enum Config {
     /// Where macOS saves screenshots (set in the Screenshot app's options), or the Desktop.
@@ -64,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if backgroundLaunch { NSApp.terminate(nil); return }
         }
         // Before the overlay builds its panels, which ask for the fonts.
-        Fonts.register()
+        if let resources = Bundle.main.resourceURL { Fonts.register(resourceDirectory: resources) }
         let overlay = OverlayController()
         self.overlay = overlay
         let settings = SettingsStore(registerHistory: { [weak self] shortcut in

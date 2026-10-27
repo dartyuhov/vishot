@@ -237,8 +237,9 @@ Appearance changes interface colors, not captured pixels, annotation colors,
 or the watermark's output palette. Style covers the picker, hints, HUDs,
 history, editor, markup, and watermark. Logos retain their brand appearance.
 
-Contributors can [add a built-in theme](docs/adding-themes.md) with one complete
-Swift definition and one registry entry. Themes can support light, dark, or both;
+Contributors can [add a built-in theme](docs/adding-themes.md) with a complete
+Swift definition, shared preference identity, and GUI registry entry.
+Themes can support light, dark, or both;
 a single-appearance theme uses its supported variant without changing your saved
 Appearance preference.
 

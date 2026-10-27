@@ -1,4 +1,5 @@
 import AppKit
+import VishotConfiguration
 
 final class SettingsWindow: NSWindowController, NSWindowDelegate {
     private let store: SettingsStore
@@ -262,7 +263,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     func refresh() {
         cliControls.refresh()
         let settings = store.configured ?? store.active
-        if !hasAppliedStyle || resolvedTheme.style != store.active.style || resolvedTheme.colorScheme != store.activeColorScheme {
+        if !hasAppliedStyle || resolvedTheme.definition.id != store.active.style.rawValue || resolvedTheme.colorScheme != store.activeColorScheme {
             resolvedTheme = ThemeCatalog.resolve(style: store.active.style, colorScheme: store.activeColorScheme)
             if let content = window?.contentView { resolvedTheme.settings.apply(to: content) }
             hasAppliedStyle = true

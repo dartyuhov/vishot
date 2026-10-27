@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import VishotRendering
 @testable import Vishot
 
 final class ScreenshotCompletionTests: XCTestCase {

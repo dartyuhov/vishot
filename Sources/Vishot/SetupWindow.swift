@@ -1,4 +1,5 @@
 import AppKit
+import VishotRendering
 
 final class SetupWindow: NSWindowController, NSWindowDelegate {
     private let flow: SetupFlow

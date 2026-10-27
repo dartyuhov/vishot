@@ -2,16 +2,16 @@ import AppKit
 import CoreText
 
 /// Shared styled drawing and measurement for preview and export.
-enum AnnotationRenderer {
+public enum AnnotationRenderer {
     /// Converts the CLI's top-left text-box anchor into the editor's left/vertical-centre point.
     /// Use a style with snapsTextToGrid=false when exact external coordinates are required.
-    static func textAnchor(topLeft: CGPoint, text: String, style: AnnotationStyle) -> CGPoint {
+    public static func textAnchor(topLeft: CGPoint, text: String, style: AnnotationStyle) -> CGPoint {
         let origin = textBounds(text, at: .zero, style: style).origin
         return CGPoint(x: topLeft.x - origin.x, y: topLeft.y - origin.y)
     }
     /// Draws in image space: the context's user space must have its origin at the image's top-left,
     /// y down, in points.
-    static func draw(_ annotations: [Annotation], in context: CGContext, style: AnnotationStyle) {
+    public static func draw(_ annotations: [Annotation], in context: CGContext, style: AnnotationStyle) {
         // A hard shadow one cell down and right, like the landing page's. Shadows are set in device
         // space, so the offset is converted, and points down-right on screen.
         let shadowOffset = CGSize(width: PixelArt.cell, height: PixelArt.cell).applying(context.ctm)
@@ -135,7 +135,7 @@ enum AnnotationRenderer {
     }
 
     /// The line box of a text annotation, in image space.
-    static func textBounds(_ text: String, at point: CGPoint, style: AnnotationStyle) -> CGRect {
+    public static func textBounds(_ text: String, at point: CGPoint, style: AnnotationStyle) -> CGRect {
         let lines = text.components(separatedBy: "\n")
         let metrics = layout("Hg", style: style).metrics
         let width = lines.map { layout($0, style: style).metrics.width }.max() ?? 0
@@ -160,7 +160,7 @@ enum AnnotationRenderer {
     }
 
     /// The caret after `text` while it is typed, in image space.
-    static func caret(after text: String, at point: CGPoint, style: AnnotationStyle) -> CGRect {
+    public static func caret(after text: String, at point: CGPoint, style: AnnotationStyle) -> CGRect {
         let lines = text.components(separatedBy: "\n")
         let width = layout(lines.last ?? "", style: style).metrics.width
         // Measured on sample letters, so the caret has a height before anything is typed.
@@ -186,7 +186,7 @@ enum AnnotationRenderer {
     // MARK: - Export
 
     /// The image with its annotations drawn in, cropped. Nil if drawing fails.
-    static func export(_ document: EditDocument) -> CGImage? {
+    public static func export(_ document: EditDocument) -> CGImage? {
         let image = document.image
         let pixelSize = CGSize(width: image.width, height: image.height)
         var cropRect: CGRect?
@@ -212,7 +212,7 @@ enum AnnotationRenderer {
     /// integer 16-bit components for 16-bit input, so PNG export retains unmarked RGB precision.
     /// `image` is drawn in and user space set to
     /// image space (points from the top-left, y down), ready to draw over it.
-    static func imageSpaceContext(drawing image: CGImage, scale: CGFloat) -> CGContext? {
+    public static func imageSpaceContext(drawing image: CGImage, scale: CGFloat) -> CGContext? {
         let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
         let space = image.colorSpace.flatMap { $0.model == .rgb && $0.supportsOutput ? $0 : nil } ?? sRGB
         let bits = image.bitsPerComponent == 16 ? 16 : 8
@@ -232,7 +232,7 @@ enum AnnotationRenderer {
 
     /// The pixels of `crop` (in points), with each edge rounded to the nearest pixel and clamped to
     /// the image. Nil when nothing is left.
-    static func pixelRect(for crop: CGRect, scale: CGFloat, imageSize: CGSize) -> CGRect? {
+    public static func pixelRect(for crop: CGRect, scale: CGFloat, imageSize: CGSize) -> CGRect? {
         let minX = (crop.minX * scale).rounded()
         let minY = (crop.minY * scale).rounded()
         let rect = CGRect(

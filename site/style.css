@@ -490,8 +490,8 @@ kbd {
 }
 /* Stretch the button over the whole card so all of it is clickable. */
 .feature-head::before { content: ""; position: absolute; inset: 0; }
-.planned .feature-head { cursor: default; }
-.planned .feature-head::before { content: none; }
+.cli .feature-head { cursor: default; }
+.cli .feature-head::before { content: none; }
 .feature-note { color: var(--muted); font: .7rem/1.3 var(--mono); margin-left: auto; }
 
 .hint {
@@ -505,7 +505,7 @@ kbd {
 /* Only the active feature shows its text, so the whole list fits beside the monitor.
    Without JS nothing is active and every text stays visible. */
 .features:has(.active) .feature:not(.active) p { display: none; }
-.features:has(.active) .feature.planned:not(.active) p { display: block; }
+.features:has(.active) .feature.cli:not(.active) p { display: block; }
 
 .feature p {
   margin: .45rem 0 0 calc(2.1rem + .75rem);
@@ -520,6 +520,10 @@ kbd {
   color: var(--text);
   font: 400 .95em/1.5 var(--mono);
 }
+
+/* Bundled paths and JSON examples wrap within the existing cards on narrow screens. */
+.cli, #cli-workflow { min-width: 0; }
+#cli-workflow code { overflow-wrap: anywhere; font-family: var(--mono); }
 
 .progress {
   position: absolute;

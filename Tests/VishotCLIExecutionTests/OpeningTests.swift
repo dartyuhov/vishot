@@ -1,7 +1,8 @@
 import XCTest
+import VishotRendering
 import ImageIO
 import VishotAgent
-@testable import Vishot
+@testable import VishotCLIExecution
 
 final class OpeningTests: XCTestCase {
     func testValidationRenderingEncodingAndWriteFailuresNeverOpen() throws {
@@ -105,12 +106,12 @@ final class OpeningTests: XCTestCase {
 
     func testOpenIsAnExplicitAnnotationOnlySwitch() throws {
         let arguments = ["--input", "input.png", "--annotations", "{}"]
-        XCTAssertFalse(try AgentAnnotationArguments(arguments).open)
+        XCTAssertFalse(try AnnotationArguments(arguments).open)
         for values in [["--open"] + arguments, arguments + ["--open"]] {
-            XCTAssertTrue(try AgentAnnotationArguments(values).open)
+            XCTAssertTrue(try AnnotationArguments(values).open)
         }
-        XCTAssertThrowsError(try AgentAnnotationArguments(arguments + ["--open", "--open"]))
-        XCTAssertThrowsError(try AgentAnnotationArguments(arguments + ["--open", "true"]))
+        XCTAssertThrowsError(try AnnotationArguments(arguments + ["--open", "--open"]))
+        XCTAssertThrowsError(try AnnotationArguments(arguments + ["--open", "true"]))
     }
 
     private final class Fixture {

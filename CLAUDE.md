@@ -1,14 +1,14 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents working in this repository.
 
-Vishot is a macOS 14+ menu-bar app (`LSUIElement`, accessory activation policy) for keyboard-first screenshots: a global hotkey (⇧⌘S) opens an overlay, `hjkl`/arrows/Tab pick a window, Return copies it to the clipboard. `f` labels the window's UI elements over Accessibility, and typing a label selects one (Element mode) and `G` to Screen mode (whole displays). `v` enters Region mode, which selects any rectangle on one display with the editor's cursor keys or a mouse drag. ⇧Return or `e` opens an in-place editor (arrows, rectangles, text, crop) before copying or saving. It is a SwiftPM executable with no dependencies and no linter.
+Vishot is a macOS 14+ menu-bar app (`LSUIElement`, accessory activation policy) for keyboard-first screenshots: a global hotkey (⇧⌘S) opens an overlay, `hjkl`/arrows/Tab pick a window, Return copies it to the clipboard. `f` labels the window's UI elements over Accessibility, and typing a label selects one (Element mode) and `G` to Screen mode (whole displays). `v` enters Region mode, which selects any rectangle on one display with the editor's cursor keys or a mouse drag. ⇧Return or `e` opens an in-place editor (arrows, rectangles, text, crop) before copying or saving. It is a SwiftPM package with an app, a bundled CLI, shared modules, a locked TOMLKit dependency, and no linter.
 
 ## Commands
 
 ```sh
 swift build                    # quick compile check (debug)
-swift test                     # XCTest unit tests (VishotTests)
+swift test                     # all five XCTest targets
 ./scripts/build.sh             # release build → build/Vishot.app, codesigned
 ./scripts/build.sh install     # also copy to ~/Applications/Vishot.app, kill the old instance, relaunch
 ```
@@ -17,7 +17,7 @@ swift test                     # XCTest unit tests (VishotTests)
 - Signing uses the `Apple Development` identity by default (`VISHOT_SIGN_IDENTITY` overrides). A stable signature is what keeps the Screen Recording (TCC) permission across rebuilds, so don't switch to ad-hoc signing.
 - Running the raw binary from `swift build` works for quick checks, but screen capture permission is tied to the signed bundle. Test captures with the installed app.
 - Swift tools 6.0, but the targets are built in Swift 5 language mode (`.swiftLanguageMode(.v5)`), so strict concurrency checking is off.
-- Tests cover pure logic only (`Navigator`, `ElementFilter`, `Hints`, `Capturer.cropRect`, the editor model in `Annotation.swift`, `EditCursor`/`CursorGlide` in `Cursor.swift`, `RegionSelection`, `PixelArt`, `AnnotationRenderer.export`, `Watermark`, `Config.fileName`). AX, ScreenCaptureKit, overlay and editor behavior are checked by hand on the installed app.
+- Tests cover pure logic, shared modules, compiled CLI boundaries, and app integration. AX, ScreenCaptureKit, overlay, and editor runtime behavior also need manual checks on the signed app.
 - Hints need the Accessibility permission, which, like Screen Recording, is tied to the stable signature.
 
 ## Landing site
@@ -32,6 +32,19 @@ cd site && npm start           # http://localhost:3000; no storage required
 - Deploys are Railway's GitHub autodeploy (project `vishot`, service `site`): a push to `main` that touches `site/**` deploys once the `Site` workflow passes ("Wait for CI"). The service uses root directory `site`, start `node server.js`, health check `/healthz`, and watch path `/site/**`. Node's version is in `site/.node-version`, which CI reads too.
 - Installation controls require `VISHOT_INSTALL_READY=true` and verified complete public release/tap metadata. For metadata contracts and storage archival/hosting cleanup, read `docs/site-operations.md`. Archived subscriber files remain untouched; the runtime needs no volume or export credentials.
 - The `App` workflow runs `swift test` on macOS for changes under `Sources/`, `Tests/` or `Package.swift`.
+
+## Shared modules and CLI
+
+For CLI command changes, shared rendering/configuration changes, or test moves,
+read `CONTRIBUTING.md` ("Shared modules and test ownership") and
+`docs/agent-cli.md`. `VishotCLIExecution` owns in-process annotation and command
+semantics; `VishotRendering` owns screenshot drawing, fonts, and encoding;
+`VishotConfiguration` owns full immutable TOML interpretation. The app owns
+GUI styling, live Settings, and signed capture. Font registration takes an
+explicit resource directory and precedes treatment resolution. Bundled CLI
+annotation rejects missing fonts; raw app development builds retain fallback.
+The package has TOMLKit as a locked dependency; tests span five SwiftPM targets,
+including compiled CLI and app integration checks, not only pure logic.
 
 ## Architecture
 

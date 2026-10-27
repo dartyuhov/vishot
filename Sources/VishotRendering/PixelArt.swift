@@ -2,33 +2,38 @@ import CoreGraphics
 
 /// Annotations as pixel art, to match the landing page: shapes made of square cells on a grid anchored
 /// at the image's top-left. Coordinates are in image space (points, y down).
-enum PixelArt {
+public enum PixelArt {
     /// One cell, in points. Silkscreen at 24 pt has pixels this size, so text lands on the same grid.
-    static let cell: CGFloat = 3
+    public static let cell: CGFloat = 3
 
-    struct Cell: Hashable {
-        let x: Int
-        let y: Int
+    public struct Cell: Hashable {
+        public let x: Int
+        public let y: Int
+
+        public init(x: Int, y: Int) {
+            self.x = x
+            self.y = y
+        }
     }
 
     /// The cell holding `point`.
-    static func cell(at point: CGPoint) -> Cell {
+    public static func cell(at point: CGPoint) -> Cell {
         Cell(x: Int((point.x / cell).rounded(.down)), y: Int((point.y / cell).rounded(.down)))
     }
 
     /// The square `cell` covers, in points.
-    static func rect(of cell: Cell) -> CGRect {
+    public static func rect(of cell: Cell) -> CGRect {
         CGRect(x: CGFloat(cell.x) * self.cell, y: CGFloat(cell.y) * self.cell, width: self.cell, height: self.cell)
     }
 
     /// `point` moved to the nearest grid line, so whatever starts there shares the cells' edges.
-    static func snapped(_ point: CGPoint) -> CGPoint {
+    public static func snapped(_ point: CGPoint) -> CGPoint {
         CGPoint(x: (point.x / cell).rounded() * cell, y: (point.y / cell).rounded() * cell)
     }
 
     /// A line one cell thick from the cell of `from` to the cell of `to`, both included (Bresenham).
     /// Each cell shares an edge with the one before, as a diagonal step through a corner looks thin.
-    static func line(from: CGPoint, to: CGPoint) -> [Cell] {
+    public static func line(from: CGPoint, to: CGPoint) -> [Cell] {
         let start = cell(at: from)
         let end = cell(at: to)
         let dx = abs(end.x - start.x)
@@ -51,7 +56,7 @@ enum PixelArt {
 
     /// The cells whose centers lie inside the triangle, plus the cell of its first corner, so even a
     /// sliver of a triangle keeps its tip.
-    static func triangle(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> [Cell] {
+    public static func triangle(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> [Cell] {
         let low = cell(at: CGPoint(x: min(a.x, b.x, c.x), y: min(a.y, b.y, c.y)))
         let high = cell(at: CGPoint(x: max(a.x, b.x, c.x), y: max(a.y, b.y, c.y)))
         func side(_ p: CGPoint, _ q: CGPoint, _ r: CGPoint) -> CGFloat {
@@ -73,7 +78,7 @@ enum PixelArt {
     /// A one-cell ring around the cells `rect` touches, with the outer corner cells left out and the
     /// inner ones filled, like the selection border. Small rings omit the inner corner accents
     /// to keep their interior open; fewer than three cells across cannot have an interior.
-    static func outline(_ rect: CGRect) -> [Cell] {
+    public static func outline(_ rect: CGRect) -> [Cell] {
         let low = cell(at: CGPoint(x: rect.minX, y: rect.minY))
         let high = cell(at: CGPoint(x: max(rect.minX, rect.maxX - cell / 2), y: max(rect.minY, rect.maxY - cell / 2)))
         guard high.x - low.x >= 2, high.y - low.y >= 2 else {

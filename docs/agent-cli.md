@@ -15,6 +15,9 @@ The CLI runs on macOS 14 or newer without a development runtime. It ships in
 the app's native architecture and reads the app's release version. A symlink
 to the bundled executable also works. The app location comes from the
 resolved executable path, so multiple installations have separate endpoints.
+Fonts and release metadata come from that same installation, including when
+its path contains spaces or your working directory is elsewhere. The working
+directory selects output storage, not app resources.
 
 For agents, the repository includes a [capture skill](../skills/vishot-capture/SKILL.md)
 covering exact-ID selection, immediate image reading, and annotation of the same
@@ -180,6 +183,13 @@ Each request takes a read-only settings snapshot from
 An absent file uses the normal default style; an unreadable or invalid settings
 file fails with `invalid_arguments`. The command does not watch or change
 settings, start the interactive app, or reuse its in-memory session state.
+The shared parser validates the whole configuration: a valid `style` does not
+hide an invalid shortcut, history preference, or legacy theme value. Legacy
+`theme = "clean"` selects Smooth; an explicit modern `style` takes precedence.
+
+The helper registers the containing app's bundled fonts before resolving the
+treatment. Missing or unregistrable bundled fonts fail with `rendering_failed`
+(exit 9) before publication, rather than silently drawing fallback Pixel text.
 
 The renderer retains the selected theme's point-based font, stroke, and
 arrowhead sizing. PNG DPI supplies the points-to-pixels scale:
@@ -340,10 +350,17 @@ ScreenCaptureKit window filter and raw PNG encoding, independently of editor
 completion, watermark, clipboard, and history logic. Timed-out clients cannot
 receive a late response on another caller's connection or publish a late file.
 
-Annotation uses a separate local boundary: the helper `exec`s its containing
-app's `Contents/MacOS/Vishot` binary in headless annotation mode, replacing the
-caller process while retaining its working directory. That same process reads
-the input and settings, renders with the bundled fonts and shared renderer,
-and publishes the workspace file. It does not launch the app through Launch
-Services, connect to the capture service, or request capture authorization.
-Capture startup/request timeout flags do not apply to `annotate`.
+`VishotCLI` is a small process adapter for arguments, executable discovery,
+stdout, and the main run loop. `VishotCLIExecution` owns command parsing,
+dispatch, annotation orchestration, structured results, and exit statuses.
+Annotation runs entirely inside the helper process using `VishotRendering`
+for geometry, treatment resolution, fonts, drawing, and image encoding, and
+`VishotConfiguration` for immutable full-configuration interpretation. Neither
+shared module imports an executable target or live Settings lifecycle.
+
+Local annotation reads the input and settings, renders, publishes the workspace
+file, and optionally requests opening. It does not execute the GUI binary,
+launch the app through Launch Services, connect to the capture service, or
+request capture authorization. Capture startup/request timeout flags do not
+apply to `annotate`. The signed app remains the owner of live capture and
+authorization; the app and CLI consume the same rendering implementation.

@@ -1,7 +1,7 @@
 import XCTest
 import ImageIO
 import UniformTypeIdentifiers
-@testable import Vishot
+import VishotCLIExecution
 
 final class PNGPrecisionCLITests: XCTestCase {
     func testSixteenBitRGBPNGPreservesUnmarkedLowBitsThroughCompiledCLI() throws {

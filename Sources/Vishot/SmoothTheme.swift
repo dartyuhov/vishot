@@ -1,8 +1,9 @@
 import AppKit
+import VishotConfiguration
 
 enum SmoothTheme {
     static let definition = ThemeDefinition(id: "smooth", label: "Smooth",
-        annotationID: .clean, appearances: .both, makeStyles: makeStyles)
+        annotationID: VisualStyle.smooth.annotationID, appearances: .both, makeStyles: makeStyles)
 
     private static func makeStyles(_ colorScheme: ColorScheme) -> ThemeStyles {
         let light = colorScheme == .light

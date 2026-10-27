@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import XCTest
+import VishotRendering
 @testable import Vishot
 
 final class AnnotationStyleHistoryTests: XCTestCase {

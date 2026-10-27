@@ -174,11 +174,13 @@ errors need not supply `problems`. Correct all reported fields and retry the
 whole batch against the same original input. `rendering_failed` exits 9;
 `encoding_failed` exits 9 and `output_write_failed` exits 10.
 
-Annotation replaces the helper process with the containing app binary's
-headless renderer, which writes the output in that same process. It does not
-use the live capture service, start the interactive app, or request capture
-authorization. Both capture and annotation omit watermark, clipboard changes,
-and Capture history. Keep originals and results until scoped cleanup.
+Annotation runs in the bundled helper process with shared rendering and
+read-only configuration. It resolves fonts from the actual containing app,
+including through symlinks and paths with spaces, independently of the caller's
+workspace. Missing bundled fonts fail with `rendering_failed` before saving.
+It does not execute the GUI binary, use the live capture service, or request
+capture authorization. Both capture and annotation omit watermark, clipboard
+changes, and Capture history. Keep originals and results until scoped cleanup.
 
 ## Supported states and desktop preservation
 

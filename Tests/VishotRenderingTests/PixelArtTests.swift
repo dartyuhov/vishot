@@ -1,5 +1,5 @@
 import XCTest
-@testable import Vishot
+import VishotRendering
 
 final class PixelArtTests: XCTestCase {
     private typealias Cell = PixelArt.Cell

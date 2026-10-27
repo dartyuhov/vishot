@@ -111,9 +111,10 @@
           <p><kbd>y</kbd> copies it, <kbd>s</kbd> saves a PNG to your screenshot folder, <kbd>S</kbd> does both. Nothing is uploaded: Vishot makes no network requests.</p>
           <span class="progress" aria-hidden="true"></span>
         </li>
-        <li class="feature planned">
-          <div class="feature-head"><span class="hint">—</span>CLI <span class="feature-note">Coming soon</span></div>
-          <p>Planned command-line capture for scripts and coding agents. Not available yet.</p>
+        <li id="agent-cli" class="feature cli">
+          <div class="feature-head"><span class="hint">—</span>CLI for coding agents</div>
+          <p>Discover windows, capture an exact ID, then read the PNG with your agent’s image reader. Native CLI capture ships in <a href="https://github.com/dartyuhov/vishot/releases/tag/v0.2.0">v0.2.0</a>.</p>
+          <p>Annotation preview (unreleased): explain that same PNG with text, arrows, and rectangle outlines. <a href="#cli-workflow">CLI workflow and skill →</a></p>
         </li>
       </ol>
     </section>
@@ -162,6 +163,17 @@
         <details>
           <summary>Where do my screenshots go?</summary>
           <p>To the clipboard, or as a timestamped PNG in your macOS screenshot folder (the Desktop unless you changed it). <kbd>⌘</kbd><kbd>S</kbd> in the editor lets you pick the place.</p>
+        </details>
+        <details id="cli-workflow">
+          <summary>How can a coding agent use Vishot?</summary>
+          <p>Discovery and exact-ID capture ship in v0.2.0. Use the native executable bundled in your installed app; no development runtime is needed. For an app in Applications, run these from your task’s workspace (adjust the app path if needed):<br>
+            <code>/Applications/Vishot.app/Contents/Helpers/vishot windows</code><br>
+            <code>/Applications/Vishot.app/Contents/Helpers/vishot capture --window-id 42</code></p>
+          <p>Replace <code>42</code> with the exact live window ID from discovery, selected by app and title. Allow Screen Recording in Vishot first. Capture preserves focus, including for fully covered windows; minimized windows are unsupported and cross-Space capture is best effort. Immediately read the returned <code>capture.path</code> with your agent’s built-in image reader: JSON and a path alone are not visual inspection. PNGs stay local in <code>.vishot/</code> under your current workspace, without changing the clipboard or Capture history.</p>
+          <p><strong>Annotation preview — unreleased, not included in v0.2.0.</strong> In a development build with annotation support, use that same inspected PNG as <code>--input</code>, even if the live window changes. This example assumes <code>vishot</code> is on PATH; otherwise use the bundled path above. Replace the illustrative path with the exact returned <code>capture.path</code> and choose coordinates from the image’s pixels:<br>
+            <code data-cli-annotation>vishot annotate --input "/workspace/.vishot/window-42-example.png" --annotations '{"schemaVersion":1,"annotations":[{"type":"rect","x":100,"y":200,"width":240,"height":80,"color":"yellow"},{"type":"arrow","from":{"x":420,"y":160},"to":{"x":340,"y":220}},{"type":"text","x":420,"y":100,"text":"Save your changes"}]}'</code></p>
+          <p>The preview also accepts an existing local PNG without capture permission. It saves a separate flattened PNG locally, preserving the original PNG and its pixel dimensions. Read <code>annotation.path</code> to check the marks; revise against the original input rather than recapturing. Save-only is the default. Optionally add <code>--open</code> to request opening the saved result in the default image app, which may take focus. An accepted opening request does not prove the image was displayed.</p>
+          <p>Read the <a href="https://github.com/dartyuhov/vishot/blob/v0.2.0/docs/agent-cli.md">v0.2.0 capture documentation</a> or use the optional <a href="https://github.com/dartyuhov/vishot/blob/v0.2.0/skills/vishot-capture/SKILL.md">capture skill instructions</a> with your agent. The skill is optional; the bundled CLI works without it. See the <a href="https://github.com/dartyuhov/vishot/blob/bcae50da04b0ed75aae1f6fe720b51f90b697b20/docs/agent-cli.md#explain-an-interface-from-the-captured-image">unreleased annotation workflow and JSON reference</a> for the preview contract.</p>
         </details>
         <details>
           <summary>Are my screenshots uploaded anywhere?</summary>

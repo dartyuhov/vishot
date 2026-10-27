@@ -1,5 +1,5 @@
 import XCTest
-@testable import Vishot
+import VishotRendering
 
 final class EditHistoryTests: XCTestCase {
     private let arrow = Annotation.arrow(from: CGPoint(x: 1, y: 2), to: CGPoint(x: 30, y: 40), color: .red)

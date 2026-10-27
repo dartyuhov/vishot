@@ -112,7 +112,11 @@ class AppBoundaryTests(unittest.TestCase):
         metadata["CFBundleVersion"] = "9.8.7"
         info.write_bytes(plistlib.dumps(metadata))
         self.resign()
-        result = subprocess.run([str(self.app / "Contents/Helpers/vishot"), "--version"],
+        workspace = Path(self.temp.name) / "unrelated workspace"
+        workspace.mkdir()
+        link = workspace / "linked helper"
+        link.symlink_to(self.app / "Contents/Helpers/vishot")
+        result = subprocess.run([str(link), "--version"], cwd=workspace,
                                 env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {"schemaVersion": 1, "ok": True, "version": "9.8.7"})

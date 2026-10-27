@@ -4,10 +4,10 @@ import Foundation
 /// Geometry here is in image space: points from the image's top-left, y down. Screen positions are
 /// never stored, so the document is the same on every screen and in the export.
 
-enum AnnotationColor: String, CaseIterable, Codable {
+public enum AnnotationColor: String, CaseIterable, Codable {
     case red, yellow, green, purple, white, black
 
-    var name: String {
+    public var name: String {
         switch self {
         case .red: "red"
         case .yellow: "yellow"
@@ -18,7 +18,7 @@ enum AnnotationColor: String, CaseIterable, Codable {
         }
     }
 
-    var cgColor: CGColor {
+    public var cgColor: CGColor {
         switch self {
         case .red: CGColor(srgbRed: 1, green: 0.27, blue: 0.3, alpha: 1)
         case .yellow: CGColor(srgbRed: 1, green: 0.82, blue: 0.2, alpha: 1)
@@ -31,14 +31,14 @@ enum AnnotationColor: String, CaseIterable, Codable {
     }
 
     /// The next color in the palette, wrapping around. `step` is 1 or -1.
-    func cycled(by step: Int) -> AnnotationColor {
+    public func cycled(by step: Int) -> AnnotationColor {
         let all = Self.allCases
         let index = all.firstIndex(of: self)!
         return all[(index + step + all.count) % all.count]
     }
 }
 
-enum Annotation: Equatable, Codable {
+public enum Annotation: Equatable, Codable {
     case arrow(from: CGPoint, to: CGPoint, color: AnnotationColor)
     case rect(CGRect, color: AnnotationColor)
     /// `at` is the left end of the line, at its vertical centre.
@@ -46,34 +46,34 @@ enum Annotation: Equatable, Codable {
 }
 
 /// The captured image and what has been drawn on it.
-struct EditDocument {
-    let image: CGImage
+public struct EditDocument {
+    public let image: CGImage
     /// Pixels per point.
-    let scale: CGFloat
-    var annotations: [Annotation] = []
+    public let scale: CGFloat
+    public var annotations: [Annotation] = []
     /// In image space. Nil keeps the whole image.
-    var crop: CGRect?
+    public var crop: CGRect?
 
     /// Fixed for the editable screenshot's lifetime; snapshots only restore geometry/content.
-    let annotationStyle: ThemeID
-    let resolvedAnnotationStyle: AnnotationStyle
+    public let annotationStyle: ThemeID
+    public let resolvedAnnotationStyle: AnnotationStyle
 
-    init(image: CGImage, scale: CGFloat, annotations: [Annotation] = [], crop: CGRect? = nil,
+    public init(image: CGImage, scale: CGFloat, annotations: [Annotation] = [], crop: CGRect? = nil,
          annotationStyle: ThemeID = .pixel, resolvedStyle: AnnotationStyle? = nil) {
         self.image = image
         self.scale = scale
         self.annotations = annotations
         self.crop = crop
         self.annotationStyle = annotationStyle
-        resolvedAnnotationStyle = resolvedStyle ?? ThemeCatalog.annotation(annotationStyle)
+        resolvedAnnotationStyle = resolvedStyle ?? AnnotationCatalog.annotation(annotationStyle)
     }
 
     /// In points.
-    var size: CGSize {
+    public var size: CGSize {
         CGSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
     }
 
-    var snapshot: EditSnapshot {
+    public var snapshot: EditSnapshot {
         get { EditSnapshot(annotations: annotations, crop: crop) }
         set {
             annotations = newValue.annotations
@@ -83,29 +83,34 @@ struct EditDocument {
 }
 
 /// The part of a document that undo and redo restore.
-struct EditSnapshot: Equatable, Codable {
-    var annotations: [Annotation]
-    var crop: CGRect?
+public struct EditSnapshot: Equatable, Codable {
+    public var annotations: [Annotation]
+    public var crop: CGRect?
+
+    public init(annotations: [Annotation], crop: CGRect?) {
+        self.annotations = annotations
+        self.crop = crop
+    }
 }
 
-struct EditHistory {
+public struct EditHistory {
     private var undoStack: [EditSnapshot] = []
     private var redoStack: [EditSnapshot] = []
 
-    init(snapshots: [EditSnapshot] = []) { undoStack = snapshots }
-    var snapshots: [EditSnapshot] { undoStack }
+    public init(snapshots: [EditSnapshot] = []) { undoStack = snapshots }
+    public var snapshots: [EditSnapshot] { undoStack }
 
-    var canUndo: Bool { !undoStack.isEmpty }
-    var canRedo: Bool { !redoStack.isEmpty }
+    public var canUndo: Bool { !undoStack.isEmpty }
+    public var canRedo: Bool { !redoStack.isEmpty }
 
     /// Records the state before a change.
-    mutating func push(_ snapshot: EditSnapshot) {
+    public mutating func push(_ snapshot: EditSnapshot) {
         undoStack.append(snapshot)
         redoStack = []
     }
 
     /// Returns false, leaving `state` as it is, when there is nothing to undo.
-    mutating func undo(_ state: inout EditSnapshot) -> Bool {
+    public mutating func undo(_ state: inout EditSnapshot) -> Bool {
         guard let previous = undoStack.popLast() else { return false }
         redoStack.append(state)
         state = previous
@@ -113,7 +118,7 @@ struct EditHistory {
     }
 
     /// Returns false, leaving `state` as it is, when there is nothing to redo.
-    mutating func redo(_ state: inout EditSnapshot) -> Bool {
+    public mutating func redo(_ state: inout EditSnapshot) -> Bool {
         guard let next = redoStack.popLast() else { return false }
         undoStack.append(state)
         state = next

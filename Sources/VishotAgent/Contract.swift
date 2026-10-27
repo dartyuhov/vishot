@@ -57,20 +57,6 @@ public struct AgentFailure: Codable, Error, Equatable {
     public init(_ code: Code, _ message: String, problems: [AgentValidationProblem]? = nil) {
         self.code = code; self.message = message; self.problems = problems
     }
-    public var exitStatus: Int32 {
-        switch code {
-        case .invalidArguments, .invalidAnnotations, .invalidJSON, .invalidImage: return 2
-        case .permissionDenied: return 3
-        case .startupFailed: return 4
-        case .timeout: return 5
-        case .serviceFailure: return 6
-        case .targetUnavailable: return 7
-        case .captureUnavailable, .minimizedUnsupported: return 8
-        case .encodingFailed, .renderingFailed: return 9
-        case .outputWriteFailed: return 10
-        case .openingFailed: return 11
-        }
-    }
 }
 
 public struct AgentRequest: Codable {

@@ -1,10 +1,10 @@
 import XCTest
-@testable import Vishot
+import VishotRendering
 
 final class TextLayoutTests: XCTestCase {
     func testNewlineMovesCaretDownAndBackToLineStart() {
         let origin = CGPoint(x: 30, y: 50)
-        let style = ThemeCatalog.pixel.annotation
+        let style = AnnotationCatalog.annotation(.pixel)
         let first = AnnotationRenderer.caret(after: "", at: origin, style: style)
         let next = AnnotationRenderer.caret(after: "hello\n", at: origin, style: style)
         XCTAssertEqual(next.minX, first.minX)

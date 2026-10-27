@@ -1,4 +1,6 @@
 import AppKit
+import VishotRendering
+import VishotConfiguration
 import ImageIO
 import VishotAgent
 
@@ -9,24 +11,17 @@ enum AnnotationCommand {
     static let maxTextBytes = 16 * 1024
     static let maxTotalTextBytes = 256 * 1024
 
-    static func run(_ arguments: [String]) -> Int32 {
-        let response = execute(arguments)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        do { try FileHandle.standardOutput.write(contentsOf: encoder.encode(response) + Data([10])) }
-        catch { return 6 }
-        return response.error?.exitStatus ?? 0
-    }
-
     /// The local execution boundary keeps OS opening injectable without process-global switches.
     static func execute(_ arguments: [String],
                         workspace: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
-                        styleSnapshot: () throws -> VisualStyle = { try SettingsStore.annotationStyleSnapshot() },
+                        resourceDirectory: () throws -> URL? = { nil },
+                        styleSnapshot: () throws -> VisualStyle = { try annotationStyleSnapshot() },
                         render: (EditDocument) -> CGImage? = AnnotationRenderer.export,
                         encode: (CGImage, CGFloat) -> Data? = { ImageEncoding.data($0, scale: $1, type: .png) },
                         opener: (URL) -> Bool = { NSWorkspace.shared.open($0) }) -> AgentResponse {
         do {
-            let options = try AgentAnnotationArguments(arguments)
+            let options = try AnnotationArguments(arguments)
+            let resources = try resourceDirectory()
             let png = try read(URL(fileURLWithPath: options.input), limit: 90 * 1024 * 1024, code: .invalidImage)
             let input = try decode(png)
             let json: Data
@@ -39,7 +34,9 @@ enum AnnotationCommand {
                 json = try read(URL(fileURLWithPath: options.jsonFile!), limit: maxJSONBytes, code: .invalidAnnotations)
             }
             // Fonts must be registered before any theme factory resolves its annotation font.
-            Fonts.register()
+            if let resources, !Fonts.register(resourceDirectory: resources) {
+                throw AgentFailure(.renderingFailed, "Could not register the containing app's bundled fonts. Reinstall the complete Vishot.app and retry.")
+            }
             let selection = try styleSnapshot()
             let document = try document(json: json, image: input.image, scale: input.scale, style: selection)
             guard let rendered = render(document) else {
@@ -59,6 +56,11 @@ enum AnnotationCommand {
                                                       style: selection.rawValue, openingStatus: openingStatus), error: openingError)
         } catch let failure as AgentFailure { return .failure(failure) }
         catch { return .failure(AgentFailure(.renderingFailed, "Could not complete local PNG annotation.")) }
+    }
+
+    static func annotationStyleSnapshot(url: URL = AppSettings.defaultURL) throws -> VisualStyle {
+        do { return try AppSettings.annotationStyleSnapshot(url: url) }
+        catch { throw AgentFailure(.invalidArguments, error.localizedDescription) }
     }
 
     private static func read(_ url: URL, limit: Int, code: AgentFailure.Code) throws -> Data {
@@ -126,7 +128,7 @@ enum AnnotationCommand {
         }
         if number(batch["schemaVersion"]) != 1 { problem("schemaVersion", "Required supported integer version: 1.") }
         var annotations: [Annotation] = []
-        var resolved = ThemeCatalog.annotation(style.annotationID)
+        var resolved = AnnotationCatalog.annotation(style.annotationID)
         resolved.snapsTextToGrid = false
         if let items = batch["annotations"] as? [Any] {
             if items.isEmpty || items.count > maxAnnotations {

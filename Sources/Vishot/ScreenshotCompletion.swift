@@ -1,4 +1,5 @@
 import AppKit
+import VishotRendering
 
 /// Output completion owns the requested pixels and editable state independently of the UI session.
 /// All calls are on the main thread; history persistence remains on HistoryLibrary's worker.

@@ -1,9 +1,126 @@
 import XCTest
 import ImageIO
 import UniformTypeIdentifiers
-@testable import Vishot
+import VishotCLIExecution
+import VishotAgent
+import VishotRendering
+import CoreText
 
 final class AnnotationCLITests: XCTestCase {
+    func testVersionFollowsActualInstallationThroughSymlinksAndUnrelatedWorkspace() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let contents = fixture.executable.deletingLastPathComponent().deletingLastPathComponent()
+        let link = fixture.root.appendingPathComponent("relative helper link")
+        try FileManager.default.createSymbolicLink(atPath: link.path,
+            withDestinationPath: "Vishot.app/Contents/Helpers/vishot")
+        let workspace = fixture.root.appendingPathComponent("unrelated workspace")
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        // A plausible CWD resource tree must never override the containing installation.
+        try Data("not an installation".utf8).write(to: workspace.appendingPathComponent("Info.plist"))
+        for version in ["9.8.7", "9.8.8"] {
+            let metadata: [String: Any] = ["CFBundleIdentifier": "com.dartsiukhou.vishot",
+                "CFBundlePackageType": "APPL", "CFBundleShortVersionString": version]
+            try PropertyListSerialization.data(fromPropertyList: metadata, format: .xml, options: 0)
+                .write(to: contents.appendingPathComponent("Info.plist"))
+            let result = try fixture.run(["--version"], executable: link, workspace: workspace)
+            XCTAssertEqual(result.status, 0)
+            let json = try decode(result.data)
+            XCTAssertEqual(json["schemaVersion"] as? Int, 1)
+            XCTAssertEqual(json["ok"] as? Bool, true)
+            XCTAssertEqual(json["version"] as? String, version)
+            XCTAssertNil(json["image"])
+            XCTAssertFalse(FileManager.default.fileExists(atPath: workspace.appendingPathComponent(".vishot").path))
+        }
+    }
+
+    func testMissingBundledFontsFailBeforePublishingInsteadOfUsingFallback() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let contents = fixture.executable.deletingLastPathComponent().deletingLastPathComponent()
+        try FileManager.default.removeItem(at: contents.appendingPathComponent("Resources/Fonts"))
+        let input = fixture.root.appendingPathComponent("source.png")
+        let original = try fixture.png()
+        try original.write(to: input)
+        let result = try fixture.run(["annotate", "--input", input.path, "--annotations",
+            #"{"schemaVersion":1,"annotations":[{"type":"text","x":20,"y":30,"text":"Hi"}]}"#])
+        XCTAssertEqual(result.status, 9)
+        XCTAssertEqual((try decode(result.data)["error"] as? [String: Any])?["code"] as? String, "rendering_failed")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent(".vishot").path))
+        XCTAssertEqual(try Data(contentsOf: input), original)
+    }
+
+    func testSymlinkedHelperUsesContainingFontsWithoutGUIBinaryOrCaptureEndpoint() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let app = try AgentEndpoint.containingApp(executableURL: fixture.executable)
+        let endpoint = AgentEndpoint(appURL: app)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: app.appendingPathComponent("Contents/MacOS").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: endpoint.directory))
+        let link = fixture.root.appendingPathComponent("linked helper")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: fixture.executable)
+        let input = fixture.root.appendingPathComponent("font source.png")
+        let original = try fixture.png()
+        try original.write(to: input)
+        let workspace = fixture.root.appendingPathComponent("unrelated workspace")
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let result = try fixture.run(["annotate", "--input", input.path, "--annotations",
+            #"{"schemaVersion":1,"annotations":[{"type":"text","x":20,"y":30,"text":"Hi"}]}"#], executable: link, workspace: workspace)
+        XCTAssertEqual(result.status, 0, String(decoding: result.data, as: UTF8.self))
+        let annotation = try XCTUnwrap(try decode(result.data)["annotation"] as? [String: Any])
+        XCTAssertTrue((annotation["path"] as? String ?? "").hasPrefix(workspace.path + "/.vishot/"))
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(
+            URL(fileURLWithPath: try XCTUnwrap(annotation["path"] as? String)) as CFURL, nil))
+        let actual = try rgba(try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil)))
+        Fonts.register(resourceDirectory: app.appendingPathComponent("Contents/Resources"))
+        var style = AnnotationCatalog.annotation(.pixel)
+        XCTAssertEqual(CTFontCopyPostScriptName(style.font) as String, "Silkscreen-Regular")
+        style.snapsTextToGrid = false
+        let originalSource = try XCTUnwrap(CGImageSourceCreateWithData(original as CFData, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(originalSource, 0, nil))
+        let anchor = AnnotationRenderer.textAnchor(topLeft: CGPoint(x: 20, y: 30), text: "Hi", style: style)
+        let expected = try XCTUnwrap(AnnotationRenderer.export(EditDocument(image: image, scale: 1,
+            annotations: [.text("Hi", at: anchor, color: .purple)], resolvedStyle: style)))
+        XCTAssertEqual(actual, try rgba(expected), "The helper must resolve the bundled font before drawing")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: endpoint.directory))
+        XCTAssertEqual(try Data(contentsOf: input), original)
+    }
+
+    func testCompiledCLIValidatesWholeConfigurationWithoutRewritingIt() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let input = fixture.root.appendingPathComponent("source.png")
+        try fixture.png().write(to: input)
+        let config = fixture.root.appendingPathComponent(".config/vishot/config.toml")
+        let arguments = ["annotate", "--input", input.path, "--annotations",
+            #"{"schemaVersion":1,"annotations":[{"type":"rect","x":6,"y":6,"width":12,"height":12}]}"#]
+        for invalid in ["[shortcut]\nkey = 'banana'", "[history]\nretention_days = 2", "watermark = 'yes'", "watermark = ["] {
+            let text = "style = 'smooth'\n" + invalid
+            try text.write(to: config, atomically: true, encoding: .utf8)
+            let result = try fixture.run(arguments)
+            XCTAssertEqual(result.status, 2)
+            let error = try XCTUnwrap(try decode(result.data)["error"] as? [String: Any])
+            XCTAssertEqual(error["code"] as? String, "invalid_arguments")
+            XCTAssertTrue((error["message"] as? String ?? "").hasPrefix(
+                "Could not resolve the selected annotation style from \(config.path): "))
+            XCTAssertEqual(try String(contentsOf: config, encoding: .utf8), text)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent(".vishot").path))
+        }
+        for (text, expected) in [("# preserved\ntheme = 'clean'", "smooth"),
+                                  ("theme = 'clean'\nstyle = 'pixel'", "pixel")] {
+            try text.write(to: config, atomically: true, encoding: .utf8)
+            let result = try fixture.run(arguments)
+            XCTAssertEqual(result.status, 0)
+            XCTAssertEqual((try decode(result.data)["annotation"] as? [String: Any])?["style"] as? String, expected)
+            XCTAssertEqual(try String(contentsOf: config, encoding: .utf8), text)
+        }
+        try FileManager.default.removeItem(at: fixture.root.appendingPathComponent(".config"))
+        let result = try fixture.run(arguments)
+        XCTAssertEqual(result.status, 0)
+        XCTAssertEqual((try decode(result.data)["annotation"] as? [String: Any])?["style"] as? String, "pixel")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent(".config").path))
+    }
+
     func testWriteFailuresAndInvalidSettingsPreservePriorFiles() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -284,11 +401,9 @@ final class AnnotationCLITests: XCTestCase {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("annotation CLI \(UUID())")
             let contents = root.appendingPathComponent("Vishot.app/Contents")
             try FileManager.default.createDirectory(at: contents.appendingPathComponent("Helpers"), withIntermediateDirectories: true)
-            try FileManager.default.createDirectory(at: contents.appendingPathComponent("MacOS"), withIntermediateDirectories: true)
             let bin = Bundle(for: AnnotationCLITests.self).bundleURL.deletingLastPathComponent()
             executable = contents.appendingPathComponent("Helpers/vishot")
             try FileManager.default.copyItem(at: bin.appendingPathComponent("VishotCLI"), to: executable)
-            try FileManager.default.copyItem(at: bin.appendingPathComponent("Vishot"), to: contents.appendingPathComponent("MacOS/Vishot"))
             let resources = contents.appendingPathComponent("Resources")
             try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
             let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -316,10 +431,10 @@ final class AnnotationCLITests: XCTestCase {
             XCTAssertTrue(CGImageDestinationFinalize(destination))
             return data as Data
         }
-        func run(_ arguments: [String]) throws -> (status: Int32, data: Data) {
+        func run(_ arguments: [String], executable: URL? = nil, workspace: URL? = nil) throws -> (status: Int32, data: Data) {
             let process = Process()
-            process.executableURL = executable
-            process.currentDirectoryURL = root
+            process.executableURL = executable ?? self.executable
+            process.currentDirectoryURL = workspace ?? root
             process.arguments = arguments
             var environment = ProcessInfo.processInfo.environment
             environment["CFFIXED_USER_HOME"] = root.path

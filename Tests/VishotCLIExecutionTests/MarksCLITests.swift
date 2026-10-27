@@ -1,6 +1,6 @@
 import XCTest
 import ImageIO
-@testable import Vishot
+import VishotCLIExecution
 
 final class MarksCLITests: XCTestCase {
     func testSmallPixelRectangleKeepsAnUnmarkedInteriorThroughCompiledCLI() throws {

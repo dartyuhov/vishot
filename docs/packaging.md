@@ -116,6 +116,14 @@ app. It reads the containing app's release version rather than maintaining a
 second version. See the [discovery contract](agent-cli.md) for commands and
 JSON output.
 
+Annotation runs inside the helper using shared rendering and immutable
+configuration. TOMLKit and its vendored C++ implementation therefore link into
+both native executables; the helper still requires only system runtime libraries.
+There is no standalone helper package or additional resource bundle. Fonts and
+licenses remain under `Contents/Resources`, and version metadata remains in
+`Contents/Info.plist`. Symlinks resolve to that actual installation; the caller's
+working directory controls only output placement.
+
 `validate-app` checks both Mach-O executables, exact native architecture,
 macOS 14 load commands, executable permissions, strict nested signatures, and
 matching signing teams. It rejects helpers outside the expected regular-file
@@ -143,7 +151,7 @@ coverage.
 
 ## Bundled licenses and manual checks
 
-The app includes TOMLKit 0.6.0, its vendored toml++ 3.4.0, and the latter's
+Both app and bundled CLI include TOMLKit 0.6.0, its vendored toml++ 3.4.0, and the latter's
 Hoehrmann UTF-8 decoder MIT notices in `ThirdPartyNotices.txt`. Its four
 WOFF2 resources are Silkscreen and
 JetBrains Mono, regular and bold; `FontLicenses.txt` includes their copyright

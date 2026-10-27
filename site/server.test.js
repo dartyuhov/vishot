@@ -77,13 +77,48 @@ test('serves a signup-free page and browser bundle with working local navigation
   }
 });
 
-test('describes history as a release-gated preview and CLI as planned', async () => {
+test('describes history as a release-gated preview', async () => {
   const html = await (await fetch(base + '/')).text();
   assert.match(html, /Capture history/);
   assert.match(html, /History preview: release availability is not yet verified/);
-  assert.match(html, /CLI[^<]*<span[^>]*>Coming soon/);
   assert.doesNotMatch(html, /vishot capture --app|agent captures the chat|every key will be remappable/);
   assert.match(html, /Capture History[^]*?<kbd>h<\/kbd><kbd>l<\/kbd>[^]*?<kbd>y<\/kbd>/);
+});
+
+test('explains released exact-ID capture and separately labels the annotation preview', async () => {
+  const html = await (await fetch(base + '/')).text();
+  const card = html.match(/<li id="agent-cli"[^]*?<\/li>/)?.[0];
+  const workflow = html.match(/<details id="cli-workflow">[^]*?<\/details>/)?.[0];
+  assert.ok(card, 'CLI discovery card');
+  assert.ok(workflow, 'CLI workflow FAQ');
+  assert.match(card, /capture ships in[^]*?v0\.2\.0/);
+  assert.match(card, /Annotation preview \(unreleased\)/);
+  assert.match(card, /href="#cli-workflow"/);
+  assert.doesNotMatch(html, /Coming soon|Planned command-line capture|Not available yet/);
+  assert.match(workflow, /Annotation preview — unreleased, not included in v0\.2\.0/);
+  for (const command of [
+    '/Applications/Vishot.app/Contents/Helpers/vishot windows',
+    '/Applications/Vishot.app/Contents/Helpers/vishot capture --window-id 42',
+  ]) assert.ok(workflow.includes(command), `missing bundled command: ${command}`);
+  for (const text of ['exact live window ID', 'app and title', 'Screen Recording', 'built-in image reader',
+    'capture.path', '.vishot/', 'current workspace', 'same inspected PNG', 'image’s pixels',
+    'preserving the original PNG and its pixel dimensions', 'annotation.path', 'Save-only is the default',
+    '--open', 'default image app', 'does not prove the image was displayed', 'skill is optional']) {
+    assert.ok(workflow.includes(text), `missing workflow guidance: ${text}`);
+  }
+  assert.match(workflow, /href="https:\/\/github\.com\/dartyuhov\/vishot\/blob\/v0\.2\.0\/docs\/agent-cli\.md"/);
+  assert.match(workflow, /href="https:\/\/github\.com\/dartyuhov\/vishot\/blob\/v0\.2\.0\/skills\/vishot-capture\/SKILL\.md"/);
+  assert.match(workflow, /href="https:\/\/github\.com\/dartyuhov\/vishot\/blob\/bcae50da04b0ed75aae1f6fe720b51f90b697b20\/docs\/agent-cli\.md#explain-an-interface-from-the-captured-image"/);
+  const example = workflow.match(/<code data-cli-annotation>([^]*?)<\/code>/)?.[1];
+  assert.ok(example, 'annotation command example');
+  assert.match(example, /^vishot annotate --input "\/workspace\/\.vishot\/window-42-example\.png" --annotations '/);
+  assert.doesNotMatch(example, /--open|--annotations-file/, 'example is an inline, save-only draft');
+  const batch = JSON.parse(example.match(/--annotations '([^]*?)'$/)[1]);
+  assert.equal(batch.schemaVersion, 1);
+  assert.deepEqual(batch.annotations.map(mark => mark.type), ['rect', 'arrow', 'text']);
+  assert.ok(batch.annotations[0].width > 0 && batch.annotations[0].height > 0);
+  assert.notDeepEqual(batch.annotations[1].from, batch.annotations[1].to);
+  assert.ok(batch.annotations[2].text.trim());
 });
 
 test('FAQ explains chip-specific installation, per-app approval and real shortcut configuration', async () => {

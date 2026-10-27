@@ -1,4 +1,6 @@
 import AppKit
+import VishotRendering
+import VishotConfiguration
 import Carbon.HIToolbox
 
 final class OverlayController: NSObject, NSWindowDelegate {
@@ -56,7 +58,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     func prepareTheme(style: VisualStyle, colorScheme: ColorScheme) {
         guard !isSessionActive,
-              preparedTheme.style != style || preparedTheme.colorScheme != ThemeCatalog.colorScheme(style: style, requested: colorScheme) else { return }
+              preparedTheme.definition.id != style.rawValue || preparedTheme.colorScheme != ThemeCatalog.colorScheme(style: style, requested: colorScheme) else { return }
         preparedTheme = ThemeCatalog.resolve(style: style, colorScheme: colorScheme)
         preparePickerPanels()
         reusableBrowser.prepare(theme: preparedTheme)

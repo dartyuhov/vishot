@@ -1,4 +1,5 @@
 import AppKit
+import VishotRendering
 import ScreenCaptureKit
 import VishotAgent
 
