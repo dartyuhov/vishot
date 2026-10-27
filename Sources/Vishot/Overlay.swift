@@ -65,6 +65,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     var video: VideoSession?
     private var videoType = false
     private var videoCountdown = false
+    private var videoRectangle: CGRect?
     var watermark: Bool {
         get { capturer.watermark }
         set { capturer.watermark = newValue }
@@ -261,6 +262,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         status = ""
         videoType = false
         videoCountdown = false
+        videoRectangle = nil
         hoverStatus = nil
         accessibilityAvailable = accessibility.isAllowed
         enterWindowMode()
@@ -310,6 +312,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     func videoReturnToPicker(_ message: String) {
         videoCountdown = false
+        videoRectangle = nil
         status = message
         render()
     }
@@ -318,6 +321,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         // hide owns presentation teardown and focus restoration; the outer
         // session remains reserved until recorder publication finishes.
         videoCountdown = false
+        videoRectangle = nil
         hide(continuingVideo: true)
     }
 
@@ -332,12 +336,19 @@ final class OverlayController: NSObject, NSWindowDelegate {
             guard historyLibrary.retention != .off else {
                 status = "Video requires History. Enable retention in Vishot Settings."; render(); return
             }
-            guard case .display(let id) = target.kind else {
-                status = "Video: press ⇧G to select a whole display."; render(); return
-            }
-            videoCountdown = true
-            stopWarmUp()
-            video?.begin(displayID: id, session: session, label: target.label)
+            do {
+                let windowFrame: CGRect?
+                if case .element(let id, _) = target.kind { windowFrame = windows.first { $0.id == id }?.frame }
+                else { windowFrame = nil }
+                let selection = try VideoSelection(target: target, windowFrame: windowFrame)
+                videoCountdown = true
+                stopWarmUp()
+                video?.onRectangle = { [weak self] rect in
+                    self?.videoRectangle = rect
+                    self?.render()
+                }
+                video?.begin(selection: selection, session: session, label: target.label)
+            } catch { status = error.localizedDescription; render() }
             return
         }
         captureMetadata(for: target)
@@ -650,15 +661,16 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         let target = selection
         // Region mode's HUD follows its cursor, since there may be no region yet.
-        let anchor = (region?.cursor ?? targets[selected].anchor).flippedBetweenCocoaAndCG
+        let anchor = (videoRectangle.map { CGPoint(x: $0.midX, y: $0.midY) }
+            ?? region?.cursor ?? targets[selected].anchor).flippedBetweenCocoaAndCG
         let hudPanel = panels.first { $0.frame.contains(anchor) } ?? panels.first
-        let statusLine = isCapturing ? "capturing…" : hoverStatus ?? (
+        let statusLine = isCapturing ? "capturing…" : videoCountdown ? status : hoverStatus ?? (
             !status.isEmpty ? status
             : warmUpTimer != nil ? "loading page…"
             : region?.status ?? ""
         )
-        let regionRect = region == nil ? nil : target?.frame.flippedBetweenCocoaAndCG
-        let regionCursor = region?.cursor.flippedBetweenCocoaAndCG
+        let regionRect = region == nil ? nil : (videoRectangle ?? target?.frame)?.flippedBetweenCocoaAndCG
+        let regionCursor = videoCountdown ? nil : region?.cursor.flippedBetweenCocoaAndCG
         // Containers are numbered among themselves, so nested ones (adjacent in the list) get different colors.
         var containers = 0
         let marks = hints.compactMap { hint -> HintMark? in
@@ -670,7 +682,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for panel in panels {
-            panel.highlight(target?.frame.flippedBetweenCocoaAndCG, label: target?.label ?? "")
+            panel.highlight((videoRectangle ?? target?.frame)?.flippedBetweenCocoaAndCG, label: target?.label ?? "")
             panel.showRegion(regionRect, cursor: regionCursor)
             panel.showHints(marks, typed: typedHint.count)
             let modeKeys = mode.keys(accessibilityAvailable: accessibilityAvailable).map { key -> HUDKey in

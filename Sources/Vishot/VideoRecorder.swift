@@ -15,6 +15,7 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     let movie: URL
     let displayID: CGDirectDisplayID
     let frame: CGRect
+    let displayFrame: CGRect
     private let canvas: VideoCanvas
     private let scale: CGFloat
     private let callbacks = DispatchQueue(label: "dev.vishot.video.capture", qos: .userInitiated)
@@ -37,34 +38,36 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private(set) var hasCompletedMovie = false
     var onFailure: ((Error) -> Void)?
 
-    private init(directory: URL, display: SCDisplay, scale: CGFloat) throws {
+    private init(directory: URL, rectangle: VideoRectangle) throws {
         self.directory = directory
         movie = directory.appendingPathComponent((Config.fileName(for: Date()) as NSString).deletingPathExtension + ".mp4")
-        displayID = display.displayID
-        frame = display.frame
-        self.scale = scale
+        displayID = rectangle.display.id
+        displayFrame = rectangle.display.frame
+        frame = rectangle.rect
+        scale = rectangle.display.scale
         canvas = try VideoCanvas(native: CGSize(width: frame.width * scale, height: frame.height * scale))
         super.init()
     }
 
-    static func prepare(displayID: CGDirectDisplayID, directory: URL) async throws -> VideoRecorder {
+    static func prepare(rectangle: VideoRectangle, directory: URL) async throws -> VideoRecorder {
         guard CGPreflightScreenCaptureAccess() else {
             throw SettingsError(message: "Video needs Screen Recording. Enable it in Vishot Settings.")
         }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-        guard let display = content.displays.first(where: { $0.displayID == displayID }),
+        guard let display = content.displays.first(where: { $0.displayID == rectangle.display.id }),
               let own = content.applications.first(where: { $0.processID == ProcessInfo.processInfo.processIdentifier }) else {
             throw SettingsError(message: "Recording display or Vishot application exclusion is unavailable.")
         }
-        let mode = CGDisplayCopyDisplayMode(displayID)
-        guard let mode, display.frame.width > 0 else { throw SettingsError(message: "Recording display is unavailable.") }
-        let scale = CGFloat(mode.pixelWidth) / CGFloat(mode.width)
-        let recorder = try VideoRecorder(directory: directory, display: display, scale: scale)
+        guard display.frame == rectangle.display.frame,
+              display.frame.contains(rectangle.rect), rectangle.rect.width > 0, rectangle.rect.height > 0 else {
+            throw SettingsError(message: "Recording display geometry changed. Select the target again.")
+        }
+        let recorder = try VideoRecorder(directory: directory, rectangle: rectangle)
         let filter = SCContentFilter(display: display, excludingApplications: [own], exceptingWindows: [])
         let config = SCStreamConfiguration()
         config.width = recorder.canvas.width
         config.height = recorder.canvas.height
-        config.sourceRect = CGRect(origin: .zero, size: display.frame.size)
+        config.sourceRect = rectangle.sourceRect
         config.destinationRect = CGRect(origin: .zero, size: recorder.canvas.contentSize)
         config.backgroundColor = recorder.background
         config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
@@ -145,6 +148,9 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
         let time = sample.presentationTimeStamp
         guard terminalError == nil, intake.allows(time), input.isReadyForMoreMediaData,
               let source = sample.imageBuffer else { return }
+        guard CVPixelBufferGetWidth(source) == canvas.width, CVPixelBufferGetHeight(source) == canvas.height else {
+            fail(SettingsError(message: "Recording surface dimensions changed unexpectedly.")); return
+        }
         // This is a runtime guard, not a claim that the clock mapping has been
         // validated on every supported OS. Never admit samples from a foreign epoch.
         let host = CMClockGetTime(CMClockGetHostTimeClock())
@@ -159,11 +165,8 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
             return
         }
         let image = CIImage(cvPixelBuffer: source)
-        let fit = min(canvas.contentSize.width / image.extent.width, canvas.contentSize.height / image.extent.height)
-        let normalized = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
-            .transformed(by: CGAffineTransform(scaleX: fit, y: fit))
         let bounds = CGRect(x: 0, y: 0, width: canvas.width, height: canvas.height)
-        let opaque = normalized.composited(over: CIImage(color: .black).cropped(to: bounds))
+        let opaque = canvas.normalize(image)
         context.render(opaque, to: buffer, bounds: bounds, colorSpace: space)
         CVBufferSetAttachment(buffer, kCVImageBufferCGColorSpaceKey, space, .shouldPropagate)
         guard let relative = timeline.admit(time) else { return }
@@ -231,7 +234,10 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
     func closeIntake(at endpoint: CMTime) { intake.close(at: endpoint) }
 
     func cancelPreparation() async {
-        _ = try? await onMedia { self.writer.cancelWriting() }
+        _ = try? await onMedia {
+            self.writer.cancelWriting()
+            try? FileManager.default.removeItem(at: self.movie)
+        }
         try? stream.removeStreamOutput(self, type: .screen)
     }
 
