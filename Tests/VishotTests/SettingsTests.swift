@@ -2,6 +2,49 @@ import XCTest
 @testable import Vishot
 
 final class SettingsTests: XCTestCase {
+    func testSingleAppearanceFallbackPreservesPreferencesAcrossSessionsAndRestart() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("config.toml")
+        let darkOnly = ThemeDefinition(id: "smooth", label: "Dark fixture",
+            annotationID: .clean, appearances: .dark, makeStyles: SmoothTheme.definition.makeStyles)
+        let resolve: (VisualStyle, ColorScheme) -> ColorScheme = { style, requested in
+            ThemeCatalog.resolve(style == .smooth ? darkOnly : style.definition,
+                colorScheme: requested).colorScheme
+        }
+        let store = SettingsStore(url: url, resolveColorScheme: resolve) { _ in NSObject() }
+        store.start(watching: false)
+        store.systemAppearanceChanged(.light)
+        store.update(appearance: .light, style: .smooth)
+        XCTAssertEqual(store.activeColorScheme, .dark)
+        XCTAssertEqual(store.active.appearance, .light)
+        XCTAssertFalse(store.hasPendingAppearance)
+        let restarted = SettingsStore(url: url, resolveColorScheme: resolve) { _ in NSObject() }
+        restarted.start(watching: false)
+        XCTAssertEqual(restarted.active.appearance, .light)
+        XCTAssertEqual(restarted.activeColorScheme, .dark)
+
+        store.setSessionActive(true)
+        store.update(style: .pixel)
+        XCTAssertEqual(store.active.style, .smooth)
+        XCTAssertEqual(store.activeColorScheme, .dark)
+        XCTAssertTrue(store.hasPendingAppearance)
+        store.setSessionActive(false)
+        XCTAssertEqual(store.activeColorScheme, .light)
+        XCTAssertEqual(store.active.appearance, .light)
+
+        store.update(appearance: .system, style: .smooth)
+        store.setSessionActive(true)
+        store.systemAppearanceChanged(.dark)
+        store.systemAppearanceChanged(.light)
+        XCTAssertFalse(store.hasPendingAppearance, "Unsupported system variants do not change the effective appearance")
+        store.update(style: .pixel)
+        XCTAssertEqual(store.activeColorScheme, .dark)
+        store.setSessionActive(false)
+        XCTAssertEqual(store.activeColorScheme, .light)
+        XCTAssertEqual(store.active.appearance, .system)
+    }
+
     func testSystemAppearanceAndIndependentPreferencesDeferUntilSessionEnds() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }

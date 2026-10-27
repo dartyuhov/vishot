@@ -65,7 +65,11 @@ enum AnnotationRenderer {
         let length = hypot(to.x - from.x, to.y - from.y)
         guard length > 0 else { return nil }
         let unit = CGVector(dx: (to.x - from.x) / length, dy: (to.y - from.y) / length)
-        let head = min(style.headLength, length)
+        let head: CGFloat
+        switch style.treatment {
+        case .cells: head = min(style.headLength, length)
+        case .vector: head = min(style.headLength, length * 0.45)
+        }
         let base = CGPoint(x: to.x - unit.dx * head, y: to.y - unit.dy * head)
         let spread = head * style.headSpread
         return (base,

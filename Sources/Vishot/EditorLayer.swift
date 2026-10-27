@@ -61,7 +61,7 @@ final class EditorLayer: NSObject, CALayerDelegate {
 
     /// Called with reusable panel preparation, off the hotkey path.
     func prepare(theme: ResolvedTheme) {
-        guard self.theme.id != theme.id || self.theme.colorScheme != theme.colorScheme else { return }
+        guard self.theme.style != theme.style || self.theme.colorScheme != theme.colorScheme else { return }
         self.theme = theme
         for hud in [horizontalToolbar, verticalToolbar, compactToolbar] { hud.root.removeFromSuperlayer() }
         horizontalToolbar = EditorToolbar(scale: backingScale, theme: theme)

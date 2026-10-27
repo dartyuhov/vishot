@@ -13,10 +13,11 @@ final class SettingsStore {
     private var systemColorScheme = ColorScheme.light
     private var appearanceObservation: NSKeyValueObservation?
     var hasPendingAppearance: Bool {
-        configured.map { $0.appearance.resolve(system: systemColorScheme) != activeColorScheme } ?? false
+        configured.map { effectiveColorScheme($0) != activeColorScheme } ?? false
     }
     var onChange: (() -> Void)?
     private let register: (CaptureShortcut) throws -> AnyObject
+    private let resolveColorScheme: (VisualStyle, ColorScheme) -> ColorScheme
     private var registration: AnyObject?
     private let registerHistory: ((CaptureShortcut) throws -> AnyObject)?
     private var historyRegistration: AnyObject?
@@ -25,18 +26,21 @@ final class SettingsStore {
     private var lastTarget: URL?
     private var lastReadError: String?
 
-    init(url: URL = defaultURL, registerHistory: ((CaptureShortcut) throws -> AnyObject)? = nil,
+    init(url: URL = defaultURL,
+         resolveColorScheme: @escaping (VisualStyle, ColorScheme) -> ColorScheme = ThemeCatalog.colorScheme,
+         registerHistory: ((CaptureShortcut) throws -> AnyObject)? = nil,
          register: @escaping (CaptureShortcut) throws -> AnyObject) {
         self.url = url
         self.register = register
         self.registerHistory = registerHistory
+        self.resolveColorScheme = resolveColorScheme
     }
 
     deinit { timer?.cancel() }
 
     func start(watching: Bool = true) {
         systemColorScheme = NSApp?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
-        activeColorScheme = active.appearance.resolve(system: systemColorScheme)
+        activeColorScheme = effectiveColorScheme(active)
         appearanceObservation = NSApp?.observe(\.effectiveAppearance, options: [.new]) { [weak self] app, _ in
             let scheme: ColorScheme = app.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
             DispatchQueue.main.async { self?.systemAppearanceChanged(scheme) }
@@ -117,14 +121,14 @@ final class SettingsStore {
         isSessionActive = active
         if !active {
             applyConfigured()
-            activeColorScheme = self.active.appearance.resolve(system: systemColorScheme)
+            activeColorScheme = effectiveColorScheme(self.active)
         }
         onChange?()
     }
 
     func systemAppearanceChanged(_ scheme: ColorScheme) {
         systemColorScheme = scheme
-        if !isSessionActive { activeColorScheme = active.appearance.resolve(system: scheme) }
+        if !isSessionActive { activeColorScheme = effectiveColorScheme(active) }
         onChange?()
     }
 
@@ -143,9 +147,13 @@ final class SettingsStore {
             registration = nextCapture
             historyRegistration = nextHistory
             active = candidate
-            activeColorScheme = candidate.appearance.resolve(system: systemColorScheme)
+            activeColorScheme = effectiveColorScheme(candidate)
             error = nil
         } catch { self.error = error.localizedDescription }
+    }
+
+    private func effectiveColorScheme(_ settings: AppSettings) -> ColorScheme {
+        resolveColorScheme(settings.style, settings.appearance.resolve(system: systemColorScheme))
     }
 
     /// Edits only the requested preference on fresh source, retaining external edits.

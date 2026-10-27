@@ -78,7 +78,7 @@ struct AppSettings: Equatable {
     static let defaultSource = """
     # Interface colors: system, light, or dark.
     appearance = "system"
-    # Interface and markup rendering: pixel or smooth.
+    # Interface and markup rendering: \(VisualStyle.allCases.map(\.rawValue).joined(separator: " or ")).
     style = "pixel"
 
     # Keep this on to help others discover Vishot.
@@ -116,7 +116,8 @@ struct AppSettings: Equatable {
         }
         if let value = table["style"] {
             guard let name = value.string, let style = VisualStyle(rawValue: name) else {
-                throw SettingsError(message: "style must be \"pixel\" or \"smooth\".")
+                let choices = VisualStyle.allCases.map { "\"\($0.rawValue)\"" }.joined(separator: " or ")
+                throw SettingsError(message: "style must be \(choices).")
             }
             settings.style = style
         }

@@ -253,7 +253,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
 
     func refresh() {
         let settings = store.configured ?? store.active
-        if !hasAppliedStyle || resolvedTheme.id != store.active.theme || resolvedTheme.colorScheme != store.activeColorScheme {
+        if !hasAppliedStyle || resolvedTheme.style != store.active.style || resolvedTheme.colorScheme != store.activeColorScheme {
             resolvedTheme = ThemeCatalog.resolve(style: store.active.style, colorScheme: store.activeColorScheme)
             if let content = window?.contentView { resolvedTheme.settings.apply(to: content) }
             hasAppliedStyle = true
@@ -276,7 +276,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         watermark.isEnabled = store.configured != nil
         recorder.isEnabled = store.configured != nil
         if let error = store.error {
-            showStatus("Configuration Error", message: "\(error)\nActive: \(store.active.theme.label); \(store.active.shortcut.display); watermark \(store.active.watermark ? "on" : "off").", isError: true)
+            showStatus("Configuration Error", message: "\(error)\nActive: \(store.active.style.label); \(store.active.shortcut.display); watermark \(store.active.watermark ? "on" : "off").", isError: true)
         } else if let error = history?.error {
             showStatus("History Error", message: error, isError: true)
         } else if store.isSessionActive && (store.configured != store.active || store.hasPendingAppearance) {

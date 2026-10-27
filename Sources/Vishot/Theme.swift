@@ -18,38 +18,88 @@ enum ColorScheme: Equatable {
     var appearance: NSAppearance { NSAppearance(named: self == .dark ? .darkAqua : .aqua)! }
 }
 
-enum VisualStyle: String, CaseIterable {
-    case pixel, smooth
-    var label: String { rawValue.capitalized }
-    var annotationID: ThemeID { self == .pixel ? .pixel : .clean }
-    init(annotationID: ThemeID) { self = annotationID == .pixel ? .pixel : .smooth }
-}
-
-/// Stable persisted identities. Resolve once off the hotkey path and pass the value to consumers;
-/// there is deliberately no mutable "current theme" here.
-enum ThemeID: String, Codable, CaseIterable {
-    case pixel
-    case clean
-
-    var label: String {
-        switch self {
-        case .pixel: return "Pixel"
-        case .clean: return "Smooth"
+struct VisualStyle: RawRepresentable, Equatable, CaseIterable {
+    let definition: ThemeDefinition
+    var rawValue: String { definition.id }
+    fileprivate init(definition: ThemeDefinition) { self.definition = definition }
+    init?(rawValue: String) {
+        guard let definition = ThemeCatalog.definitions.first(where: { $0.id == rawValue }) else { return nil }
+        self.definition = definition
+    }
+    static var allCases: [VisualStyle] { ThemeCatalog.definitions.map { VisualStyle(definition: $0) } }
+    static let pixel = VisualStyle(definition: PixelTheme.definition)
+    static let smooth = VisualStyle(definition: SmoothTheme.definition)
+    static func == (lhs: VisualStyle, rhs: VisualStyle) -> Bool { lhs.rawValue == rhs.rawValue }
+    var label: String { definition.label }
+    var annotationID: ThemeID { definition.annotationID }
+    init(annotationID: ThemeID) {
+        // Legacy application preferences, not a reverse lookup for new theme definitions.
+        switch annotationID {
+        case .pixel: self = .pixel
+        case .clean: self = .smooth
         }
     }
 }
 
+/// Stable persisted annotation presets, not the list of selectable interface themes.
+enum ThemeID: String, Codable, CaseIterable {
+    case pixel
+    case clean
+
+}
+
 struct ResolvedTheme {
+    let style: VisualStyle
     let id: ThemeID
     let colorScheme: ColorScheme
+    let annotation: AnnotationStyle
+    private let styles: ThemeStyles
+    var hud: HUDStyle { styles.hud }
+    var picker: PickerStyle { styles.picker }
+    var selection: SelectionDrawingStyle { styles.selection }
+    var editor: EditorStyle { styles.editor }
+    var history: HistoryStyle { styles.history }
+    var settings: SettingsStyle { styles.settings }
+    var watermark: WatermarkStyle { styles.watermark }
+
+    fileprivate init(definition: ThemeDefinition, colorScheme: ColorScheme, styles: ThemeStyles) {
+        style = VisualStyle(definition: definition)
+        id = definition.annotationID
+        self.colorScheme = colorScheme
+        annotation = ThemeCatalog.annotation(definition.annotationID)
+        self.styles = styles
+    }
+}
+
+/// A complete interface look. Saved markup is selected separately by the definition.
+struct ThemeStyles {
     let hud: HUDStyle
     let picker: PickerStyle
     let selection: SelectionDrawingStyle
     let editor: EditorStyle
     let history: HistoryStyle
     let settings: SettingsStyle
-    let annotation: AnnotationStyle
     let watermark: WatermarkStyle
+}
+
+struct ThemeDefinition {
+    enum Appearances {
+        case light, dark, both
+
+        func resolve(_ requested: ColorScheme) -> ColorScheme {
+            switch self {
+            case .light: return .light
+            case .dark: return .dark
+            case .both: return requested
+            }
+        }
+    }
+
+    let id: String
+    let label: String
+    let annotationID: ThemeID
+    let appearances: Appearances
+    let makeStyles: (ColorScheme) -> ThemeStyles
 }
 
 struct PanelStyle {
@@ -280,8 +330,25 @@ struct WatermarkStyle {
 }
 
 enum ThemeCatalog {
+    /// The only registration list. Factories run at resolution time, after Fonts.register().
+    static let definitions = [PixelTheme.definition, SmoothTheme.definition]
+
+    static func colorScheme(style: VisualStyle, requested: ColorScheme) -> ColorScheme {
+        style.definition.appearances.resolve(requested)
+    }
+
     static func resolve(style: VisualStyle, colorScheme: ColorScheme) -> ResolvedTheme {
-        make(clean: style == .smooth, colorScheme: colorScheme)
+        resolve(style.definition, colorScheme: colorScheme)
+    }
+
+    static func resolve(_ definition: ThemeDefinition, colorScheme: ColorScheme) -> ResolvedTheme {
+        let scheme = definition.appearances.resolve(colorScheme)
+        return ResolvedTheme(definition: definition, colorScheme: scheme, styles: definition.makeStyles(scheme))
+    }
+
+    static func resolve(_ definition: ThemeDefinition, appearance: AppearancePreference,
+                        system: ColorScheme) -> ResolvedTheme {
+        resolve(definition, colorScheme: appearance.resolve(system: system))
     }
     // Computed definitions avoid freezing fallback fonts before Fonts.register(). Owners keep the
     // resolved value for their lifetime; rendering never resolves resources or consults settings.
@@ -292,69 +359,26 @@ enum ThemeCatalog {
         }
     }
 
-    static var pixel: ResolvedTheme { make(clean: false) }
-    static var clean: ResolvedTheme { make(clean: true) }
+    static var pixel: ResolvedTheme { resolve(style: .pixel, colorScheme: .dark) }
+    static var clean: ResolvedTheme { resolve(style: .smooth, colorScheme: .dark) }
 
-    private static func make(clean: Bool, colorScheme: ColorScheme = .dark) -> ResolvedTheme {
-        let light = colorScheme == .light
-        let surface = light ? NSColor(srgbRed: 0.97, green: 0.96, blue: 0.99, alpha: 1) : (clean ? NSColor(srgbRed: 0.11, green: 0.11, blue: 0.13, alpha: 1) : Palette.surface)
-        let raised = light ? NSColor.white : (clean ? NSColor(srgbRed: 0.16, green: 0.16, blue: 0.19, alpha: 1) : Palette.surfaceRaised)
-        let line = light ? NSColor(srgbRed: 0.73, green: 0.71, blue: 0.78, alpha: 1) : (clean ? NSColor(srgbRed: 0.27, green: 0.27, blue: 0.31, alpha: 1) : Palette.line)
-        let text = light ? Palette.ink : Palette.text
-        let muted = light ? NSColor(srgbRed: 0.35, green: 0.33, blue: 0.40, alpha: 1) : Palette.textMuted
-        let panel = PanelStyle(background: surface, border: line, borderWidth: clean ? 1 : 2,
-            cornerRadius: clean ? 10 : 0, shadow: Palette.shadow, shadowRadius: clean ? 12 : 0,
-            shadowOffset: CGSize(width: clean ? 0 : 4, height: -4))
-        let keycap = KeycapStyle(font: clean ? .monospacedSystemFont(ofSize: 12, weight: .semibold) : Fonts.mono(12, bold: true),
-            face: raised, text: text, edge: line, padding: 5, cornerRadius: clean ? 4 : 0, edgeHeight: clean ? 2 : 4)
-        let hud = HUDStyle(panel: panel, keycap: keycap,
-            nameFont: clean ? .systemFont(ofSize: 14, weight: .semibold) : Fonts.pixel(),
-            textFont: clean ? .systemFont(ofSize: 12) : Fonts.mono(12), text: text, muted: muted, dim: muted,
-            padding: CGSize(width: 14, height: 10), lineGap: 8, entryGap: 18, actionGap: 6, keyGap: 3, disabledOpacity: 0.35)
-        let label = PanelStyle(background: Palette.accent, border: .clear, borderWidth: 0,
-            cornerRadius: clean ? 5 : 0, shadow: clean ? Palette.shadow : Palette.hintLeaf,
-            shadowRadius: clean ? 6 : 0, shadowOffset: CGSize(width: clean ? 0 : 2, height: -2))
-        let annotationFont = clean ? NSFont.systemFont(ofSize: 24, weight: .semibold) : Fonts.pixel(24)
-        let font = annotationFont as CTFont
-        let fontHeight = CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font)
-        return ResolvedTheme(id: clean ? .clean : .pixel, colorScheme: colorScheme, hud: hud,
-            picker: PickerStyle(accent: Palette.accent,
-                outline: clean ? .rounded(radius: 6) : .pixel(corner: 4), borderWidth: clean ? 2 : 4,
-                label: label, labelFont: clean ? .systemFont(ofSize: 13, weight: .semibold) : Fonts.pixel(),
-                labelText: .white, labelPadding: CGSize(width: 8, height: 2), labelInset: 10,
-                hintFont: clean ? .monospacedSystemFont(ofSize: 11, weight: .semibold) : Fonts.mono(11, bold: true),
-                hintText: Palette.ink, hintLeaf: Palette.hintLeaf, hintContainers: Palette.hintContainers,
-                hintPadding: CGSize(width: 4, height: 1), hintCornerRadius: clean ? 3 : 0,
-                hintBorderWidth: 0.5, hintBorder: NSColor(white: 0, alpha: 0.4), typedHintOpacity: 0.35,
-                hintOutlineWidth: clean ? 1 : 2, hudBottomInset: 24,
-                panelBackground: NSColor(white: 0, alpha: 0.01)),
-            selection: SelectionDrawingStyle(outsideDim: NSColor(white: 0, alpha: 0.45), arm: 12, gap: 3,
-                foreground: .white, outline: NSColor(white: 0, alpha: 0.75), width: 2, outlineWidth: 4,
-                lineCap: clean ? .round : .square),
-            editor: EditorStyle(active: Palette.accent, activeText: .white, cropped: .white, cropDim: NSColor(white: 0, alpha: 0.45),
-                cropOutline: clean ? .rounded(radius: 3) : .pixel(corner: 3), cropWidth: 3,
-                cropShadow: NSColor(white: 0, alpha: 0.35), cropShadowRadius: clean ? 3 : 0,
-                cropShadowOffset: CGSize(width: clean ? 0 : 3, height: -3),
-                caretBorder: NSColor(white: 1, alpha: 0.8), caretBorderWidth: 0.5, swatchRing: 2,
-                swatchLightText: .white, swatchDarkText: Palette.ink,
-                cropHandleBorderWidth: clean ? 1 : 2, cropHandleSize: 10, cropHandleRadius: clean ? 3 : 0),
-            history: HistoryStyle(backdrop: light || clean ? surface : NSColor(white: 0, alpha: 0.78),
-                background: clean ? raised : surface, selected: Palette.accent, separator: line,
-                text: text, muted: muted, font: clean ? .systemFont(ofSize: 14) : Fonts.mono(14),
-                queryFont: clean ? .systemFont(ofSize: 13) : Fonts.mono(13), rowCornerRadius: clean ? 6 : 0,
-                outline: clean ? .rounded(radius: 6) : .pixel(corner: 4), selectedWidth: clean ? 2 : 4,
-                borderWidth: clean ? 1 : 2),
-            settings: SettingsStyle(appearance: colorScheme.appearance, usesNativeAppearance: false, background: surface, text: text,
-                muted: muted, accent: Palette.accent, font: .systemFont(ofSize: 13), error: .systemRed),
-            annotation: AnnotationStyle(treatment: clean ? .vector : .cells, font: font,
-                lineHeight: clean ? ceil(fontHeight) + 3 : ceil(fontHeight / 3) * 3 + 3,
-                strokeWidth: 3, headLength: 24, headSpread: 0.6, textHaloWidth: 1,
-                shadow: NSColor(white: 0, alpha: 0.35).cgColor),
-            watermark: WatermarkStyle(treatment: clean ? .systemText : .pixelGlyphs,
-                plate: PanelStyle(background: Palette.ink, border: .clear, borderWidth: 0,
-                    cornerRadius: clean ? 5 : 0, shadow: clean ? Palette.shadow : Palette.hintLeaf,
-                    shadowRadius: clean ? 4 : 0, shadowOffset: CGSize(width: clean ? 0 : 2, height: -2)),
-                text: Palette.text, font: .systemFont(ofSize: 12, weight: .semibold),
-                padding: CGSize(width: 8, height: 6), margin: 12))
+    /// Persisted markup presets are independent of selectable interface identities.
+    static func annotation(_ id: ThemeID) -> AnnotationStyle {
+        switch id {
+        case .pixel:
+            let font = Fonts.pixel(24) as CTFont
+            let height = CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font)
+            return AnnotationStyle(treatment: .cells, font: font,
+                lineHeight: ceil(height / 3) * 3 + 3, strokeWidth: 3,
+                headLength: 24, headSpread: 0.6, textHaloWidth: 1,
+                shadow: NSColor(white: 0, alpha: 0.35).cgColor)
+        case .clean:
+            let font = NSFont.systemFont(ofSize: 24, weight: .semibold) as CTFont
+            let height = CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font)
+            return AnnotationStyle(treatment: .vector, font: font,
+                lineHeight: ceil(height) + 3, strokeWidth: 3,
+                headLength: 18, headSpread: 0.45, textHaloWidth: 1,
+                shadow: NSColor(white: 0, alpha: 0.35).cgColor)
+        }
     }
 }

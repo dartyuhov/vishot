@@ -65,7 +65,7 @@ struct EditDocument {
         self.annotations = annotations
         self.crop = crop
         self.annotationStyle = annotationStyle
-        resolvedAnnotationStyle = ThemeCatalog.resolve(annotationStyle).annotation
+        resolvedAnnotationStyle = ThemeCatalog.annotation(annotationStyle)
     }
 
     /// In points.

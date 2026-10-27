@@ -26,7 +26,7 @@ struct HistoryEntry: Codable, Equatable {
     var searchFields: [String] {
         // Fully visible annotation strings are exact searchable data even before OCR completes.
         // Partially clipped strings rely on rendered OCR so hidden characters never leak.
-        let style = ThemeCatalog.resolve(annotationStyleID).annotation
+        let style = ThemeCatalog.annotation(annotationStyleID)
         let text = snapshot.annotations.compactMap { annotation -> String? in
             guard case let .text(text, at, _) = annotation else { return nil }
             if let crop = snapshot.crop, !crop.contains(AnnotationRenderer.textBounds(text, at: at, style: style)) { return nil }
