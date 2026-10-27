@@ -42,12 +42,6 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-issues: write
-      - name: Recover completed release labels
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_APP_BOT_LOGIN: ${{ vars.RELEASE_APP_BOT_LOGIN }}
-        run: node recover.mjs
       - name: Create or update release PR
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}

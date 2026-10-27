@@ -178,11 +178,7 @@ test('trusted main pushes generate PRs using a repository-scoped App token, neve
   assert.equal(token.with['permission-contents'], 'write');
   assert.equal(token.with['permission-pull-requests'], 'write');
   assert.equal(token.with['permission-issues'], 'write');
-  const recovery = steps.find(step => step.run === 'node recover.mjs');
-  assert.equal(recovery.env.GH_TOKEN, '${{ steps.app-token.outputs.token }}');
-  assert.equal(recovery.env.RELEASE_APP_BOT_LOGIN, '${{ vars.RELEASE_APP_BOT_LOGIN }}');
-  const command = steps.find(step => step.run === 'node release-pr.mjs');
-  assert.ok(steps.indexOf(recovery) < steps.indexOf(command));
+  const command = steps.find(step => step.env?.GH_TOKEN);
   assert.equal(command.env.GH_TOKEN, '${{ steps.app-token.outputs.token }}');
   assert.equal(command.run, 'node release-pr.mjs');
   assert.doesNotMatch(command.run, /github-release|gh release|git tag/);
