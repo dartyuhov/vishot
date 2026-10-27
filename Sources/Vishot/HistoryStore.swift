@@ -116,8 +116,25 @@ final class HistoryStore {
     private let files = FileManager.default
     private(set) var warnings: [String] = []
     private var deleted: [UUID] = []
+    private struct MovieFingerprint: Equatable {
+        let device: Int32
+        let inode: UInt64
+        let size: Int64
+        let modifiedSeconds: Int
+        let modifiedNanos: Int
+        let changedSeconds: Int
+        let changedNanos: Int
+        let width: Int
+        let height: Int
+    }
+    private var movieValidation: [URL: (MovieFingerprint, Result<Void, Error>)] = [:]
+    private let validateMovie: (URL, Int, Int) async throws -> Void
 
-    init(url: URL = defaultURL) { self.url = url }
+    init(url: URL = defaultURL,
+         validateMovie: @escaping (URL, Int, Int) async throws -> Void = { try await VideoRecorder.validateMovie(at: $0, width: $1, height: $2) }) {
+        self.url = url
+        self.validateMovie = validateMovie
+    }
 
     private func folder(_ id: UUID) -> URL { url.appendingPathComponent(id.uuidString, isDirectory: true) }
     private func metadata(_ id: UUID) -> URL { folder(id).appendingPathComponent("entry.json") }
@@ -149,6 +166,9 @@ final class HistoryStore {
     func entries() throws -> [HistoryEntry] {
         try files.createDirectory(at: url, withIntermediateDirectories: true)
         warnings = []
+        // Keep only retained paths; fingerprints below detect modifications and
+        // replacements, including known-bad files, without repeating a decode.
+        movieValidation = movieValidation.filter { files.fileExists(atPath: $0.key.path) }
         var entries: [HistoryEntry] = []
         for child in try files.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
             guard let id = UUID(uuidString: child.lastPathComponent) else { continue }
@@ -502,18 +522,30 @@ final class HistoryStore {
     func validatedMovieURL(_ entry: HistoryEntry) throws -> URL {
         let movie = try movieURL(entry)
         let video = entry.video!
+        var info = stat()
+        guard lstat(movie.path, &info) == 0 else { throw POSIXError(.ENOENT) }
+        let fingerprint = MovieFingerprint(device: info.st_dev, inode: info.st_ino, size: info.st_size,
+            modifiedSeconds: info.st_mtimespec.tv_sec, modifiedNanos: info.st_mtimespec.tv_nsec,
+            changedSeconds: info.st_ctimespec.tv_sec, changedNanos: info.st_ctimespec.tv_nsec,
+            width: video.width, height: video.height)
+        if let cached = movieValidation[movie], cached.0 == fingerprint {
+            try cached.1.get()
+            return movie
+        }
         let done = DispatchSemaphore(value: 0)
         var result: Result<Void, Error>!
+        let validate = validateMovie
         Task.detached {
             do {
-                try await VideoRecorder.validateMovie(at: movie, width: video.width, height: video.height)
-                let generator = AVAssetImageGenerator(asset: AVURLAsset(url: movie))
-                _ = try await generator.image(at: .zero)
+                // Validation already decodes a frame. A second thumbnail decode
+                // provides no additional availability evidence.
+                try await validate(movie, video.width, video.height)
                 result = .success(())
             } catch { result = .failure(error) }
             done.signal()
         }
         done.wait()
+        movieValidation[movie] = (fingerprint, result)
         try result.get()
         return movie
     }

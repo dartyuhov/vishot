@@ -61,7 +61,12 @@ final class VideoSession {
     private var savePanel: NSSavePanel?
     private var isRescuing = false
     private var reason: Error?
-    private var label = "Display"
+    private struct Metadata {
+        let label: String
+        let windowTitle: String
+    }
+    private var metadata = Metadata(label: "Display", windowTitle: "")
+    private(set) var isErrorPresented = false
     private(set) var completedUnpublishedMovie: URL?
     private(set) var error: String?
     var onChange: (() -> Void)?
@@ -89,13 +94,14 @@ final class VideoSession {
         self.presentsControls = presentsControls
     }
 
-    func begin(selection: VideoSelection, session: Int, label: String) {
+    func begin(selection: VideoSelection, session: Int, label: String, windowTitle: String = "") {
         guard !isActive, history.retention != .off else { return }
+        dismissError()
         let token = state.begin()
         sessionID = session
         error = nil
         reason = nil
-        self.label = label
+        metadata = Metadata(label: label, windowTitle: windowTitle)
         let frozenShortcut = shortcut
         onChange?()
         sessions.beginFileOperation()
@@ -214,15 +220,17 @@ final class VideoSession {
         let id = sessionID
         state.finish()
         sessionID = nil
+        presentStartupFailure(error, session: id)
+    }
+
+    func presentStartupFailure(_ error: Error, session: Int?) {
         self.error = error.localizedDescription
-        onReturnToPicker?(error.localizedDescription)
+        // All startup errors outlive picker key/status updates. Dismiss its
+        // screen-saver-level panels before presenting the persistent surface.
+        onDismissPicker?()
+        showError(permission: error is VideoPermissionError)
+        if let session { sessions.finish(session) }
         onChange?()
-        if error is VideoPermissionError || !CGPreflightScreenCaptureAccess() {
-            // The picker panels otherwise cover ordinary app windows.
-            onDismissPicker?()
-            showError(permission: true)
-            if let id { sessions.finish(id) }
-        }
     }
 
     func stop(because error: Error? = nil) {
@@ -237,6 +245,7 @@ final class VideoSession {
             return
         }
         guard state.stop(), let recorder, let id = sessionID else { return }
+        let metadata = metadata
         recorder.closeIntake(at: endpoint)
         reason = error
         tip?.orderOut(nil)
@@ -248,10 +257,12 @@ final class VideoSession {
                 let output = try await recorder.stop(at: endpoint)
                 self.completedUnpublishedMovie = output.movie
                 self.state.publishing()
-                self.history.publishVideo(staging: output.directory, video: output.video, label: self.label) { result in
+                self.history.publishVideo(staging: output.directory, video: output.video,
+                    label: metadata.label, windowTitle: metadata.windowTitle) { result in
                     switch result {
                     case .success:
                         self.completedUnpublishedMovie = nil
+                        self.dismissError()
                         if let reason = self.reason ?? output.interruption {
                             self.error = "Recording ended early: " + reason.localizedDescription
                             self.showError(permission: !CGPreflightScreenCaptureAccess())
@@ -310,6 +321,7 @@ final class VideoSession {
     }
 
     private func showError(permission: Bool = false) {
+        isErrorPresented = true
         if let reportError { reportError(error ?? "Recording failed.", completedUnpublishedMovie != nil); return }
         errorPanel?.orderOut(nil)
         let panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 440, height: 190),
@@ -330,6 +342,11 @@ final class VideoSession {
         button.frame = CGRect(x: 270, y: 20, width: 150, height: 32)
         button.keyEquivalent = "\r"
         content.addSubview(button)
+        if permission && !rescue {
+            let dismiss = NSButton(title: "Dismiss", target: self, action: #selector(dismissError))
+            dismiss.frame = CGRect(x: 150, y: 20, width: 110, height: 32)
+            content.addSubview(dismiss)
+        }
         rescueButton = button
         panel.contentView = content
         panel.center()
@@ -338,10 +355,13 @@ final class VideoSession {
         errorPanel = panel
     }
 
-    @objc private func dismissError() {
+    @objc func dismissError() {
         guard completedUnpublishedMovie == nil else { return }
         errorPanel?.orderOut(nil)
         errorPanel = nil
+        errorText = nil
+        rescueButton = nil
+        isErrorPresented = false
         error = nil
         onChange?()
     }
@@ -397,9 +417,7 @@ final class VideoSession {
             recorder = nil
             sessionID = nil
             state.finish()
-            error = nil
-            errorPanel?.orderOut(nil)
-            errorPanel = nil
+            dismissError()
             removeUnfinished(movie.deletingLastPathComponent())
             sessions.finish(id)
         case .failure(let failure):

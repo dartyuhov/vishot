@@ -48,7 +48,11 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
     private var lastFrame: CVPixelBuffer?
     private var terminalError: Error?
     private var stopTask: Task<Output, Error>?
-    private var streamStart: Task<Void, Error>?
+    private var startCapture: ((@escaping (Error?) -> Void) -> Void)!
+    private var stopCapture: ((@escaping (Error?) -> Void) -> Void)!
+    private var startupTimeout: TimeInterval = 5
+    @MainActor private var starting: VideoStreamOperation?
+    @MainActor private var stopping = false
     @MainActor private(set) var hasCompletedMovie = false
     @MainActor var onFailure: ((Error) -> Void)?
 
@@ -93,12 +97,27 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
         config.scalesToFit = true
         config.preservesAspectRatio = true
         recorder.stream = SCStream(filter: filter, configuration: config, delegate: recorder)
+        recorder.startCapture = { [stream = recorder.stream!] completion in stream.startCapture { completion($0) } }
+        recorder.stopCapture = { [stream = recorder.stream!] completion in stream.stopCapture { completion($0) } }
         try recorder.stream.addStreamOutput(recorder, type: .screen, sampleHandlerQueue: recorder.callbacks)
         do { try await recorder.onMedia { try recorder.prepareWriter() } }
         catch {
             try? recorder.stream.removeStreamOutput(recorder, type: .screen)
             throw error
         }
+        return recorder
+    }
+
+    /// Exercises the production media pipeline without a desktop capture. Only
+    /// stream operations and clock readings are supplied by the caller.
+    static func preparedWriter(rectangle: VideoRectangle, directory: URL, startupTimeout: TimeInterval = 5,
+        startCapture: @escaping (@escaping (Error?) -> Void) -> Void = { $0(nil) },
+        stopCapture: @escaping (@escaping (Error?) -> Void) -> Void = { $0(nil) }) async throws -> VideoRecorder {
+        let recorder = try VideoRecorder(directory: directory, rectangle: rectangle)
+        recorder.startCapture = startCapture
+        recorder.stopCapture = stopCapture
+        recorder.startupTimeout = startupTimeout
+        try await recorder.onMedia { try recorder.prepareWriter() }
         return recorder
     }
 
@@ -132,19 +151,34 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
     }
 
     @MainActor func start() async throws {
-        let start = Task { try await self.stream.startCapture() }
-        streamStart = start
-        try await start.value
-        // A static display still supplies an initial complete frame. Never wait forever.
-        for _ in 0..<100 {
+        guard !stopping else { throw CancellationError() }
+        let operation = VideoStreamOperation()
+        starting = operation
+        var ready = false
+        defer {
+            if !ready {
+                operation.abandon()
+                intake.close(at: CMClockGetTime(CMClockGetHostTimeClock()))
+            }
+        }
+        let stop = stopCapture!
+        startCapture { error in
+            // An OS operation is not necessarily cancellation-cooperative. A
+            // late successful start must stop its own stream, never reopen intake.
+            if !operation.complete(error), error == nil { stop { _ in } }
+        }
+        let deadline = ProcessInfo.processInfo.systemUptime + startupTimeout
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            guard !stopping, !Task.isCancelled else { operation.abandon(); throw CancellationError() }
+            if let result = operation.result { try result.get() }
             let started = try await onMedia { () throws -> Bool in
                 if let error = self.terminalError { throw error }
                 return self.timeline.origin != nil
             }
-            if started { return }
-            try await Task.sleep(nanoseconds: 50_000_000)
+            if started, operation.result != nil { ready = true; return }
+            try await Task.sleep(nanoseconds: 5_000_000)
         }
-        throw SettingsError(message: "Recording received no complete frame within five seconds.")
+        throw SettingsError(message: "Recording startup timed out before the stream and first complete frame were ready.")
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sample: CMSampleBuffer, of type: SCStreamOutputType) {
@@ -158,41 +192,51 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
         guard status == SCFrameStatus.complete.rawValue, intake.admit(sample.presentationTimeStamp) else { return }
         media.async {
             defer { self.intake.release() }
-            self.append(sample)
+            if let source = sample.imageBuffer {
+                _ = self.append(source, at: sample.presentationTimeStamp, host: CMClockGetTime(CMClockGetHostTimeClock()))
+            }
         }
     }
 
-    private func append(_ sample: CMSampleBuffer) {
-        let time = sample.presentationTimeStamp
-        guard terminalError == nil, intake.allows(time), input.isReadyForMoreMediaData,
-              let source = sample.imageBuffer else { return }
+    /// Synthetic buffers enter the same bounded intake, normalization, timing,
+    /// append and finalization path as complete SCStream frames.
+    func receiveFrame(_ source: CVPixelBuffer, at time: CMTime, host: CMTime) async -> Bool {
+        guard intake.admit(time) else { return false }
+        return (try? await onMedia {
+            defer { self.intake.release() }
+            return self.append(source, at: time, host: host)
+        }) ?? false
+    }
+
+    private func append(_ source: CVPixelBuffer, at time: CMTime, host: CMTime) -> Bool {
+        guard terminalError == nil, intake.allows(time), input.isReadyForMoreMediaData else { return false }
         guard CVPixelBufferGetWidth(source) == canvas.width, CVPixelBufferGetHeight(source) == canvas.height else {
-            fail(SettingsError(message: "Recording surface dimensions changed unexpectedly.")); return
+            fail(SettingsError(message: "Recording surface dimensions changed unexpectedly.")); return false
         }
         // This is a runtime guard, not a claim that the clock mapping has been
         // validated on every supported OS. Never admit samples from a foreign epoch.
-        let host = CMClockGetTime(CMClockGetHostTimeClock())
         guard abs(CMTimeGetSeconds(host - time)) < 5 else {
-            fail(SettingsError(message: "Screen recording timestamps do not match the host clock.")); return
+            fail(SettingsError(message: "Screen recording timestamps do not match the host clock.")); return false
         }
         var buffer: CVPixelBuffer?
         let result = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(nil, pool,
             [kCVPixelBufferPoolAllocationThresholdKey: 6] as CFDictionary, &buffer)
         guard result == kCVReturnSuccess, let buffer else {
             if result != kCVReturnWouldExceedAllocationThreshold { fail(SettingsError(message: "Recording buffer allocation failed.")) }
-            return
+            return false
         }
         let image = CIImage(cvPixelBuffer: source)
         let bounds = CGRect(x: 0, y: 0, width: canvas.width, height: canvas.height)
         let opaque = canvas.normalize(image)
         context.render(opaque, to: buffer, bounds: bounds, colorSpace: space)
         CVBufferSetAttachment(buffer, kCVImageBufferCGColorSpaceKey, space, .shouldPropagate)
-        guard let relative = timeline.admit(time) else { return }
+        guard let relative = timeline.admit(time) else { return false }
         if relative == .zero { writer.startSession(atSourceTime: .zero) }
         guard adaptor.append(buffer, withPresentationTime: relative) else {
-            fail(writer.error ?? SettingsError(message: "Video frame append failed.")); return
+            fail(writer.error ?? SettingsError(message: "Video frame append failed.")); return false
         }
         lastFrame = buffer
+        return true
     }
 
     private func fail(_ error: Error) {
@@ -207,6 +251,7 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
     }
 
     private func sourceFailed(_ error: Error) {
+        guard !intake.isClosed else { return }
         // Close on the callback thread, then drain already admitted work before
         // marking the source error. Source loss is not a failed writer append.
         intake.close(at: CMClockGetTime(CMClockGetHostTimeClock()))
@@ -223,19 +268,22 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
     /// Main-thread entry; repeated requests share exactly one finalization task.
     @MainActor func stop(at endpoint: CMTime = CMClockGetTime(CMClockGetHostTimeClock())) async throws -> Output {
         if let stopTask { return try await stopTask.value }
+        stopping = true
+        starting?.abandon()
         intake.close(at: endpoint)
-        let start = streamStart
         let task = Task.detached(priority: .userInitiated) { () throws -> Output in
-            _ = try? await start?.value
             var stopError: Error?
             do {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    self.stream.stopCapture { error in
-                        if let error { continuation.resume(throwing: error) } else { continuation.resume() }
-                    }
+                let operation = VideoStreamOperation()
+                self.stopCapture { _ = operation.complete($0) }
+                let deadline = ProcessInfo.processInfo.systemUptime + self.startupTimeout
+                while operation.result == nil, ProcessInfo.processInfo.systemUptime < deadline {
+                    try await Task.sleep(nanoseconds: 5_000_000)
                 }
+                guard let result = operation.result else { throw SettingsError(message: "Screen recording stop timed out.") }
+                try result.get()
             } catch { stopError = error }
-            try? self.stream.removeStreamOutput(self, type: .screen)
+            try? self.stream?.removeStreamOutput(self, type: .screen)
             // A callback admitted just before Stop must enqueue its media work
             // before the finish marker is queued on the separate media worker.
             self.callbacks.sync {}
@@ -273,7 +321,7 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
             self.writer.cancelWriting()
             try? FileManager.default.removeItem(at: self.movie)
         }
-        try? stream.removeStreamOutput(self, type: .screen)
+        try? stream?.removeStreamOutput(self, type: .screen)
     }
 
     private func finishFrames(at host: CMTime) throws {
@@ -324,4 +372,19 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
             media.async { continuation.resume(with: Result(catching: body)) }
         }
     }
+}
+
+/// A callback may settle only once; abandoning never waits for the OS callback.
+private final class VideoStreamOperation {
+    private let lock = NSLock()
+    private var abandoned = false
+    private var settled: Result<Void, Error>?
+    var result: Result<Void, Error>? { lock.lock(); defer { lock.unlock() }; return settled }
+    func complete(_ error: Error?) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !abandoned, settled == nil else { return false }
+        settled = error.map { .failure($0) } ?? .success(())
+        return true
+    }
+    func abandon() { lock.lock(); abandoned = true; lock.unlock() }
 }

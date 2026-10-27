@@ -114,10 +114,10 @@ final class HistoryLibrary {
         }
     }
 
-    func publishVideo(staging: URL, video: HistoryVideo, label: String,
+    func publishVideo(staging: URL, video: HistoryVideo, label: String, windowTitle: String = "",
                       completion: @escaping (Result<HistoryEntry, Error>) -> Void) {
         worker.async {
-            let result = Result { try self.store.publishVideo(staging: staging, video: video, label: label) }
+            let result = Result { try self.store.publishVideo(staging: staging, video: video, label: label, windowTitle: windowTitle) }
             if case .success = result {
                 do { try self.publish() } catch { self.report(error, operation: .publication) }
             }

@@ -2,12 +2,118 @@ import XCTest
 import CoreMedia
 @testable import Vishot
 
-/// Recorder results are injected at the validated-output boundary. Actual MP4
-/// decoding is covered by HistoryVideoActionsTests' real H.264 fixture.
+/// Orchestration faults use injected results; stalled stream operations also
+/// exercise the production recorder. VideoWriterTests covers actual MP4 output.
 @MainActor final class VideoInterruptionTests: XCTestCase {
     private let rectangle = VideoRectangle(display: VideoDisplay(id: 1,
         frame: CGRect(x: 0, y: 0, width: 100, height: 100), scale: 1),
         rect: CGRect(x: 0, y: 0, width: 100, height: 100))
+
+    func testProductionRecorderStalledStartTimesOutAndLateCompletionCannotReviveIt() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let directory = try fixture.store.stageVideo()
+        var completion: ((Error?) -> Void)?
+        var stops = 0
+        let recorder = try await VideoRecorder.preparedWriter(rectangle: rectangle, directory: directory,
+            startupTimeout: 0.05, startCapture: { completion = $0 }, stopCapture: { done in stops += 1; done(nil) })
+        do { try await recorder.start(); XCTFail("Stalled OS startup must time out") } catch {}
+        do { _ = try await recorder.stop(at: .zero); XCTFail("No frames cannot succeed") } catch {}
+        completion?(nil)
+        try await eventually { stops == 2 }
+        XCTAssertFalse(recorder.hasCompletedMovie)
+    }
+
+    func testProductionRecorderStartedStreamWithoutFramesAlsoTimesOutAndStalledStopIsBounded() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let recorder = try await VideoRecorder.preparedWriter(rectangle: rectangle,
+            directory: fixture.store.stageVideo(), startupTimeout: 0.05, stopCapture: { _ in })
+        do { try await recorder.start(); XCTFail("No-frame startup must time out") } catch {}
+        do { _ = try await recorder.stop(at: .zero); XCTFail("No frames cannot succeed") } catch {}
+        XCTAssertFalse(recorder.hasCompletedMovie)
+    }
+
+    func testTargetResolutionFailurePresentsPersistentErrorAndReleasesPickerOwnership() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        var reports = 0
+        let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
+            resolve: { _ in throw SettingsError(message: "Target disappeared") },
+            countdownTick: {}, presentsControls: false, reportError: { _, _ in reports += 1 })
+        video.onDismissPicker = { fixture.sessions.dismissPresentation(fixture.id) }
+        try begin(video, fixture)
+        try await eventually { !fixture.sessions.isSessionActive }
+        XCTAssertEqual(reports, 1)
+        XCTAssertTrue(video.isErrorPresented)
+        XCTAssertEqual(video.error, "Target disappeared")
+    }
+
+    func testProductionStopAndQuitReleaseStalledOSStartWithoutWaitingForCompletion() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        var completion: ((Error?) -> Void)?
+        let video = makeSession(fixture, prepare: { directory in
+            try await VideoRecorder.preparedWriter(rectangle: self.rectangle, directory: directory,
+                startupTimeout: 0.2, startCapture: { completion = $0 }, stopCapture: { $0(nil) })
+        })
+        try begin(video, fixture)
+        try await eventually { completion != nil }
+        video.prepareToQuit()
+        _ = fixture.sessions.requestQuit()
+        try await eventually { !fixture.sessions.isSessionActive }
+        XCTAssertNotNil(video.error)
+        completion?(nil)
+        await Task.yield()
+        XCTAssertFalse(video.canStop)
+        XCTAssertTrue(try fixture.store.entries().isEmpty)
+    }
+
+    func testOrdinaryStartupFailurePersistsUntilDismissedOrNextSession() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        var fail = true
+        var reports: [String] = []
+        let video = makeSession(fixture, prepare: { directory in
+            if fail { throw CocoaError(.fileWriteOutOfSpace) }
+            return try Recorder(directory: directory)
+        }, report: { reports.append($0) })
+        try begin(video, fixture)
+        try await eventually { !fixture.sessions.isSessionActive }
+        XCTAssertEqual(reports.count, 1)
+        XCTAssertTrue(video.isErrorPresented)
+        video.dismissError()
+        XCTAssertFalse(video.isErrorPresented)
+        XCTAssertNil(video.error)
+        try begin(video, fixture)
+        try await eventually { video.isErrorPresented }
+        fail = false
+        try begin(video, fixture)
+        XCTAssertFalse(video.isErrorPresented)
+        XCTAssertNil(video.error)
+        try await eventually { video.canStop }
+        video.stop()
+        try await eventually { !fixture.sessions.isSessionActive }
+        XCTAssertFalse(video.isErrorPresented)
+        XCTAssertNil(video.error)
+    }
+
+    func testWindowAndElementTitlesSurviveSessionPublicationAndAreSearchable() async throws {
+        for kind in [CaptureTarget.Kind.window(42), .element(windowID: 42, rect: rectangle.rect)] {
+            let fixture = try Fixture()
+            defer { fixture.remove() }
+            let video = makeSession(fixture, prepare: { try Recorder(directory: $0) })
+            fixture.sessions.capture()
+            let target = CaptureTarget(kind: kind, frame: rectangle.rect, anchor: .zero, label: "Editor")
+            video.begin(selection: try VideoSelection(target: target, windowFrame: rectangle.rect),
+                session: fixture.id, label: target.label, windowTitle: "Unique document 934")
+            try await eventually { video.canStop }
+            video.stop()
+            try await eventually { !fixture.sessions.isSessionActive }
+            let entries = try fixture.store.entries()
+            XCTAssertEqual(HistorySearch.matches("Unique document 934", in: entries).count, 1)
+        }
+    }
 
     func testStopWhileStartIsSuspendedWaitsForStartupOwnerAndIgnoresDelayedStartFailure() async throws {
         let fixture = try Fixture()

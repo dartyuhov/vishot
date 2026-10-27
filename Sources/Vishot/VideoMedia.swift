@@ -125,13 +125,18 @@ struct VideoTimeline {
     private(set) var last: CMTime?
     mutating func admit(_ host: CMTime) -> CMTime? {
         guard host.isNumeric, host >= .zero, last.map({ host > $0 }) ?? true else { return nil }
+        // Enforce the output cadence as well as asking SCStream for it. Keep
+        // original timestamps when dropping, so elapsed time is never compressed.
+        if let last, host - last < CMTime(value: 1, timescale: 30) { return nil }
         if origin == nil { origin = host }
         last = host
         return host - origin!
     }
     func endpoint(host: CMTime) -> CMTime? {
         guard let origin, let last, host.isNumeric else { return nil }
-        return max(host - origin, last - origin + CMTime(value: 1, timescale: 600))
+        // Every presented sample occupies at least one nominal frame. For an
+        // immediate Stop this adds <1/30s, within A10, instead of advertising 600fps.
+        return max(host - origin, last - origin + CMTime(value: 1, timescale: 30))
     }
 }
 
@@ -140,6 +145,7 @@ final class VideoIntake {
     private let lock = NSLock()
     private var pending = 0
     private var cutoff: CMTime?
+    var isClosed: Bool { lock.lock(); defer { lock.unlock() }; return cutoff != nil }
     func admit(_ time: CMTime) -> Bool {
         lock.lock(); defer { lock.unlock() }
         guard cutoff == nil, pending < 3, time.isNumeric else { return false }

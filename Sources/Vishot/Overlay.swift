@@ -351,8 +351,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
                     self?.videoRectangle = rect
                     self?.render()
                 }
-                video?.begin(selection: selection, session: session, label: target.label)
-            } catch { status = error.localizedDescription; render() }
+                captureMetadata(for: target)
+                video?.begin(selection: selection, session: session, label: captureLabel, windowTitle: captureWindowTitle)
+            } catch { video?.presentStartupFailure(error, session: session) }
             return
         }
         captureMetadata(for: target)

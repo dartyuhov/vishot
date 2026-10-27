@@ -16,6 +16,37 @@ final class HistoryVideoActionsTests: XCTestCase {
         try? FileManager.default.removeItem(at: root)
     }
 
+    func testValidationCacheAvoidsRepeatedDecodeAndDetectsDamageMissingAndReplacement() throws {
+        let bytes = try playableMovie()
+        let entry = try publish(movie: bytes)
+        var decodes = 0
+        let cached = HistoryStore(url: store.url, validateMovie: { url, width, height in
+            decodes += 1
+            try await VideoRecorder.validateMovie(at: url, width: width, height: height)
+        })
+        let movie = try store.movieURL(entry)
+        XCTAssertFalse(try XCTUnwrap(cached.entries().first).unavailable)
+        _ = try cached.validatedMovieURL(entry)
+        _ = try cached.entries()
+        XCTAssertEqual(decodes, 1)
+        // Same inode, same length, restored mtime: ctime must still invalidate.
+        let attributes = try FileManager.default.attributesOfItem(atPath: movie.path)
+        try Data(repeating: 0, count: bytes.count).write(to: movie)
+        try FileManager.default.setAttributes([.modificationDate: attributes[.modificationDate]!], ofItemAtPath: movie.path)
+        XCTAssertTrue(try XCTUnwrap(cached.entries().first).unavailable)
+        XCTAssertTrue(try XCTUnwrap(cached.entries().first).unavailable)
+        XCTAssertEqual(decodes, 2, "Known corruption is cached as well")
+        try FileManager.default.removeItem(at: movie)
+        XCTAssertTrue(try XCTUnwrap(cached.entries().first).unavailable)
+        XCTAssertEqual(decodes, 2, "Missing files need no decoder")
+        try bytes.write(to: movie, options: .atomic)
+        XCTAssertFalse(try XCTUnwrap(cached.entries().first).unavailable)
+        XCTAssertEqual(decodes, 3)
+        try bytes.write(to: movie, options: .atomic)
+        _ = try cached.validatedMovieURL(entry)
+        XCTAssertEqual(decodes, 4, "Replacing a movie invalidates a successful result")
+    }
+
     func testCompletedRescueProducesPlayableIndependentMovieAndClearCannotRemoveStaging() async throws {
         let directory = try store.stageVideo()
         let movie = directory.appendingPathComponent("completed.mp4")
