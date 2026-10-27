@@ -84,6 +84,51 @@ final class HistoryLibrary {
         }
     }
 
+    func stageVideo(completion: @escaping (Result<URL, Error>) -> Void) {
+        worker.async {
+            let result = Result { try self.store.stageVideo() }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func publishVideo(staging: URL, video: HistoryVideo, label: String,
+                      completion: @escaping (Result<HistoryEntry, Error>) -> Void) {
+        worker.async {
+            let result = Result { try self.store.publishVideo(staging: staging, video: video, label: label) }
+            if case .success = result {
+                do { try self.publish() } catch { self.report(error, operation: .publication) }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// Resolve under the serial storage boundary with a retention hold covering player launch.
+    func openVideo(_ entry: HistoryEntry, completion: @escaping (Bool) -> Void) {
+        hold(entry.id)
+        worker.async {
+            let result = Result { try self.store.movieURL(entry) }
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let url):
+                    // Validation runs off-main; opening an unavailable/corrupt movie must
+                    // never send it into the screenshot editor.
+                    Task {
+                        do {
+                            try await VideoRecorder.validateMovie(at: url, width: entry.video!.width, height: entry.video!.height)
+                            let opened = NSWorkspace.shared.open(url)
+                            completion(opened)
+                        } catch { self.report(error, operation: .load(entry.id)); completion(false) }
+                        self.release(entry.id)
+                    }
+                case .failure(let error):
+                    self.report(error, operation: .load(entry.id))
+                    completion(false)
+                    self.release(entry.id)
+                }
+            }
+        }
+    }
+
     @discardableResult
     func image(_ entry: HistoryEntry, thumbnail: Bool, maxPixelSize: Int? = nil,
                completion: @escaping (CGImage?) -> Void) -> HistoryImageRequest {
@@ -184,14 +229,14 @@ final class HistoryLibrary {
             self.updateError()
         }
         // Queue only one job ahead. Completion schedules the next from fresh committed metadata.
-        guard indexing.isEmpty, let entry = entries.first(where: { $0.recognizedText == nil }) else { return }
+        guard indexing.isEmpty, let entry = entries.first(where: { $0.video == nil && $0.recognizedText == nil }) else { return }
         scheduleIndex(entry)
     }
 
     private var failedIndex: Set<UUID> = []
     private func scheduleIndex(_ entry: HistoryEntry) {
         guard !failedIndex.contains(entry.revision) else {
-            if let next = try? store.entries().first(where: { $0.recognizedText == nil && !failedIndex.contains($0.revision) }) { scheduleIndex(next) }
+            if let next = try? store.entries().first(where: { $0.video == nil && $0.recognizedText == nil && !failedIndex.contains($0.revision) }) { scheduleIndex(next) }
             return
         }
         let key = entry.revision.uuidString

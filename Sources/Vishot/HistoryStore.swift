@@ -18,8 +18,75 @@ struct HistoryEntry: Codable, Equatable {
     var snapshot: EditSnapshot
     var undo: [EditSnapshot]
     var recognizedText: String?
+    var video: HistoryVideo? = nil
+    /// Transient disk availability; never written into retained metadata.
+    var unavailable = false
+
+    private enum Keys: String, CodingKey {
+        case schema, id, revision, createdAt, modifiedAt, label, windowTitle, payload
+        case scale, snapshot, undo, recognizedText
+    }
+    private struct Screenshot: Codable {
+        let scale: CGFloat
+        let snapshot: EditSnapshot
+        let undo: [EditSnapshot]
+        let recognizedText: String?
+    }
+    private enum Payload: Codable { case screenshot(Screenshot), video(HistoryVideo) }
+
+    init(schema: Int = 1, id: UUID, revision: UUID, createdAt: Date, modifiedAt: Date, scale: CGFloat,
+         label: String, windowTitle: String, snapshot: EditSnapshot, undo: [EditSnapshot], recognizedText: String? = nil,
+         video: HistoryVideo? = nil) {
+        self.schema = schema; self.id = id; self.revision = revision
+        self.createdAt = createdAt; self.modifiedAt = modifiedAt; self.scale = scale
+        self.label = label; self.windowTitle = windowTitle; self.snapshot = snapshot; self.undo = undo
+        self.recognizedText = recognizedText; self.video = video
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: Keys.self)
+        schema = try values.decode(Int.self, forKey: .schema)
+        guard schema == 1 || schema == 2 else { throw SettingsError(message: "Unsupported History schema \(schema).") }
+        id = try values.decode(UUID.self, forKey: .id)
+        revision = try values.decode(UUID.self, forKey: .revision)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        modifiedAt = try values.decode(Date.self, forKey: .modifiedAt)
+        label = try values.decode(String.self, forKey: .label)
+        windowTitle = try values.decode(String.self, forKey: .windowTitle)
+        if schema == 1 {
+            scale = try values.decode(CGFloat.self, forKey: .scale)
+            snapshot = try values.decode(EditSnapshot.self, forKey: .snapshot)
+            undo = try values.decode([EditSnapshot].self, forKey: .undo)
+            recognizedText = try values.decodeIfPresent(String.self, forKey: .recognizedText)
+        } else {
+            switch try values.decode(Payload.self, forKey: .payload) {
+            case .screenshot(let screenshot):
+                scale = screenshot.scale; snapshot = screenshot.snapshot; undo = screenshot.undo
+                recognizedText = screenshot.recognizedText
+            case .video(let payload):
+                video = payload; scale = payload.scale
+                snapshot = EditSnapshot(annotations: [], crop: nil); undo = []; recognizedText = nil
+            }
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: Keys.self)
+        try values.encode(schema, forKey: .schema)
+        try values.encode(id, forKey: .id); try values.encode(revision, forKey: .revision)
+        try values.encode(createdAt, forKey: .createdAt); try values.encode(modifiedAt, forKey: .modifiedAt)
+        try values.encode(label, forKey: .label); try values.encode(windowTitle, forKey: .windowTitle)
+        if schema == 1 {
+            try values.encode(scale, forKey: .scale); try values.encode(snapshot, forKey: .snapshot)
+            try values.encode(undo, forKey: .undo); try values.encodeIfPresent(recognizedText, forKey: .recognizedText)
+        } else {
+            let payload = video.map(Payload.video) ?? .screenshot(Screenshot(scale: scale, snapshot: snapshot, undo: undo, recognizedText: recognizedText))
+            try values.encode(payload, forKey: .payload)
+        }
+    }
 
     var searchFields: [String] {
+        if let video { return [label, windowTitle, video.movie] }
         // Fully visible annotation strings are exact searchable data even before OCR completes.
         // Partially clipped strings rely on rendered OCR so hidden characters never leak.
         let text = snapshot.annotations.compactMap { annotation -> String? in
@@ -53,7 +120,8 @@ final class HistoryStore {
     private func metadata(_ id: UUID) -> URL { folder(id).appendingPathComponent("entry.json") }
     private func read(_ id: UUID) throws -> HistoryEntry {
         let entry = try JSONDecoder().decode(HistoryEntry.self, from: Data(contentsOf: metadata(id)))
-        guard entry.schema == 1, entry.id == id else { throw SettingsError(message: "Unsupported History entry \(id).") }
+        guard (entry.schema == 1 || entry.schema == 2), entry.id == id else { throw SettingsError(message: "Unsupported History entry \(id).") }
+        if let video = entry.video { try video.validate() }
         guard entry.scale.isFinite, entry.scale > 0 else { throw SettingsError(message: "Invalid History scale.") }
         for snapshot in [entry.snapshot] + entry.undo {
             func valid(_ point: CGPoint) -> Bool { point.x.isFinite && point.y.isFinite && abs(point.x) <= 1_000_000 && abs(point.y) <= 1_000_000 }
@@ -79,8 +147,16 @@ final class HistoryStore {
         for child in try files.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
             guard let id = UUID(uuidString: child.lastPathComponent) else { continue }
             do {
+                var entry = try read(id)
                 if files.fileExists(atPath: child.appendingPathComponent("deleted").path) { continue }
-                let entry = try read(id)
+                if entry.video != nil {
+                    if (try? movieURL(entry)) == nil {
+                        entry.unavailable = true
+                        warnings.append("History video \(id) is unavailable.")
+                    }
+                    entries.append(entry)
+                    continue
+                }
                 guard files.fileExists(atPath: child.appendingPathComponent("original.png").path),
                       files.fileExists(atPath: asset(entry, "preview").path),
                       files.fileExists(atPath: asset(entry, "thumbnail").path) else {
@@ -93,14 +169,21 @@ final class HistoryStore {
     }
 
     private func asset(_ entry: HistoryEntry, _ name: String) -> URL {
-        folder(entry.id).appendingPathComponent("\(entry.revision.uuidString)-\(name).png")
+        if let video = entry.video { return folder(entry.id).appendingPathComponent(video.thumbnail) }
+        return folder(entry.id).appendingPathComponent("\(entry.revision.uuidString)-\(name).png")
     }
 
     @discardableResult
     func commit(document: EditDocument, undo: [EditSnapshot], label: String, windowTitle: String = "",
                 id: UUID? = nil, now: Date = Date()) throws -> HistoryEntry {
         let previous = try id.map(read)
-        if let previous, previous.snapshot == document.snapshot { return previous }
+        guard previous?.video == nil else { throw SettingsError(message: "Videos cannot be edited as screenshots.") }
+        if var previous, previous.snapshot == document.snapshot, previous.schema == 1 {
+            previous.schema = 2
+            try JSONEncoder().encode(previous).write(to: metadata(previous.id), options: .atomic)
+            return previous
+        }
+        if let previous, previous.snapshot == document.snapshot, previous.schema == 2 { return previous }
         guard document.scale.isFinite, document.scale > 0,
               let preview = AnnotationRenderer.export(document),
               let previewData = ImageEncoding.data(preview, scale: document.scale, type: .png),
@@ -108,7 +191,7 @@ final class HistoryStore {
               let thumbnailData = ImageEncoding.data(thumbnail, scale: 1, type: .png) else {
             throw SettingsError(message: "Could not prepare History image.")
         }
-        let entry = HistoryEntry(id: previous?.id ?? UUID(), revision: UUID(), createdAt: previous?.createdAt ?? now,
+        let entry = HistoryEntry(schema: 2, id: previous?.id ?? UUID(), revision: UUID(), createdAt: previous?.createdAt ?? now,
             modifiedAt: now, scale: document.scale, label: previous?.label ?? label,
             windowTitle: previous?.windowTitle ?? windowTitle, snapshot: document.snapshot, undo: undo)
         let directory = folder(entry.id)
@@ -140,6 +223,7 @@ final class HistoryStore {
 
     func load(_ id: UUID) throws -> HistoryDocument {
         let entry = try read(id)
+        guard entry.video == nil else { throw SettingsError(message: "Videos open in the default player.") }
         let image = try Self.image(at: folder(id).appendingPathComponent("original.png"))
         guard entry.scale.isFinite, entry.scale > 0 else { throw SettingsError(message: "Invalid History image scale.") }
         var document = EditDocument(image: image, scale: entry.scale)
@@ -212,8 +296,9 @@ final class HistoryStore {
     @discardableResult
     func index(_ id: UUID, revision: UUID, text: String) throws -> Bool {
         guard !files.fileExists(atPath: folder(id).appendingPathComponent("deleted").path),
-              let entry = try? read(id), entry.revision == revision else { return false }
+               let entry = try? read(id), entry.video == nil, entry.revision == revision else { return false }
         var indexed = entry
+        indexed.schema = 2
         indexed.recognizedText = text
         try JSONEncoder().encode(indexed).write(to: metadata(id), options: .atomic)
         return true
@@ -241,15 +326,20 @@ final class HistoryStore {
 
     /// Called on startup only: interrupted deletions and orphan revision files are not recoverable.
     func recover() throws {
+        if files.fileExists(atPath: stagingURL.path) { try files.removeItem(at: stagingURL) }
         _ = try entries()
         for directory in try files.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
             guard let id = UUID(uuidString: directory.lastPathComponent) else { continue }
+            // Unknown schemas are not ours to interpret, even if a future version
+            // left a deletion marker. Explicit Clear is the only broad removal.
+            if files.fileExists(atPath: metadata(id).path), (try? read(id)) == nil { continue }
             if files.fileExists(atPath: directory.appendingPathComponent("deleted").path) {
                 try files.removeItem(at: directory)
             } else if !files.fileExists(atPath: metadata(id).path) {
                 try files.removeItem(at: directory)
             } else if let entry = try? read(id) {
-                let keep: Set<String> = ["entry.json", "original.png", asset(entry, "preview").lastPathComponent, asset(entry, "thumbnail").lastPathComponent]
+                let keep: Set<String> = entry.video.map { ["entry.json", $0.movie, $0.thumbnail] }
+                    ?? ["entry.json", "original.png", asset(entry, "preview").lastPathComponent, asset(entry, "thumbnail").lastPathComponent]
                 for file in try files.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
                     where !keep.contains(file.lastPathComponent) { try files.removeItem(at: file) }
             }
@@ -301,5 +391,49 @@ final class HistoryStore {
         context.interpolationQuality = .high
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         return context.makeImage()
+    }
+
+    var stagingURL: URL { url.deletingLastPathComponent().appendingPathComponent("RecordingSessions", isDirectory: true) }
+
+    func stageVideo() throws -> URL {
+        let directory = stagingURL.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try files.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    /// The recorder validates the movie before this disk-only transaction. Failed
+    /// publication leaves staging owned by the active session for completed-file rescue.
+    func publishVideo(staging: URL, video: HistoryVideo, label: String, windowTitle: String = "", now: Date = Date()) throws -> HistoryEntry {
+        try video.validate()
+        guard staging.deletingLastPathComponent().standardizedFileURL == stagingURL.standardizedFileURL,
+              UUID(uuidString: staging.lastPathComponent) != nil else { throw SettingsError(message: "Invalid recording staging directory.") }
+        for name in [video.movie, video.thumbnail] {
+            let file = staging.appendingPathComponent(name)
+            let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true, (values.fileSize ?? 0) > 0 else {
+                throw SettingsError(message: "Recording asset is unavailable.")
+            }
+        }
+        let entry = HistoryEntry(schema: 2, id: UUID(), revision: UUID(), createdAt: now, modifiedAt: now,
+            scale: video.scale, label: label, windowTitle: windowTitle,
+            snapshot: EditSnapshot(annotations: [], crop: nil), undo: [], video: video)
+        try files.createDirectory(at: url, withIntermediateDirectories: true)
+        try JSONEncoder().encode(entry).write(to: staging.appendingPathComponent("entry.json"), options: .atomic)
+        try files.moveItem(at: staging, to: folder(entry.id))
+        return entry
+    }
+
+    func movieURL(_ entry: HistoryEntry) throws -> URL {
+        guard let video = entry.video, try read(entry.id).revision == entry.revision,
+              !files.fileExists(atPath: folder(entry.id).appendingPathComponent("deleted").path) else {
+            throw SettingsError(message: "History video is unavailable.")
+        }
+        try video.validate()
+        let movie = folder(entry.id).appendingPathComponent(video.movie)
+        let values = try movie.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true, (values.fileSize ?? 0) > 0 else {
+            throw SettingsError(message: "History video is unavailable.")
+        }
+        return movie
     }
 }

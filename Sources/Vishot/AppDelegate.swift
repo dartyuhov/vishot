@@ -49,6 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsItem: NSMenuItem?
     private var overlay: OverlayController?
     private let sessions = CaptureSessionCoordinator()
+    private var video: VideoSession?
+    private var stopItem: NSMenuItem?
     private var launchAtLoginItem: NSMenuItem?
     private lazy var setup = SetupFlow.live()
     private var setupWindow: SetupWindow?
@@ -58,6 +60,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Fonts.register()
         let overlay = OverlayController(sessions: sessions)
         self.overlay = overlay
+        let video = VideoSession(sessions: sessions, history: overlay.historyLibrary)
+        self.video = video
+        overlay.video = video
+        video.onCountdown = { [weak overlay] in overlay?.videoCountdownStatus($0) }
+        video.onReturnToPicker = { [weak overlay] in overlay?.videoReturnToPicker($0) }
+        video.onDismissPicker = { [weak overlay] in overlay?.dismissForVideo() }
+        video.onChange = { [weak self] in self?.settingsChanged() }
         sessions.onCapture = { [weak overlay] in overlay?.show(session: $0) ?? false }
         sessions.onHistory = { [weak overlay] in overlay?.showHistory(session: $0) ?? false }
         sessions.onCaptureAgain = { [weak overlay] in overlay?.toggle(session: $0) }
@@ -98,6 +107,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         capture.target = self
         menu.addItem(capture)
         captureItem = capture
+        let stop = NSMenuItem(title: "Stop Recording", action: #selector(stopRecording), keyEquivalent: "")
+        stop.target = self
+        stop.isHidden = true
+        menu.addItem(stop)
+        stopItem = stop
         let history = NSMenuItem(title: "Capture History", action: #selector(historyFromMenu), keyEquivalent: "")
         history.target = self
         menu.addItem(history)
@@ -160,6 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func historyFromMenu() { DispatchQueue.main.async { self.showHistory() } }
 
     private func capture() {
+        if video?.isActive == true { video?.stop(); return }
         if sessions.isSessionActive { sessions.capture(); return }
         if setupWindow?.window?.isVisible == true, setup.isShowingGuide {
             setupWindow?.takeFirstScreenshot()
@@ -192,7 +207,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let settings else { return }
         // A physical-key title remains accurate on non-Latin layouts; a
         // character-based menu equivalent would advertise a different key.
-        captureItem?.title = "Capture Window  (\(settings.active.shortcut.display))"
+        captureItem?.title = "Capture Window  (\(settings.active.shortcut.display))" + (video?.error == nil ? "" : " — Recording Error")
+        stopItem?.isHidden = video?.canStop != true
+        video?.shortcut = settings.active.shortcut
         historyItem?.title = "Capture History" + (settings.active.historyShortcut.map { "  (\($0.display))" } ?? "") + (overlay?.historyLibrary.error == nil ? "" : " — Storage Error")
         settingsItem?.title = settings.error == nil ? "Settings…" : "Settings… — Configuration Error"
         overlay?.watermark = settings.active.watermark
@@ -221,6 +238,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        sessions.requestQuit() ? .terminateNow : .terminateLater
+        video?.stop()
+        return sessions.requestQuit() ? .terminateNow : .terminateLater
     }
+
+    @objc private func stopRecording() { video?.stop() }
 }

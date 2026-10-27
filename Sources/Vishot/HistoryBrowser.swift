@@ -24,6 +24,7 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
     var onClose: (() -> Void)?
     var onEdit: ((UUID, NSScreen) -> Void)?
     var onYank: ((HistoryEntry) -> Void)?
+    var onOpenVideo: ((HistoryEntry) -> Void)?
     private(set) var screen: NSScreen?
     private var results: [HistoryEntry] {
         if cachedQuery != query {
@@ -147,11 +148,15 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
         view.title = "HISTORY"
         view.query = searching ? "/" + query + "▏" : ""
         view.keys = searching ? [HUDKey("←", "→", action: "select"), HUDKey("↵", action: "accept"), HUDKey("esc", action: "back")]
+            : selected?.video != nil ? [HUDKey("h/l", action: "move"), HUDKey("↵", action: "open video"),
+                HUDKey("/", action: "search"), HUDKey("d", action: "delete"), HUDKey("u", action: "restore"), HUDKey("esc", action: "close")]
             : [HUDKey("h/l", action: "move"), HUDKey("y", action: "yank"), HUDKey("e", action: "edit"),
                HUDKey("/", action: "search"), HUDKey("d", action: "delete"), HUDKey("u", action: "restore"), HUDKey("esc", action: "close")]
         if let entry = selected {
             let date = DateFormatter.localizedString(from: entry.createdAt, dateStyle: .medium, timeStyle: .short)
-            view.status = "\(index + 1)/\(matches.count) · \(entry.label) · \(date)" + (entry.recognizedText == nil ? " · indexing…" : "")
+            view.status = "\(index + 1)/\(matches.count) · \(entry.label) · \(date)" + (entry.video.map { " · VIDEO " + $0.durationLabel } ?? (entry.recognizedText == nil ? " · indexing…" : ""))
+            if entry.unavailable { view.status += " · Video unavailable (delete allowed)" }
+            if let error = library.error { view.status += " · " + error }
             if previewRevision != entry.revision {
                 previewRequest?.cancel()
                 previewRevision = entry.revision
@@ -185,6 +190,9 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
                         self.view?.preview = image
                         self.loadSelectedPreview()
                     }
+                } else if self.selected?.revision == entry.revision {
+                    self.view?.hideLoading()
+                    self.view?.empty = "Capture unavailable. You can delete this entry."
                 }
                 self.view?.thumbnails = self.thumbnailCache.mapValues(\.1)
                 self.view?.needsDisplay = true
@@ -240,9 +248,11 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
             case kVK_ANSI_H, kVK_LeftArrow: move(-1)
             case kVK_ANSI_L, kVK_RightArrow: move(1)
             case kVK_ANSI_Y:
-                if !event.isARepeat, let entry = selected { onYank?(entry) }
+                if !event.isARepeat, let entry = selected, entry.video == nil { onYank?(entry) }
+            case kVK_Return, kVK_ANSI_KeypadEnter:
+                if !event.isARepeat, let entry = selected, entry.video != nil, !entry.unavailable { onOpenVideo?(entry) }
             case kVK_ANSI_E:
-                if !event.isARepeat, let id = selectedID, let screen { onEdit?(id, screen) }
+                if !event.isARepeat, selected?.video == nil, let id = selectedID, let screen { onEdit?(id, screen) }
             case kVK_ANSI_Slash: searching = true
             case kVK_ANSI_D:
                 guard !event.isARepeat else { return }
@@ -267,7 +277,7 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
 
     func windowDidResignKey(_ notification: Notification) {
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.panel?.isVisible == true, self.panel?.isKeyWindow == false else { return }
+            guard let self, !self.busy, self.panel?.isVisible == true, self.panel?.isKeyWindow == false else { return }
             self.onClose?()
         }
     }
@@ -374,6 +384,9 @@ private final class HistoryView: NSView {
             Palette.surface.setFill()
             tile.fill()
             if let image = thumbnails[entry.id] { draw(image, in: tile.insetBy(dx: 6, dy: 6)) }
+            if let video = entry.video {
+                text("▶ " + video.durationLabel, at: CGPoint(x: tile.minX + 8, y: tile.minY + 6), font: Fonts.mono(13), color: .white, width: tile.width - 16)
+            }
             if entry.id == selectedID {
                 // Match the picker's 4 pt purple pixel ring, including its cut-out corners.
                 let ring = CGMutablePath()

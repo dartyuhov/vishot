@@ -62,6 +62,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var captureLabel = ""
     private var captureWindowTitle = ""
     private let sessions: CaptureSessionCoordinator
+    var video: VideoSession?
+    private var videoType = false
+    private var videoCountdown = false
     var watermark: Bool {
         get { capturer.watermark }
         set { capturer.watermark = newValue }
@@ -139,6 +142,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func toggle(session: Int) {
+        if videoCountdown { video?.cancelCountdown(); return }
         guard sessions.acceptsCallbacks(session) else { return }
         guard !isPresentingSavePanel else { return }
         guard !(isCapturing && editor != nil) else { return }
@@ -164,6 +168,22 @@ final class OverlayController: NSObject, NSWindowDelegate {
         browser.onEdit = { [weak self] id, screen in
             guard let self, sessions.acceptsCallbacks(session) else { return }
             editHistory(id, on: screen)
+        }
+        browser.onOpenVideo = { [weak self] entry in
+            guard let self, sessions.acceptsCallbacks(session) else { return }
+            isCapturing = true
+            browser.setBusy(true)
+            historyLibrary.openVideo(entry) { [weak self] opened in
+                guard let self, sessions.acceptsCallbacks(session) else { return }
+                self.isCapturing = false
+                browser.setBusy(false)
+                if opened {
+                    // Closing History must not reactivate its previous application
+                    // over the player NSWorkspace just opened.
+                    self.appToReactivate = nil
+                    self.hide()
+                }
+            }
         }
         browser.onYank = { [weak self, weak browser] entry in
             guard let self, sessions.acceptsCallbacks(session), !isCapturing else { return }
@@ -234,10 +254,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
             return false
         }
         capturer.prefetch()
+        appToReactivate = NSWorkspace.shared.frontmostApplication
         raiser.begin(windows)
         let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         currentWindow = WindowCatalog.initialSelection(in: windows, frontPID: frontPID) ?? 0
         status = ""
+        videoType = false
+        videoCountdown = false
         hoverStatus = nil
         accessibilityAvailable = accessibility.isAllowed
         enterWindowMode()
@@ -248,7 +271,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         return true
     }
 
-    private func hide() {
+    private func hide(continuingVideo: Bool = false) {
         let session = session
         guard sessions.acceptsCallbacks(session) else { return }
         sessions.dismissPresentation(session)
@@ -276,7 +299,26 @@ final class OverlayController: NSObject, NSWindowDelegate {
         appToReactivate?.activate()
         appToReactivate = nil
         // Activate settings between sessions after presentation has finished unwinding.
-        DispatchQueue.main.async { [sessions] in sessions.finish(session) }
+        if !continuingVideo { DispatchQueue.main.async { [sessions] in sessions.finish(session) } }
+    }
+
+    func videoCountdownStatus(_ message: String) {
+        videoCountdown = true
+        status = message
+        render()
+    }
+
+    func videoReturnToPicker(_ message: String) {
+        videoCountdown = false
+        status = message
+        render()
+    }
+
+    func dismissForVideo() {
+        // hide owns presentation teardown and focus restoration; the outer
+        // session remains reserved until recorder publication finishes.
+        videoCountdown = false
+        hide(continuingVideo: true)
     }
 
     /// What ↵ copies and ⇧↵/e edits. Region mode has nothing until a region is drawn.
@@ -286,6 +328,18 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     private func confirm() {
         guard !isCapturing, let target = selection else { return }
+        if videoType {
+            guard historyLibrary.retention != .off else {
+                status = "Video requires History. Enable retention in Vishot Settings."; render(); return
+            }
+            guard case .display(let id) = target.kind else {
+                status = "Video: press ⇧G to select a whole display."; render(); return
+            }
+            videoCountdown = true
+            stopWarmUp()
+            video?.begin(displayID: id, session: session, label: target.label)
+            return
+        }
         captureMetadata(for: target)
         let label = captureLabel, title = captureWindowTitle, watermark = capturer.watermark
         prepareSource(for: target) { [self] capture in
@@ -310,6 +364,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     /// Captures the selection with the overlay up, then edits it in place.
     private func edit() {
+        if videoType { status = "Video editing is unavailable. Press ↵ to record."; render(); return }
         guard !isCapturing, let target = selection else { return }
         captureMetadata(for: target)
         prepareSource(for: target) { [self] in startEditing($0) }
@@ -618,7 +673,16 @@ final class OverlayController: NSObject, NSWindowDelegate {
             panel.highlight(target?.frame.flippedBetweenCocoaAndCG, label: target?.label ?? "")
             panel.showRegion(regionRect, cursor: regionCursor)
             panel.showHints(marks, typed: typedHint.count)
-            panel.showHUD(name: mode.name, keys: mode.keys(accessibilityAvailable: accessibilityAvailable), status: statusLine, visible: panel === hudPanel)
+            let modeKeys = mode.keys(accessibilityAvailable: accessibilityAvailable).map { key -> HUDKey in
+                guard videoType else { return key }
+                if key.action == "copy" { return HUDKey("↵", action: "record") }
+                if key.action == "edit" { return HUDKey("⇧↵", "e", action: "edit", unavailableReason: "Video editing is unavailable. Press ↵ to record.") }
+                return key
+            }
+            let keys = videoCountdown ? [HUDKey("esc", action: "cancel countdown")] :
+                modeKeys + (mode == .hint ? [] : [HUDKey("r", action: "video",
+                    unavailableReason: historyLibrary.retention == .off ? "Video requires History. Enable retention in Vishot Settings." : nil), HUDKey("s", action: "screenshot")])
+            panel.showHUD(name: (videoType ? "VIDEO · " : "") + mode.name, keys: keys, status: statusLine, visible: panel === hudPanel)
         }
         CATransaction.commit()
     }
@@ -627,6 +691,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     /// Key codes, not characters, so the keys keep working with non-Latin keyboard layouts.
     private func handle(_ event: NSEvent) {
+        if videoCountdown {
+            if Int(event.keyCode) == kVK_Escape { video?.cancelCountdown() }
+            return
+        }
         if isCapturing, editor != nil { return }
         if let editor {
             editor.handle(event)
@@ -643,6 +711,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         if mode == .hint {
             handleHint(keyCode)
+            render()
+            return
+        }
+        if keyCode == kVK_ANSI_R || keyCode == kVK_ANSI_S {
+            if keyCode == kVK_ANSI_R, historyLibrary.retention == .off {
+                status = "Video requires History. Enable retention in Vishot Settings."
+            } else { videoType = keyCode == kVK_ANSI_R }
             render()
             return
         }
@@ -690,7 +765,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func mouseMoved(to point: CGPoint) {
-        guard isShowing, !isCapturing else { return }
+        guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             // The cursor stays on the image while the pointer is over the toolbar.
             if let panel = panels.first(where: { $0.toolbarContains(point) }) {
@@ -718,7 +793,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func mouseDown(at point: CGPoint) {
-        guard isShowing, !isCapturing else { return }
+        guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             if let panel = panels.first(where: { $0.toolbarContains(point) }) {
                 if let item = panel.toolbarItem(at: point) { editor.select(item) }
@@ -743,7 +818,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func mouseDragged(to point: CGPoint) {
-        guard isShowing, !isCapturing else { return }
+        guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             editor.mouseDragged(to: point)
         } else if let region, !isCapturing {
@@ -755,7 +830,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func mouseUp(at point: CGPoint) {
-        guard isShowing, !isCapturing else { return }
+        guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             editor.mouseUp(at: point)
             if isShowing, self.editor != nil { render() }
@@ -773,6 +848,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     @objc private func screensChanged() {
+        if videoCountdown { video?.cancelCountdown() }
         if browser != nil { closeHistory() }
         hide()
         rebuildPanels()
@@ -801,7 +877,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
             guard sessions.acceptsCallbacks(session) else { return }
             if isCapturing, editor != nil { return }
             if browser != nil, editor == nil { return }
-            if isShowing, !isPresentingSavePanel, !raiser.isSwitchingApps, !panels.contains(where: \.isKeyWindow) { hide() }
+            if isShowing, !isPresentingSavePanel, !raiser.isSwitchingApps, !panels.contains(where: \.isKeyWindow) {
+                if videoCountdown { video?.cancelCountdown() }
+                hide()
+            }
         }
     }
 }
