@@ -123,11 +123,19 @@ struct VideoCanvas {
 struct VideoTimeline {
     private(set) var origin: CMTime?
     private(set) var last: CMTime?
+    private var nextFrame: CMTime?
     mutating func admit(_ host: CMTime) -> CMTime? {
         guard host.isNumeric, host >= .zero, last.map({ host > $0 }) ?? true else { return nil }
-        // Enforce the output cadence as well as asking SCStream for it. Keep
-        // original timestamps when dropping, so elapsed time is never compressed.
-        if let last, host - last < CMTime(value: 1, timescale: 30) { return nil }
+        // Advance a cadence deadline, not last timestamp + interval: rounded or
+        // jittery nominal-30 timestamps must not alternate between accept/drop.
+        // A bounded 1ms early allowance never accumulates into a faster cadence.
+        let interval = CMTime(value: 1, timescale: 30)
+        let tolerance = CMTime(value: 1, timescale: 1000)
+        if let nextFrame {
+            guard host + tolerance >= nextFrame else { return nil }
+            // Rebase after a gap; idle time cannot bank catch-up frames.
+            self.nextFrame = host > nextFrame + interval ? host + interval : nextFrame + interval
+        } else { nextFrame = host + interval }
         if origin == nil { origin = host }
         last = host
         return host - origin!

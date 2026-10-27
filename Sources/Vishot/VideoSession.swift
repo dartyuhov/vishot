@@ -1,5 +1,6 @@
 import AppKit
 import CoreMedia
+import ScreenCaptureKit
 
 struct VideoPermissionError: LocalizedError {
     var errorDescription: String? { "Video needs Screen Recording. Enable it in Vishot Settings." }
@@ -67,6 +68,7 @@ final class VideoSession {
     }
     private var metadata = Metadata(label: "Display", windowTitle: "")
     private(set) var isErrorPresented = false
+    private(set) var isPermissionRecoveryPresented = false
     private(set) var completedUnpublishedMovie: URL?
     private(set) var error: String?
     var onChange: (() -> Void)?
@@ -228,7 +230,10 @@ final class VideoSession {
         // All startup errors outlive picker key/status updates. Dismiss its
         // screen-saver-level panels before presenting the persistent surface.
         onDismissPicker?()
-        showError(permission: error is VideoPermissionError)
+        let sdkError = error as NSError
+        showError(permission: error is VideoPermissionError ||
+            (sdkError.domain == SCStreamErrorDomain && sdkError.code == SCStreamError.Code.userDeclined.rawValue) ||
+            !CGPreflightScreenCaptureAccess())
         if let session { sessions.finish(session) }
         onChange?()
     }
@@ -322,6 +327,7 @@ final class VideoSession {
 
     private func showError(permission: Bool = false) {
         isErrorPresented = true
+        isPermissionRecoveryPresented = permission
         if let reportError { reportError(error ?? "Recording failed.", completedUnpublishedMovie != nil); return }
         errorPanel?.orderOut(nil)
         let panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 440, height: 190),
@@ -362,6 +368,7 @@ final class VideoSession {
         errorText = nil
         rescueButton = nil
         isErrorPresented = false
+        isPermissionRecoveryPresented = false
         error = nil
         onChange?()
     }

@@ -3,6 +3,42 @@ import CoreMedia
 @testable import Vishot
 
 final class VideoTests: XCTestCase {
+    func testCadencePreservesRoundedAndJitteredNominalThirtyWithoutHalvingRate() {
+        for jitter in [false, true] {
+            var timeline = VideoTimeline()
+            var accepted = 0
+            for index in 0..<301 {
+                let offset = jitter && index > 0 ? (index.isMultiple(of: 2) ? 400 : -400) : 0
+                let time = CMTime(value: Int64(index * 33_333 + offset), timescale: 1_000_000)
+                if let relative = timeline.admit(time) {
+                    accepted += 1
+                    XCTAssertEqual(relative, time, "Cadence must preserve sample times")
+                }
+            }
+            XCTAssertEqual(accepted, 301, "Rounding/jitter must not reduce nominal 30fps to 15fps")
+        }
+    }
+
+    func testCadenceRejectsSustainedExcessRateWithoutCatchupBurstAfterGap() {
+        for rate in [31, 60, 120, 600] {
+            var limited = VideoTimeline()
+            let count = (0..<(rate * 10)).filter {
+                limited.admit(CMTime(value: Int64($0), timescale: Int32(rate))) != nil
+            }.count
+            XCTAssertEqual(count, 300, "A bounded early allowance must not accumulate at \(rate)fps")
+        }
+        var timeline = VideoTimeline()
+        var accepted = 0
+        for index in 0..<600 {
+            if timeline.admit(CMTime(value: Int64(index), timescale: 60)) != nil { accepted += 1 }
+        }
+        XCTAssertEqual(accepted, 300)
+        XCTAssertEqual(timeline.admit(CMTime(value: 20, timescale: 1)), CMTime(value: 20, timescale: 1))
+        XCTAssertNil(timeline.admit(CMTime(value: 20_001, timescale: 1000)), "Idle time cannot bank a burst")
+        var rapid = VideoTimeline()
+        XCTAssertEqual(rapid.admit(.zero), .zero)
+        XCTAssertEqual(rapid.endpoint(host: CMTime(value: 1, timescale: 600)), CMTime(value: 1, timescale: 30))
+    }
     func testStartingCannotRegressOrBeginAgainAndTerminalCallbacksAreFenced() {
         var state = VideoSessionState()
         let token = state.begin()

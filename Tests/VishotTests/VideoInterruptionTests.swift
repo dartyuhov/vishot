@@ -1,5 +1,6 @@
 import XCTest
 import CoreMedia
+import ScreenCaptureKit
 @testable import Vishot
 
 /// Orchestration faults use injected results; stalled stream operations also
@@ -8,6 +9,31 @@ import CoreMedia
     private let rectangle = VideoRectangle(display: VideoDisplay(id: 1,
         frame: CGRect(x: 0, y: 0, width: 100, height: 100), scale: 1),
         rect: CGRect(x: 0, y: 0, width: 100, height: 100))
+
+    func testSDKPermissionDenialDuringSuspendedPreparationOffersPersistentRecovery() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        var preparation: CheckedContinuation<VideoRecording, Error>?
+        let video = makeSession(fixture, prepare: { _ in
+            try await withCheckedThrowingContinuation { preparation = $0 }
+        })
+        try begin(video, fixture)
+        try await eventually { preparation != nil }
+        // The preflight succeeded, then permission was revoked while the SDK
+        // awaited shareable content. It returns its own error, not our wrapper.
+        preparation?.resume(throwing: NSError(domain: SCStreamErrorDomain,
+            code: SCStreamError.Code.userDeclined.rawValue))
+        try await eventually { !fixture.sessions.isSessionActive }
+        XCTAssertTrue(video.isErrorPresented)
+        XCTAssertTrue(video.isPermissionRecoveryPresented)
+        var opened = false
+        video.onPermissionSettings = { opened = true }
+        video.openPermissionRecovery()
+        XCTAssertTrue(opened)
+        video.dismissError()
+        XCTAssertFalse(video.isPermissionRecoveryPresented)
+        XCTAssertTrue(try fixture.store.entries().isEmpty)
+    }
 
     func testProductionRecorderStalledStartTimesOutAndLateCompletionCannotReviveIt() async throws {
         let fixture = try Fixture()

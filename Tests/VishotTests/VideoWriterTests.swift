@@ -6,7 +6,9 @@ import CoreImage
 @MainActor final class VideoWriterTests: XCTestCase {
     func testProductionWriterFinalizesImmediateRapidStaticTailAndDroppedGaps() async throws {
         for (times, stop) in [([0.0], 1.0 / 600), ([0.0], 1.0 / 30),
-                              ([0.0, 1.0], 11.0), ([0.0, 0.5, 2.0], 12.0)] {
+                              ([0.0, 1.0], 11.0), ([0.0, 0.5, 2.0], 12.0),
+                              ([0.0, 0.033333, 0.066666, 0.099999], 0.133333),
+                              ([0.0, 0.032933, 0.067066, 0.099599], 0.133333)] {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
@@ -17,7 +19,7 @@ import CoreImage
             let source = try buffer(width: 102, height: 56)
             let start = Task { try await recorder.start() }
             for time in times {
-                let stamp = CMTime(seconds: 100 + time, preferredTimescale: 600)
+                let stamp = CMTime(seconds: 100 + time, preferredTimescale: 1_000_000)
                 var accepted = false
                 for _ in 0..<100 where !accepted {
                     accepted = await recorder.receiveFrame(source, at: stamp, host: stamp)
@@ -26,7 +28,7 @@ import CoreImage
                 XCTAssertTrue(accepted)
             }
             try await start.value
-            let output = try await recorder.stop(at: CMTime(seconds: 100 + stop, preferredTimescale: 600))
+            let output = try await recorder.stop(at: CMTime(seconds: 100 + stop, preferredTimescale: 1_000_000))
             let asset = AVURLAsset(url: output.movie)
             let duration = CMTimeGetSeconds(try await asset.load(.duration))
             XCTAssertEqual(duration, stop, accuracy: 1.0 / 30 + 0.00001)
@@ -49,7 +51,9 @@ import CoreImage
             while let sample = decoded.copyNextSampleBuffer() { stamps.append(CMTimeGetSeconds(sample.presentationTimeStamp)) }
             XCTAssertEqual(reader.status, .completed)
             XCTAssertEqual(stamps.count, times.count)
-            for (observed, expected) in zip(stamps, times) { XCTAssertEqual(observed, expected, accuracy: 0.002) }
+            // AVAssetWriter's default video timescale is 600; decoded sample
+            // times may round to that grid without changing the source cadence.
+            for (observed, expected) in zip(stamps, times) { XCTAssertEqual(observed, expected, accuracy: 1.0 / 600) }
         }
     }
 
