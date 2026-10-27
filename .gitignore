@@ -12,3 +12,6 @@ build/
 # Landing server
 node_modules/
 site/waitlist.db*
+
+# Local documentation
+/docs/

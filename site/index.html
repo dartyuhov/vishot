@@ -68,7 +68,7 @@
       <figure class="screen">
         <div class="monitor">
           <canvas id="scene" width="192" height="120" role="img"
-                  aria-label="Pixel-art demo: open the picker, move between windows with j and h, label elements with f, select a chart, draw an arrow in the editor, and copy with y. History preview, not yet verified in a public release: open Capture History from the menu bar, browse earlier screenshots with l and h, and copy the selected screenshot with y."></canvas>
+                  aria-label="Pixel-art demo: open the picker, move between windows with j and h, label elements with f, select a chart, draw an arrow in the editor, and copy with y. History preview, not yet verified in a public release: open Capture History from the menu bar, browse earlier screenshots with l and h, and copy the selected screenshot with y. CLI for coding agents: discover a window, capture its exact ID, read the PNG, then annotate and open the explanation."></canvas>
         </div>
         <figcaption class="keycast">
           <span class="keycast-keys" aria-hidden="true"></span>
@@ -111,10 +111,11 @@
           <p><kbd>y</kbd> copies it, <kbd>s</kbd> saves a PNG to your screenshot folder, <kbd>S</kbd> does both. Nothing is uploaded: Vishot makes no network requests.</p>
           <span class="progress" aria-hidden="true"></span>
         </li>
-        <li id="agent-cli" class="feature cli">
-          <div class="feature-head"><span class="hint">—</span>CLI for coding agents</div>
-          <p>Discover windows, capture an exact ID, then read the PNG with your agent’s image reader. Native CLI capture ships in <a href="https://github.com/dartyuhov/vishot/releases/tag/v0.2.0">v0.2.0</a>.</p>
-          <p>Annotation preview (unreleased): explain that same PNG with text, arrows, and rectangle outlines. <a href="#cli-workflow">CLI workflow and skill →</a></p>
+        <li id="agent-cli" class="feature cli" data-seg="6">
+          <button type="button" class="feature-head"><span class="hint">07</span>CLI for coding agents</button>
+          <p>Let your agent capture a window and explain what to do next. Discover windows, capture an exact ID, and inspect the PNG.</p>
+          <p>Mark that same image with text, arrows, and rectangle outlines, then open the explanation for you. <a href="#cli-workflow">CLI workflow and skill →</a></p>
+          <span class="progress" aria-hidden="true"></span>
         </li>
       </ol>
     </section>
@@ -166,14 +167,16 @@
         </details>
         <details id="cli-workflow">
           <summary>How can a coding agent use Vishot?</summary>
-          <p>Discovery and exact-ID capture ship in v0.2.0. Use the native executable bundled in your installed app; no development runtime is needed. For an app in Applications, run these from your task’s workspace (adjust the app path if needed):<br>
-            <code>/Applications/Vishot.app/Contents/Helpers/vishot windows</code><br>
-            <code>/Applications/Vishot.app/Contents/Helpers/vishot capture --window-id 42</code></p>
-          <p>Replace <code>42</code> with the exact live window ID from discovery, selected by app and title. Allow Screen Recording in Vishot first. Capture preserves focus, including for fully covered windows; minimized windows are unsupported and cross-Space capture is best effort. Immediately read the returned <code>capture.path</code> with your agent’s built-in image reader: JSON and a path alone are not visual inspection. PNGs stay local in <code>.vishot/</code> under your current workspace, without changing the clipboard or Capture history.</p>
-          <p><strong>Annotation preview — unreleased, not included in v0.2.0.</strong> In a development build with annotation support, use that same inspected PNG as <code>--input</code>, even if the live window changes. This example assumes <code>vishot</code> is on PATH; otherwise use the bundled path above. Replace the illustrative path with the exact returned <code>capture.path</code> and choose coordinates from the image’s pixels:<br>
-            <code data-cli-annotation>vishot annotate --input "/workspace/.vishot/window-42-example.png" --annotations '{"schemaVersion":1,"annotations":[{"type":"rect","x":100,"y":200,"width":240,"height":80,"color":"yellow"},{"type":"arrow","from":{"x":420,"y":160},"to":{"x":340,"y":220}},{"type":"text","x":420,"y":100,"text":"Save your changes"}]}'</code></p>
-          <p>The preview also accepts an existing local PNG without capture permission. It saves a separate flattened PNG locally, preserving the original PNG and its pixel dimensions. Read <code>annotation.path</code> to check the marks; revise against the original input rather than recapturing. Save-only is the default. Optionally add <code>--open</code> to request opening the saved result in the default image app, which may take focus. An accepted opening request does not prove the image was displayed.</p>
-          <p>Read the <a href="https://github.com/dartyuhov/vishot/blob/v0.2.0/docs/agent-cli.md">v0.2.0 capture documentation</a> or use the optional <a href="https://github.com/dartyuhov/vishot/blob/v0.2.0/skills/vishot-capture/SKILL.md">capture skill instructions</a> with your agent. The skill is optional; the bundled CLI works without it. See the <a href="https://github.com/dartyuhov/vishot/blob/bcae50da04b0ed75aae1f6fe720b51f90b697b20/docs/agent-cli.md#explain-an-interface-from-the-captured-image">unreleased annotation workflow and JSON reference</a> for the preview contract.</p>
+          <p>Your agent can capture a window, inspect it, and explain it with arrows, boxes and text. Install Vishot and allow Screen Recording, then add the skill from your project’s terminal. Choose your coding agent when prompted.</p>
+          <div class="cli-install">
+            <div class="brew"><code tabindex="0" data-skill-command>npx skills add dartyuhov/vishot --skill vishot-capture</code><button type="button" data-copy-skill hidden>Copy</button></div>
+            <span class="copy-status" data-skill-copy-status role="status" aria-live="polite"></span>
+          </div>
+          <p>Prompt example:</p>
+          <div class="cli-install">
+            <div class="brew"><code tabindex="0" data-example-prompt>Can you show me how I can update my account details using Vishot?</code><button type="button" data-copy-prompt hidden>Copy</button></div>
+            <span class="copy-status" data-prompt-copy-status role="status" aria-live="polite"></span>
+          </div>
         </details>
         <details>
           <summary>Are my screenshots uploaded anywhere?</summary>
