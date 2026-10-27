@@ -4,6 +4,139 @@ import XCTest
 @testable import Vishot
 
 final class PickerHUDTests: XCTestCase {
+    func testControllerPhysicalTypeKeysPreserveTargetsAcrossEveryPickerAndHistoryOff() throws {
+        for picker in [PickerHUD.Picker.window, .element, .screen, .region] {
+            let fixture = ControllerFixture()
+            defer { fixture.remove() }
+            let controller = fixture.controller
+            XCTAssertEqual(controller.pickerHUDContent.captureType, .screenshot)
+            switch picker {
+            case .element:
+                controller.handle(try key(kVK_ANSI_F))
+                controller.handle(try key(kVK_ANSI_A))
+            case .screen: controller.handle(try key(kVK_ANSI_G, flags: .shift))
+            case .region:
+                controller.handle(try key(kVK_ANSI_V))
+                controller.mouseDown(at: CGPoint(x: 100, y: 100))
+                controller.mouseDragged(to: CGPoint(x: 300, y: 250))
+                controller.mouseUp(at: CGPoint(x: 300, y: 250))
+            default: break
+            }
+            let before = try XCTUnwrap(controller.selection)
+            XCTAssertEqual(controller.pickerHUDContent.picker, picker)
+            // Deliberately conflicting characters: dispatch must use physical codes.
+            controller.handle(try key(kVK_ANSI_R, characters: "s"))
+            XCTAssertEqual(controller.pickerHUDContent.captureType, .video)
+            XCTAssertEqual(controller.pickerHUDContent.picker, picker)
+            assertTarget(controller.selection, matches: before)
+            controller.handle(try key(kVK_ANSI_S, characters: "r"))
+            XCTAssertEqual(controller.pickerHUDContent.captureType, .screenshot)
+            XCTAssertEqual(controller.pickerHUDContent.picker, picker)
+            assertTarget(controller.selection, matches: before)
+            fixture.history.retention = .off
+            controller.handle(try key(kVK_ANSI_R))
+            XCTAssertEqual(controller.pickerHUDContent.captureType, .screenshot)
+            XCTAssertEqual(controller.pickerHUDContent.typeSwitch?.unavailableReason, PickerHUD.historyUnavailableReason)
+            assertTarget(controller.selection, matches: before)
+        }
+    }
+
+    func testControllerHintKeysTakePriorityOverBothCaptureTypeSwitchesWithNonLatinCharacters() throws {
+        for (code, initialType, expectedLabel) in [(kVK_ANSI_R, PickerHUD.CaptureType.screenshot, "Element 12"),
+                                                  (kVK_ANSI_S, .video, "Element 1")] {
+            let fixture = ControllerFixture()
+            defer { fixture.remove() }
+            let controller = fixture.controller
+            if initialType == .video { controller.handle(try key(kVK_ANSI_R)) }
+            controller.handle(try key(kVK_ANSI_F))
+            XCTAssertEqual(controller.pickerHUDContent.picker, .hint)
+            controller.handle(try key(code))
+            XCTAssertEqual(controller.pickerHUDContent.picker, .element)
+            XCTAssertEqual(controller.pickerHUDContent.captureType, initialType)
+            XCTAssertEqual(controller.selection?.label, expectedLabel)
+            guard case .element(windowID: 42, rect: _)? = controller.selection?.kind else {
+                return XCTFail("The physical hint must select its element")
+            }
+        }
+    }
+
+    @MainActor func testControllerEscapeDuringCountdownAndPendingPreparationRestoresSameRegion() async throws {
+        for cancelDuringPreparation in [false, true] {
+            let fixture = ControllerFixture()
+            defer { fixture.remove() }
+            let controller = fixture.controller
+            let clock = CountdownTestClock()
+            var pending: CheckedContinuation<VideoRecording, Error>?
+            let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
+                prepare: { _, _ in try await withCheckedThrowingContinuation { pending = $0 } },
+                resolve: { selection in try selection.resolve(displays: [VideoDisplay(id: 1, frame: fixture.display.frame, scale: 1)], windowFrame: nil) },
+                countdown: CaptureCountdown(schedule: clock.schedule), presentsControls: false, reportError: { _, _ in })
+            controller.video = video
+            // Same callback wiring as AppDelegate; keep the actual VideoSession.
+            video.onCountdown = { [weak controller] in controller?.videoCountdownStatus($0) }
+            video.onReturnToPicker = { [weak controller] in controller?.videoReturnToPicker($0) }
+            controller.handle(try key(kVK_ANSI_V))
+            controller.mouseDown(at: CGPoint(x: 100, y: 100))
+            controller.mouseDragged(to: CGPoint(x: 300, y: 250))
+            controller.mouseUp(at: CGPoint(x: 300, y: 250))
+            controller.handle(try key(kVK_ANSI_R))
+            let target = try XCTUnwrap(controller.selection)
+            controller.handle(try key(kVK_Return))
+            try await eventually { clock.hasJobs }
+            XCTAssertEqual(controller.pickerHUDContent.actions, [HUDKey("esc", action: "Cancel")])
+            controller.handle(try key(kVK_ANSI_S))
+            XCTAssertEqual(controller.pickerHUDContent.captureType, .video, "Ordinary picker keys are disabled")
+            if cancelDuringPreparation {
+                clock.advance(to: 3)
+                try await eventually { pending != nil }
+                XCTAssertTrue(controller.pickerHUDContent.isCountingDown)
+            }
+            controller.handle(try key(kVK_Escape))
+            XCTAssertFalse(video.isActive)
+            XCTAssertFalse(controller.pickerHUDContent.isCountingDown)
+            XCTAssertTrue(fixture.sessions.acceptsCallbacks(fixture.sessions.callbackSession))
+            XCTAssertEqual(controller.pickerHUDContent.picker, .region)
+            XCTAssertEqual(controller.pickerHUDContent.regionState, .ready)
+            XCTAssertEqual(controller.pickerHUDContent.captureType, .video)
+            XCTAssertEqual(controller.pickerHUDContent.actions.first, HUDKey("↵", action: "Record"))
+            assertTarget(controller.selection, matches: target)
+            pending?.resume(throwing: CancellationError())
+            clock.advance(to: 10)
+            fixture.sessions.finish(fixture.sessions.callbackSession)
+            try await eventually { !fixture.sessions.isSessionActive }
+            XCTAssertFalse(controller.pickerHUDContent.isCountingDown)
+            assertTarget(controller.selection, matches: target)
+        }
+    }
+
+    func testControllerUnfinishedRegionHidesCaptureActionsAndReturnStillFinishesAndCaptures() throws {
+        let fixture = ControllerFixture()
+        defer { fixture.remove() }
+        let controller = fixture.controller
+        controller.handle(try key(kVK_ANSI_V))
+        for drawing in [false, true] {
+            if drawing {
+                controller.mouseDown(at: CGPoint(x: 100, y: 100))
+                controller.mouseDragged(to: CGPoint(x: 300, y: 250))
+            }
+            for code in [kVK_ANSI_S, kVK_ANSI_R] {
+                controller.handle(try key(code))
+                XCTAssertEqual(controller.pickerHUDContent.regionState, drawing ? .drawing : .empty)
+                XCTAssertFalse(controller.pickerHUDContent.actions.contains { ["Copy", "Record", "Edit"].contains($0.action) })
+            }
+            if !drawing {
+                controller.handle(try key(kVK_Return))
+                XCTAssertFalse(controller.pickerHUDContent.isCountingDown)
+                XCTAssertEqual(controller.pickerHUDContent.regionState, .empty)
+            }
+        }
+        let draft = try XCTUnwrap(controller.selection)
+        controller.handle(try key(kVK_Return))
+        XCTAssertEqual(controller.pickerHUDContent.regionState, .ready, "Return retains the existing finish-and-capture semantics")
+        XCTAssertTrue(controller.pickerHUDContent.isCountingDown, "Return must dispatch Record for the finished rectangle")
+        assertTarget(controller.selection, matches: draft)
+    }
+
     func testEveryPreparedPickerStateRendersItsApplicableGuidanceIncludingCountdownAndPreparing() throws {
         for visual in VisualStyle.allCases {
             let theme = ThemeCatalog.resolve(style: visual, colorScheme: .dark)
@@ -227,5 +360,58 @@ final class PickerHUDTests: XCTestCase {
             if let found = text(value, in: child) { return found }
         }
         return nil
+    }
+
+    private func key(_ code: Int, characters: String = "я", flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+            timestamp: 0, windowNumber: 0, context: nil, characters: characters,
+            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: UInt16(code)))
+    }
+
+    private func assertTarget(_ actual: CaptureTarget?, matches expected: CaptureTarget, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(actual?.frame, expected.frame, file: file, line: line)
+        XCTAssertEqual(actual?.anchor, expected.anchor, file: file, line: line)
+        XCTAssertEqual(actual?.label, expected.label, file: file, line: line)
+        switch (actual?.kind, expected.kind) {
+        case (.window(let a)?, .window(let b)), (.display(let a)?, .display(let b)): XCTAssertEqual(a, b, file: file, line: line)
+        case (.element(let a, let ar)?, .element(let b, let br)), (.region(let a, let ar)?, .region(let b, let br)):
+            XCTAssertEqual(a, b, file: file, line: line)
+            XCTAssertEqual(ar, br, file: file, line: line)
+        default: XCTFail("Target kind changed", file: file, line: line)
+        }
+    }
+
+    @MainActor private func eventually(_ condition: () -> Bool) async throws {
+        for _ in 0..<500 {
+            if condition() { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Controller did not reach expected state")
+        throw CancellationError()
+    }
+
+    private final class ControllerFixture {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let sessions = CaptureSessionCoordinator()
+        let history: HistoryLibrary
+        let controller: OverlayController
+        let display = CaptureTarget(kind: .display(1), frame: CGRect(x: 0, y: 0, width: 800, height: 600),
+            anchor: CGPoint(x: 400, y: 300), label: "Display")
+        init() {
+            history = HistoryLibrary(store: HistoryStore(url: root.appendingPathComponent("History")))
+            let window = WindowInfo(id: 42, pid: 0, appName: "Window", frame: CGRect(x: 50, y: 50, width: 500, height: 400),
+                anchor: CGPoint(x: 300, y: 250))
+            let hints = (0..<26).map { index in
+                CaptureTarget(kind: .element(windowID: 42, rect: CGRect(x: 100 + index * 10, y: 100, width: 40, height: 40)),
+                    frame: CGRect(x: 100 + index * 10, y: 100, width: 40, height: 40),
+                    anchor: CGPoint(x: 120 + index * 10, y: 120), label: "Element \(index)")
+            }
+            let display = display
+            controller = OverlayController(sessions: sessions, history: history, presentsPanels: false,
+                windowCatalog: { [window] }, displayCatalog: { [display] }, hintCatalog: { _ in hints })
+            sessions.onCapture = { [weak controller] in controller?.show(session: $0) == true }
+            sessions.capture()
+        }
+        func remove() { try? FileManager.default.removeItem(at: root) }
     }
 }

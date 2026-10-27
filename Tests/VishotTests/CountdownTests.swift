@@ -1,7 +1,50 @@
+import AppKit
 import XCTest
 @testable import Vishot
 
 final class CountdownTests: XCTestCase {
+    func testSmoothRetainsFluidScaleAndFadeWhileReducedMotionRemovesAnimation() throws {
+        let layer = CountdownLayer()
+        let display = CGRect(x: 0, y: 0, width: 800, height: 600)
+        let style = ThemeCatalog.resolve(style: .smooth, colorScheme: .dark).countdown
+        layer.show(CountdownFrame(generation: 1, number: 3), target: display, display: display,
+            panel: display, scale: 2, style: style, reduceMotion: false)
+        let animations = (layer.root.animationKeys() ?? []).compactMap { layer.root.animation(forKey: $0) as? CAKeyframeAnimation }
+        let scale = try XCTUnwrap(animations.first { $0.keyPath == "transform.scale" })
+        XCTAssertEqual((scale.values as? [NSNumber])?.map(\.doubleValue), [0.94, 1, 1, 1.035])
+        XCTAssertEqual(scale.calculationMode, .linear)
+        XCTAssertEqual(scale.duration, 1)
+        let opacity = try XCTUnwrap(animations.first { $0.keyPath == "opacity" })
+        XCTAssertEqual(opacity.calculationMode, .linear)
+        XCTAssertEqual(opacity.duration, 1)
+        layer.show(CountdownFrame(generation: 1, number: 2), target: display, display: display,
+            panel: display, scale: 2, style: style, reduceMotion: true)
+        XCTAssertTrue(layer.root.animationKeys()?.isEmpty ?? true)
+        XCTAssertFalse(layer.root.isHidden)
+    }
+
+    func testPixelMotionPreservesWholePixelGeometryAtEveryStepOnOneAndTwoTimesDisplays() throws {
+        for scale: CGFloat in [1, 2] {
+            let layer = CountdownLayer()
+            let display = CGRect(x: -1000, y: -800, width: 1000, height: 800)
+            layer.show(CountdownFrame(generation: 1, number: 3), target: CGRect(x: -601, y: -503, width: 203, height: 205),
+                display: display, panel: display, scale: scale, style: ThemeCatalog.pixel.countdown, reduceMotion: false)
+            let animations = (layer.root.animationKeys() ?? []).compactMap { layer.root.animation(forKey: $0) as? CAKeyframeAnimation }
+            let spatial = animations.filter { $0.keyPath?.hasPrefix("transform") == true || $0.keyPath?.hasPrefix("position") == true }
+            XCTAssertFalse(spatial.isEmpty, "Pixel should have deliberate stepped spatial motion")
+            for animation in spatial {
+                XCTAssertEqual(animation.keyPath, "transform.translation.y", "Never resample Pixel glyphs, borders, or hard shadows with scale/rotation")
+                XCTAssertEqual(animation.calculationMode, .discrete)
+                XCTAssertEqual(animation.duration, 1)
+                for value in try XCTUnwrap(animation.values as? [NSNumber]) {
+                    let offset = CGFloat(value.doubleValue)
+                    XCTAssertEqual(offset.truncatingRemainder(dividingBy: 4), 0, "Move on the plate's 4 pt pixel grid")
+                    XCTAssertEqual(((layer.root.frame.minY + offset) * scale).rounded(), (layer.root.frame.minY + offset) * scale)
+                }
+            }
+        }
+    }
+
     func testBadgeCentersOnTinyTargetAndClampsOnlyAtSelectedDisplayEdges() {
         let display = CGRect(x: -1000, y: -800, width: 1000, height: 800)
         let tiny = CGRect(x: -510, y: -410, width: 20, height: 20)
@@ -81,6 +124,7 @@ final class CountdownTests: XCTestCase {
 
 /// Deliberately delivers canceled callbacks too, like already-enqueued OS work.
 final class CountdownTestClock {
+    var hasJobs: Bool { !jobs.isEmpty }
     private(set) var now: TimeInterval = 0
     private var jobs: [(TimeInterval, () -> Void)] = []
     func schedule(_ delay: TimeInterval, _ action: @escaping () -> Void) -> () -> Void {

@@ -32,7 +32,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
     private var isShowing = false
     private let capturer = Capturer()
-    let historyLibrary = HistoryLibrary()
+    let historyLibrary: HistoryLibrary
+    private let presentsPanels: Bool
+    private let windowCatalog: () -> [WindowInfo]
+    private let displayCatalog: () -> [CaptureTarget]
+    /// Optional discovery adapter; key dispatch and hint matching stay here.
+    private let hintCatalog: ((WindowInfo) -> [CaptureTarget])?
     private lazy var screenshotCompletion = ScreenshotCompletion(history: historyLibrary, save: { [capturer] in
         capturer.save($0, scale: $1, to: $2, output: $3, completion: $4)
     }) { [capturer] image, scale, output in
@@ -100,9 +105,19 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// The app that was active before the save panel activated Vishot.
     private var appToReactivate: NSRunningApplication?
 
-    init(sessions: CaptureSessionCoordinator) {
+    init(sessions: CaptureSessionCoordinator, history: HistoryLibrary = HistoryLibrary(),
+         presentsPanels: Bool = true,
+         windowCatalog: @escaping () -> [WindowInfo] = WindowCatalog.visibleWindows,
+         displayCatalog: @escaping () -> [CaptureTarget] = DisplayCatalog.displays,
+         hintCatalog: ((WindowInfo) -> [CaptureTarget])? = nil) {
         self.sessions = sessions
+        historyLibrary = history
+        self.presentsPanels = presentsPanels
+        self.windowCatalog = windowCatalog
+        self.displayCatalog = displayCatalog
+        self.hintCatalog = hintCatalog
         super.init()
+        guard presentsPanels else { return }
         accessibility.onChange = { [weak self] allowed in
             guard let self else { return }
             accessibilityAvailable = allowed
@@ -236,15 +251,17 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     func show(session: Int) -> Bool {
         guard sessions.acceptsCallbacks(session) else { return false }
-        windows = WindowCatalog.visibleWindows()
-        guard !windows.isEmpty, let keyPanel = panels.first else {
+        windows = windowCatalog()
+        guard !windows.isEmpty, !presentsPanels || !panels.isEmpty else {
             NSSound.beep()
             return false
         }
-        capturer.prefetch()
-        appToReactivate = NSWorkspace.shared.frontmostApplication
-        raiser.begin(windows)
-        let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if presentsPanels {
+            capturer.prefetch()
+            appToReactivate = NSWorkspace.shared.frontmostApplication
+            raiser.begin(windows)
+        }
+        let frontPID = presentsPanels ? NSWorkspace.shared.frontmostApplication?.processIdentifier : nil
         currentWindow = WindowCatalog.initialSelection(in: windows, frontPID: frontPID) ?? 0
         status = ""
         videoType = false
@@ -258,7 +275,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         sessionOutput = OutputStyle(watermark: watermark, style: preparedTheme.watermark)
         render()
         panels.forEach { $0.orderFrontRegardless() }
-        keyPanel.makeKey()
+        panels.first?.makeKey()
         return true
     }
 
@@ -319,7 +336,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     /// What ↵ copies and ⇧↵/e edits. Region mode has nothing until a region is drawn.
-    private var selection: CaptureTarget? {
+    var selection: CaptureTarget? {
         if let region { region.target } else { targets[selected] }
     }
 
@@ -486,7 +503,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     private func enterScreenMode() {
         let anchor = targets[selected].anchor
-        let displays = DisplayCatalog.displays()
+        let displays = displayCatalog()
         guard !displays.isEmpty else {
             NSSound.beep()
             return
@@ -500,7 +517,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     /// The cursor starts on the selection, until the mouse moves.
     private func enterRegionMode() {
-        let displays = DisplayCatalog.displays()
+        let displays = displayCatalog()
         guard !displays.isEmpty else {
             NSSound.beep()
             return
@@ -511,13 +528,20 @@ final class OverlayController: NSObject, NSWindowDelegate {
         region.onChange = { [weak self] in self?.render() }
         self.region = region
         mode = .region
-        NSCursor.setHiddenUntilMouseMoves(true)
+        if presentsPanels { NSCursor.setHiddenUntilMouseMoves(true) }
     }
 
     // MARK: - Hints
 
     /// Puts hints on the elements of the current window. The window stays selected until a hint is typed.
     private func startHints() {
+        if let hintCatalog {
+            if mode == .window { currentWindow = selected }
+            let found = hintCatalog(windows[currentWindow])
+            guard !found.isEmpty else { return }
+            enterHintMode(zip(Hints.make(count: found.count), found).map { Hint(code: $0, target: $1, isContainer: false) })
+            return
+        }
         accessibilityAvailable = elements.isTrusted()
         guard accessibilityAvailable else {
             status = PickerHUD.elementUnavailableReason
@@ -539,13 +563,17 @@ final class OverlayController: NSObject, NSWindowDelegate {
             status = "nothing to label"
             return
         }
+        enterHintMode(found)
+        if let warmUpEnd { startWarmUp(root, until: warmUpEnd) }
+    }
+
+    private func enterHintMode(_ found: [Hint]) {
         stopWarmUp()
         mode = .hint
         targets = windows.map(\.target)
         selected = currentWindow
         hints = found
         typedHint = ""
-        if let warmUpEnd { startWarmUp(root, until: warmUpEnd) }
     }
 
     private func hints(below root: AXNode) -> [Hint] {
@@ -630,7 +658,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     /// Shows a covered window while it is browsed. Indices in Window mode are those of `windows`.
     private func raiseSelectedWindow() {
-        if mode == .window { raiser.raise(index: selected) }
+        if presentsPanels, mode == .window { raiser.raise(index: selected) }
     }
 
     /// Selects what is under the cursor. Returns false over empty space, keeping the selection.
@@ -697,14 +725,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     // MARK: - Input
 
-    private var pickerHUDContent: PickerHUD.Content {
+    var pickerHUDContent: PickerHUD.Content {
         PickerHUD.Content(captureType: videoType ? .video : .screenshot, picker: mode,
             accessibilityAvailable: accessibilityAvailable, historyAvailable: historyLibrary.retention != .off,
             regionState: region?.hudState ?? .empty, isCountingDown: videoCountdown)
     }
 
     /// Key codes, not characters, so the keys keep working with non-Latin keyboard layouts.
-    private func handle(_ event: NSEvent) {
+    func handle(_ event: NSEvent) {
         if videoCountdown {
             if Int(event.keyCode) == kVK_Escape { video?.cancelCountdown() }
             return
@@ -811,7 +839,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if selected != before || previousHover != nil { render() }
     }
 
-    private func mouseDown(at point: CGPoint) {
+    func mouseDown(at point: CGPoint) {
         guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             if let panel = panels.first(where: { $0.toolbarContains(point) }) {
@@ -837,7 +865,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         confirm()
     }
 
-    private func mouseDragged(to point: CGPoint) {
+    func mouseDragged(to point: CGPoint) {
         guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             editor.mouseDragged(to: point)
@@ -849,7 +877,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         render()
     }
 
-    private func mouseUp(at point: CGPoint) {
+    func mouseUp(at point: CGPoint) {
         guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             editor.mouseUp(at: point)
