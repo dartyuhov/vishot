@@ -1,5 +1,25 @@
 # Signed agent CLI verification
 
+## Rebased PR checks on October 27, 2026
+
+The capture CLI branch was rebased onto main at `cf5ae54`, including the merged
+Pixel/Smooth styling and release-workflow correction. The rebase completed
+without conflicts. On the local macOS 26.7.1 arm64 host, these checks pass:
+
+- `swift test --force-resolved-versions`: 259 tests, zero failures (230 app
+  tests and 29 compiled-CLI boundary tests).
+- `./scripts/build.sh`: release build with the existing Apple Development
+  identity, including strict nested signature verification.
+- `scripts/test-package.py` in an isolated environment with hash-locked
+  packaging dependencies: 13 tests, zero failures.
+- Homebrew validation with `VISHOT_TEST_HOMEBREW=1`: 20 tests, zero failures.
+
+This rerun does not install or relaunch the user's app or repeat the live
+capture fixtures. The earlier capture observations below remain historical
+evidence; the remaining runtime and hands-on verification gaps still apply.
+
+## Earlier live capture verification
+
 Live verification on October 21, 2026 confirms covered-window capture,
 connected-display capture, minimized rejection, background startup, and actual
 image inspection on macOS 26.7.1 arm64. This is partial end-to-end evidence;
