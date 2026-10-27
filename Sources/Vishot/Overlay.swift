@@ -48,6 +48,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var videoType = false
     private var videoCountdown = false
     private var videoRectangle: CGRect?
+    private var countdownFrame: CountdownFrame?
     var watermark = true
     private let elements = ElementCatalog()
     private let accessibility = AccessibilityAvailability()
@@ -283,7 +284,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         hints = []
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        panels.forEach { $0.hideEditor() }
+        panels.forEach { $0.hideEditor(); $0.showCountdown(nil, target: nil, visible: false) }
         CATransaction.commit()
         panels.forEach { $0.orderOut(nil) }
         elements.finish()
@@ -301,6 +302,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func videoReturnToPicker(_ message: String) {
+        countdownFrame = nil
         videoCountdown = false
         videoRectangle = nil
         status = message
@@ -308,6 +310,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func dismissForVideo() {
+        countdownFrame = nil
         // hide owns presentation teardown and focus restoration; the outer
         // session remains reserved until recorder publication finishes.
         videoCountdown = false
@@ -335,6 +338,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 stopWarmUp()
                 video?.onRectangle = { [weak self] rect in
                     self?.videoRectangle = rect
+                    self?.render()
+                }
+                video?.onCountdownFrame = { [weak self] frame in
+                    self?.countdownFrame = frame
                     self?.render()
                 }
                 captureMetadata(for: target)
@@ -678,6 +685,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         CATransaction.setDisableActions(true)
         let hudContent = pickerHUDContent
         for panel in panels {
+            panel.showCountdown(countdownFrame, target: videoRectangle?.flippedBetweenCocoaAndCG,
+                                visible: videoCountdown && panel === hudPanel)
             panel.highlight((videoRectangle ?? target?.frame)?.flippedBetweenCocoaAndCG, label: target?.label ?? "")
             panel.showRegion(regionRect, cursor: regionCursor)
             panel.showHints(marks, typed: typedHint.count)

@@ -14,18 +14,6 @@ struct VideoRectangle: Equatable {
     var sourceRect: CGRect { rect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY) }
 }
 
-struct VideoCountdown {
-    private(set) var rectangle: VideoRectangle
-    private(set) var remaining = 3
-    var isReady: Bool { remaining == 0 }
-    mutating func tick() { remaining = max(0, remaining - 1) }
-    /// Only an unchanged, fully counted-down rectangle may start capture.
-    mutating func revalidate(_ current: VideoRectangle) -> Bool {
-        if current != rectangle { rectangle = current; remaining = 3 }
-        return isReady
-    }
-}
-
 /// Window identity is used only before startup. Element geometry is cached once,
 /// relative to its selected parent window; resolving never traverses AX.
 struct VideoSelection {

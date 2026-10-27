@@ -58,29 +58,6 @@ final class VideoGeometryTests: XCTestCase {
         XCTAssertThrowsError(try selection.resolve(displays: [VideoDisplay(id: 3, frame: display.frame, scale: 1)], windowFrame: nil))
     }
 
-    func testChangedStartupRectangleRestartsFullCountdownIncludingDisplayScale() {
-        let display = VideoDisplay(id: 1, frame: CGRect(x: 0, y: 0, width: 1000, height: 800), scale: 1)
-        let original = VideoRectangle(display: display, rect: CGRect(x: 10, y: 20, width: 101, height: 55))
-        var countdown = VideoCountdown(rectangle: original)
-        countdown.tick()
-        countdown.tick()
-        countdown.tick()
-        XCTAssertTrue(countdown.isReady)
-        let moved = VideoRectangle(display: display, rect: CGRect(x: 11, y: 20, width: 101, height: 55))
-        XCTAssertFalse(countdown.revalidate(moved))
-        XCTAssertEqual(countdown.remaining, 3)
-        XCTAssertEqual(countdown.rectangle, moved)
-        countdown.tick()
-        XCTAssertFalse(countdown.revalidate(moved))
-        XCTAssertEqual(countdown.remaining, 2)
-        countdown.tick()
-        countdown.tick()
-        XCTAssertTrue(countdown.revalidate(moved))
-        let scaled = VideoRectangle(display: VideoDisplay(id: 1, frame: display.frame, scale: 2), rect: moved.rect)
-        XCTAssertFalse(countdown.revalidate(scaled))
-        XCTAssertEqual(countdown.remaining, 3)
-    }
-
     func testWindowUsesCurrentBoundsAndLargestIntersectionWithOrderedTies() throws {
         let target = CaptureTarget(kind: .window(7), frame: CGRect(x: 10, y: 10, width: 100, height: 100),
             anchor: .zero, label: "Window")

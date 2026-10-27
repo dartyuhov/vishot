@@ -32,6 +32,7 @@ final class OverlayPanel: NSPanel {
     private let regionDim: CAShapeLayer
     private let crosshair: CALayer
     private let editor: EditorLayer
+    private let countdown = CountdownLayer()
     private var theme: ResolvedTheme
     private var style: PickerStyle { theme.picker }
 
@@ -84,6 +85,7 @@ final class OverlayPanel: NSPanel {
         view.layer?.addSublayer(crosshair)
         view.layer?.addSublayer(hud.root)
         view.layer?.addSublayer(editor.root)
+        view.layer?.addSublayer(countdown.root)
     }
 
     /// Called only at startup, screen changes, or an idle preference change.
@@ -180,11 +182,19 @@ final class OverlayPanel: NSPanel {
 
     /// Replaces the picker's border, hints, region and HUD with the editor. The toolbar shows on one screen.
     func hidePicker() {
+        countdown.hide()
         border.isHidden = true
         labelBackground.isHidden = true
         hud.root.isHidden = true
         showHints([], typed: 0)
         showRegion(nil, cursor: nil)
+    }
+
+    /// Only the selected display presents the badge, even when it exceeds a tiny target.
+    func showCountdown(_ value: CountdownFrame?, target: CGRect?, visible: Bool) {
+        guard visible, let value, let target else { countdown.hide(); return }
+        countdown.show(value, target: target, display: frame, panel: frame, scale: backingScaleFactor,
+                       style: theme.countdown, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
     }
 
     func showEditor(_ scene: EditorScene, showsToolbar: Bool) {
