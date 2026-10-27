@@ -39,6 +39,10 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
         return cachedResults
     }
     private var selected: HistoryEntry? { results.first { $0.id == selectedID } }
+    private var keys: [HUDKey] {
+        searching ? [HUDKey("←", "→", action: "select"), HUDKey("↵", action: "accept"), HUDKey("esc", action: "back")]
+            : Self.keys(for: selected)
+    }
 
     init(library: HistoryLibrary) {
         self.library = library
@@ -151,6 +155,12 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
         panel?.makeKey()
     }
 
+    /// Prepared off the hotkey path. A suspended browser still owns its session.
+    func prepare(theme: ResolvedTheme) {
+        guard panel?.delegate == nil else { return }
+        view?.prepare(theme: theme)
+    }
+
     func yank(_ entry: HistoryEntry, completion: @escaping (CGImage?) -> Void) {
         guard !busy else { return }
         busy = true
@@ -175,6 +185,12 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
         busy = false
         actionError = nil
         selectedID = library.entries.first?.id
+        view?.title = "HISTORY"
+        view?.status = ""
+        view?.query = ""
+        view?.error = ""
+        view?.keys = keys
+        view?.updateHUD()
         view?.showLoading()
         panel?.orderFrontRegardless()
         panel?.makeKey()
@@ -245,9 +261,9 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
         view.thumbnails = thumbnailCache.mapValues(\.1)
         view.selectedID = selectedID
         view.title = "HISTORY"
+        view.error = library.error ?? ""
         view.query = searching ? "/" + query + "▏" : ""
-        view.keys = searching ? [HUDKey("←", "→", action: "select"), HUDKey("↵", action: "accept"), HUDKey("esc", action: "back")]
-            : Self.keys(for: selected)
+        view.keys = keys
         if let entry = selected {
             let date = DateFormatter.localizedString(from: entry.createdAt, dateStyle: .medium, timeStyle: .short)
             view.status = "\(index + 1)/\(matches.count) · \(entry.label) · \(date)" + (entry.video.map { " · VIDEO " + $0.durationLabel } ?? (entry.recognizedText == nil ? " · indexing…" : ""))
@@ -266,7 +282,7 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
             previewRequest?.cancel()
             preview = nil
             previewRevision = nil
-            view.status = library.error ?? ""
+            view.status = ""
             view.empty = searching && !query.isEmpty ? "No matches" : "No captures yet. Copy or save a screenshot to keep it here."
         }
         view.preview = preview ?? selected.flatMap { entry in
@@ -403,7 +419,7 @@ private final class HistoryView: NSView {
             else if !items.isEmpty { showLoading() }
         }
     }
-    var title = "", status = "", query = "", empty = ""
+    var title = "", status = "", query = "", empty = "", error = ""
     var keys: [HUDKey] = []
     var onSelect: ((UUID) -> Void)?
     var onScroll: ((Int) -> Void)?
@@ -413,18 +429,20 @@ private final class HistoryView: NSView {
     private var hudHeight: CGFloat = 100
     private let spinner = NSProgressIndicator()
     private let loadingLabel = NSTextField(labelWithString: "Loading captures…")
+    private var theme = ThemeCatalog.pixel
+    private var style: HistoryStyle { theme.history }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        HUD.stylePanel(hud)
+        HUD.stylePanel(hud, style: theme.hud)
         layer?.addSublayer(hud)
         spinner.style = .spinning
         spinner.controlSize = .regular
         spinner.isDisplayedWhenStopped = false
         spinner.appearance = NSAppearance(named: .darkAqua)
-        loadingLabel.font = Fonts.mono(14)
-        loadingLabel.textColor = Palette.text
+        loadingLabel.font = style.font
+        loadingLabel.textColor = style.text
         loadingLabel.alignment = .center
         addSubview(spinner)
         addSubview(loadingLabel)
@@ -434,6 +452,18 @@ private final class HistoryView: NSView {
         setAccessibilityLabel("Capture History")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func prepare(theme: ResolvedTheme) {
+        self.theme = theme
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        HUD.stylePanel(hud, style: theme.hud)
+        loadingLabel.font = style.font
+        loadingLabel.textColor = style.text
+        updateHUD()
+        CATransaction.commit()
+        needsDisplay = true
+    }
 
     func showLoading() {
         spinner.frame = CGRect(x: bounds.midX - 16, y: bounds.midY + 24, width: 32, height: 32)
@@ -455,27 +485,33 @@ private final class HistoryView: NSView {
         var x: CGFloat = 16, y: CGFloat = 12
         // Wrap entries as complete units; no help key gets clipped on a small display.
         for key in keys {
-            let entry = HUD.makeEntry(key, scale: scale).layer
+            let entry = HUD.makeEntry(key, scale: scale, style: theme.hud).layer
             if x + entry.frame.width > width - 16, x > 16 { x = 16; y += 34 }
             entry.frame.origin = CGPoint(x: x, y: y)
             hud.addSublayer(entry)
-            x += entry.frame.width + HUD.entryGap
+            x += entry.frame.width + theme.hud.entryGap
         }
         y += 38
-        let status = HUD.makeText(query.isEmpty ? status : query, font: Fonts.mono(13), color: Palette.text, scale: scale)
+        let status = HUD.makeText(query.isEmpty ? status : query, font: style.queryFont, color: style.text, scale: scale)
         status.frame = CGRect(x: 16, y: y, width: width - 32, height: 22)
         hud.addSublayer(status)
-        let name = HUD.makeName(title, rowHeight: 24, scale: scale)
+        if !error.isEmpty {
+            y += 24
+            let feedback = HUD.makeText(error, font: style.queryFont, color: style.text, scale: scale)
+            feedback.frame = CGRect(x: 16, y: y, width: width - 32, height: 22)
+            hud.addSublayer(feedback)
+        }
+        let name = HUD.makeName(title, rowHeight: 24, scale: scale, style: theme.hud)
         name.frame.origin = CGPoint(x: 16, y: y + 28)
         hud.addSublayer(name)
         hudHeight = y + 62
         hud.frame = CGRect(x: (bounds.width - width) / 2, y: 24, width: width, height: hudHeight)
-        hud.shadowPath = CGPath(rect: hud.bounds, transform: nil)
+        hud.shadowPath = theme.hud.panel.path(in: hud.bounds)
         CATransaction.commit()
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor(white: 0, alpha: 0.78).setFill()
+        style.backdrop.setFill()
         bounds.fill()
         let width = min(bounds.width - 64, 1200)
         let x = (bounds.width - width) / 2
@@ -485,36 +521,38 @@ private final class HistoryView: NSView {
         hits = []
         for (index, entry) in items.enumerated() {
             let tile = CGRect(x: left + CGFloat(index) * 180, y: stripY, width: tileWidth, height: tileHeight)
-            Palette.surface.setFill()
-            tile.fill()
+            style.background.setFill()
+            NSBezierPath(roundedRect: tile, xRadius: style.rowCornerRadius, yRadius: style.rowCornerRadius).fill()
             if let image = thumbnails[entry.id] { draw(image, in: tile.insetBy(dx: 6, dy: 6)) }
             if let video = entry.video {
                 text("▶ " + video.durationLabel, at: CGPoint(x: tile.minX + 8, y: tile.minY + 6), font: Fonts.mono(13), color: .white, width: tile.width - 16)
             }
             if entry.id == selectedID {
-                // Match the picker's 4 pt purple pixel ring, including its cut-out corners.
-                let ring = CGMutablePath()
-                ring.addPixelRoundedRect(tile, pixel: 4)
-                ring.addPixelRoundedRect(tile.insetBy(dx: 4, dy: 4), pixel: 4)
+                let ring = style.outline.path(around: tile, width: style.selectedWidth)
                 if let context = NSGraphicsContext.current?.cgContext {
                     context.saveGState()
-                    context.setFillColor(Palette.accent.cgColor)
+                    context.setFillColor(style.selected.cgColor)
                     context.addPath(ring)
                     context.drawPath(using: .eoFill)
                     context.restoreGState()
                 }
             } else {
-                Palette.line.setFill()
-                tile.insetBy(dx: 1, dy: 1).frame(withWidth: 2)
+                style.separator.setStroke()
+                let border = NSBezierPath(roundedRect: tile.insetBy(dx: style.borderWidth / 2, dy: style.borderWidth / 2),
+                    xRadius: style.rowCornerRadius, yRadius: style.rowCornerRadius)
+                border.lineWidth = style.borderWidth
+                border.stroke()
             }
             hits.append((entry.id, tile))
         }
         let area = CGRect(x: x, y: stripY + 136, width: width, height: max(1, bounds.height - stripY - 168))
         if let preview { draw(preview, in: area) }
         else if loadingLabel.isHidden {
-            text(empty, at: CGPoint(x: x, y: area.midY), font: Fonts.mono(14), color: .white, width: width)
+            text(empty, at: CGPoint(x: x, y: area.midY), font: style.font, color: style.text, width: width)
         }
-        setAccessibilityValue([status, query, keys.map { $0.keys.joined(separator: "/") + " " + $0.action }.joined(separator: ", ")].filter { !$0.isEmpty }.joined(separator: ". "))
+        setAccessibilityValue([status, query, error, preview == nil && loadingLabel.isHidden ? empty : "",
+            keys.map { $0.keys.joined(separator: "/") + " " + $0.action }.joined(separator: ", ")]
+            .filter { !$0.isEmpty }.joined(separator: ". "))
     }
 
     private func text(_ value: String, at point: CGPoint, font: NSFont, color: NSColor, width: CGFloat) {

@@ -74,10 +74,14 @@ struct EditorScene {
     let canRedo: Bool
     let status: String
     var viewScale: CGFloat = 1
+    var annotationStyle: ThemeID = .pixel
+    var resolvedAnnotationStyle: AnnotationStyle = ThemeCatalog.pixel.annotation
 }
 
 /// Edits a capture in place, over the overlay panels. Takes keys and mouse events until it finishes.
 final class EditorController {
+    /// Surrounding UI appearance; document markup style is independent when restoring history.
+    let theme: ResolvedTheme
     enum Tool: CaseIterable, Hashable {
         case arrow, rect, text, crop
 
@@ -148,8 +152,11 @@ final class EditorController {
     /// Refreshed from the rendered toolbar's placement on its host panel.
     var canHideHUD = false
 
-    init(capture: Capture, restored: HistoryDocument? = nil, viewScale: CGFloat = 1) {
-        document = restored?.document ?? EditDocument(image: capture.image, scale: capture.scale, crop: capture.initialCrop)
+    init(capture: Capture, restored: HistoryDocument? = nil, viewScale: CGFloat = 1,
+         theme: ResolvedTheme = ThemeCatalog.pixel) {
+        self.theme = theme
+        document = restored?.document ?? EditDocument(image: capture.image, scale: capture.scale,
+            crop: capture.initialCrop, annotationStyle: theme.id)
         history = EditHistory(snapshots: restored?.undo ?? [])
         self.viewScale = viewScale
         baseline = document.snapshot
@@ -613,7 +620,7 @@ final class EditorController {
             if let annotation = shape(from: start, to: cursor.position) { annotations.append(annotation) }
         case let .typing(text, at):
             if !text.isEmpty { annotations.append(.text(text, at: at, color: color)) }
-            caret = AnnotationRenderer.caret(after: text, at: at)
+            caret = AnnotationRenderer.caret(after: text, at: at, style: document.resolvedAnnotationStyle)
         case .idle: break
         }
         return EditorScene(
@@ -631,7 +638,9 @@ final class EditorController {
             canUndo: history.canUndo,
             canRedo: history.canRedo,
             status: status,
-            viewScale: viewScale
+            viewScale: viewScale,
+            annotationStyle: document.annotationStyle,
+            resolvedAnnotationStyle: document.resolvedAnnotationStyle
         )
     }
 

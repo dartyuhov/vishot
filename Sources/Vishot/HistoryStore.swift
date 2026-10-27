@@ -20,6 +20,10 @@ struct HistoryEntry: Codable, Equatable {
     var snapshot: EditSnapshot
     var undo: [EditSnapshot]
     var recognizedText: String?
+    /// Optional for legacy screenshots. Unknown present values are rejected on decode.
+    var annotationStyle: ThemeID?
+    var annotationStyleID: ThemeID { annotationStyle ?? .pixel }
+
     var video: HistoryVideo? = nil
     /// Transient disk availability; never written into retained metadata.
     var unavailable = false
@@ -27,7 +31,7 @@ struct HistoryEntry: Codable, Equatable {
 
     private enum Keys: String, CodingKey {
         case schema, id, revision, createdAt, modifiedAt, label, windowTitle, payload
-        case scale, snapshot, undo, recognizedText
+        case scale, snapshot, undo, recognizedText, annotationStyle
     }
     private struct Screenshot: Codable {
         let scale: CGFloat
@@ -39,11 +43,12 @@ struct HistoryEntry: Codable, Equatable {
 
     init(schema: Int = 1, id: UUID, revision: UUID, createdAt: Date, modifiedAt: Date, scale: CGFloat,
          label: String, windowTitle: String, snapshot: EditSnapshot, undo: [EditSnapshot], recognizedText: String? = nil,
-         video: HistoryVideo? = nil) {
+         video: HistoryVideo? = nil, annotationStyle: ThemeID? = nil) {
         self.schema = schema; self.id = id; self.revision = revision
         self.createdAt = createdAt; self.modifiedAt = modifiedAt; self.scale = scale
         self.label = label; self.windowTitle = windowTitle; self.snapshot = snapshot; self.undo = undo
         self.recognizedText = recognizedText; self.video = video
+        self.annotationStyle = annotationStyle
     }
 
     init(from decoder: Decoder) throws {
@@ -56,6 +61,14 @@ struct HistoryEntry: Codable, Equatable {
         modifiedAt = try values.decode(Date.self, forKey: .modifiedAt)
         label = try values.decode(String.self, forKey: .label)
         windowTitle = try values.decode(String.self, forKey: .windowTitle)
+        if values.contains(.annotationStyle) {
+            guard let value = try? values.decode(ThemeID.self, forKey: .annotationStyle) else {
+                throw SettingsError(message: "Unsupported History entry \(id).")
+            }
+            annotationStyle = value
+        } else {
+            annotationStyle = nil
+        }
         if schema == 1 {
             scale = try values.decode(CGFloat.self, forKey: .scale)
             snapshot = try values.decode(EditSnapshot.self, forKey: .snapshot)
@@ -79,6 +92,7 @@ struct HistoryEntry: Codable, Equatable {
         try values.encode(id, forKey: .id); try values.encode(revision, forKey: .revision)
         try values.encode(createdAt, forKey: .createdAt); try values.encode(modifiedAt, forKey: .modifiedAt)
         try values.encode(label, forKey: .label); try values.encode(windowTitle, forKey: .windowTitle)
+        try values.encodeIfPresent(annotationStyle, forKey: .annotationStyle)
         if schema == 1 {
             try values.encode(scale, forKey: .scale); try values.encode(snapshot, forKey: .snapshot)
             try values.encode(undo, forKey: .undo); try values.encodeIfPresent(recognizedText, forKey: .recognizedText)
@@ -92,9 +106,10 @@ struct HistoryEntry: Codable, Equatable {
         if let video { return [label, windowTitle, video.movie] }
         // Fully visible annotation strings are exact searchable data even before OCR completes.
         // Partially clipped strings rely on rendered OCR so hidden characters never leak.
+        let style = ThemeCatalog.annotation(annotationStyleID)
         let text = snapshot.annotations.compactMap { annotation -> String? in
             guard case let .text(text, at, _) = annotation else { return nil }
-            if let crop = snapshot.crop, !crop.contains(AnnotationRenderer.textBounds(text, at: at)) { return nil }
+            if let crop = snapshot.crop, !crop.contains(AnnotationRenderer.textBounds(text, at: at, style: style)) { return nil }
             return text
         }.joined(separator: "\n")
         return [label, windowTitle, recognizedText ?? "", text]
@@ -204,12 +219,14 @@ final class HistoryStore {
                 id: UUID? = nil, now: Date = Date()) throws -> HistoryEntry {
         let previous = try id.map(read)
         guard previous?.video == nil else { throw SettingsError(message: "Videos cannot be edited as screenshots.") }
-        if var previous, previous.snapshot == document.snapshot, previous.schema == 1 {
+        if var previous, previous.snapshot == document.snapshot,
+           previous.annotationStyleID == document.annotationStyle, previous.schema == 1 {
             previous.schema = 2
             try JSONEncoder().encode(previous).write(to: metadata(previous.id), options: .atomic)
             return previous
         }
-        if let previous, previous.snapshot == document.snapshot, previous.schema == 2 { return previous }
+        if let previous, previous.snapshot == document.snapshot,
+           previous.annotationStyleID == document.annotationStyle { return previous }
         guard document.scale.isFinite, document.scale > 0,
               let preview = AnnotationRenderer.export(document),
               let previewData = ImageEncoding.data(preview, scale: document.scale, type: .png),
@@ -219,7 +236,8 @@ final class HistoryStore {
         }
         let entry = HistoryEntry(schema: 2, id: previous?.id ?? UUID(), revision: UUID(), createdAt: previous?.createdAt ?? now,
             modifiedAt: now, scale: document.scale, label: previous?.label ?? label,
-            windowTitle: previous?.windowTitle ?? windowTitle, snapshot: document.snapshot, undo: undo)
+            windowTitle: previous?.windowTitle ?? windowTitle, snapshot: document.snapshot, undo: undo,
+            annotationStyle: document.annotationStyle)
         let directory = folder(entry.id)
         try files.createDirectory(at: directory, withIntermediateDirectories: true)
         var published = false
@@ -252,7 +270,7 @@ final class HistoryStore {
         guard entry.video == nil else { throw SettingsError(message: "Videos open in the default player.") }
         let image = try Self.image(at: folder(id).appendingPathComponent("original.png"))
         guard entry.scale.isFinite, entry.scale > 0 else { throw SettingsError(message: "Invalid History image scale.") }
-        var document = EditDocument(image: image, scale: entry.scale)
+        var document = EditDocument(image: image, scale: entry.scale, annotationStyle: entry.annotationStyleID)
         document.snapshot = entry.snapshot
         let bounds = CGRect(origin: .zero, size: document.size)
         for snapshot in [entry.snapshot] + entry.undo {

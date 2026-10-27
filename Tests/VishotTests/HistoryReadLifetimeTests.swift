@@ -3,6 +3,56 @@ import AppKit
 @testable import Vishot
 
 final class HistoryReadLifetimeTests: XCTestCase {
+    func testPendingPreviewRetainsStoredMarkupAcrossDeferredThemeChange() throws {
+        for style in ThemeID.allCases {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let settings = SettingsStore(url: folder.appendingPathComponent("config.toml")) { _ in NSObject() }
+            settings.start(watching: false)
+            settings.update(style: VisualStyle(annotationID: style))
+            settings.setSessionActive(true)
+            let store = HistoryStore(url: folder.appendingPathComponent("History"))
+            let source = try makeDocument()
+            let document = EditDocument(image: source.image, scale: source.scale,
+                annotations: [.arrow(from: CGPoint(x: 5.5, y: 5.5), to: CGPoint(x: 30.5, y: 20.5), color: .purple)],
+                annotationStyle: settings.active.theme)
+            let entry = try store.commit(document: document, undo: [], label: "Stored markup")
+            try store.index(entry.id, revision: entry.revision, text: "")
+            let bytes = try XCTUnwrap(store.previewData(entry, thumbnail: false))
+            let expected = try XCTUnwrap(AnnotationRenderer.export(document))
+            let reader = DispatchQueue(label: "test.history.theme.decode")
+            reader.suspend()
+            let library = HistoryLibrary(store: store, browserReader: reader)
+            let preview = expectation(description: "Stored preview survives theme change")
+            library.image(entry, thumbnail: false) { image in
+                do {
+                    let actual = try XCTUnwrap(image)
+                    let actualPixels = try XCTUnwrap(AnnotationRenderer.imageSpaceContext(drawing: actual, scale: 1))
+                    let expectedPixels = try XCTUnwrap(AnnotationRenderer.imageSpaceContext(drawing: expected, scale: 1))
+                    XCTAssertEqual(actualPixels.makeImage()!.dataProvider!.data! as Data,
+                                   expectedPixels.makeImage()!.dataProvider!.data! as Data)
+                } catch { XCTFail("Preview unavailable: \(error)") }
+                preview.fulfill()
+            }
+            let queued = expectation(description: "Preview bytes queued before theme change")
+            library.load(entry.id) { loaded in
+                XCTAssertEqual(loaded?.document.annotationStyle, style)
+                queued.fulfill()
+            }
+            wait(for: [queued], timeout: 3)
+            let nextStyle: ThemeID = style == .pixel ? .clean : .pixel
+            settings.update(style: VisualStyle(annotationID: nextStyle))
+            settings.setSessionActive(true) // History-to-editor continuation.
+            XCTAssertEqual(settings.active.theme, style)
+            settings.setSessionActive(false)
+            XCTAssertEqual(settings.active.theme, nextStyle)
+            reader.resume()
+            wait(for: [preview], timeout: 3)
+            XCTAssertEqual(try store.previewData(entry, thumbnail: false), bytes)
+            XCTAssertNil(library.error)
+        }
+    }
+
     func testDeletedAndExpiredRequestsCompleteWithoutDamage() throws {
         for expire in [false, true] {
             let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

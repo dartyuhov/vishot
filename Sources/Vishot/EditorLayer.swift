@@ -1,34 +1,21 @@
 import AppKit
 
-private enum Style {
-    static let cropDim = NSColor(white: 0, alpha: 0.45)
-    /// The crop's outline: accent while it is drawn, then white.
-    static let cropping = Palette.accent
-    static let cropped = NSColor.white
-    /// A rectangle annotation's shadow, one cell down and right.
-    static let cropShadow = NSColor(white: 0, alpha: 0.35)
-    static let accent = Palette.accent
-
-    /// Around the selected swatch.
-    static let swatchRing: CGFloat = 2
-}
-
 /// The editor on one panel: the frozen image, its annotations, the dimming around it, the cursor and,
 /// on one screen, the toolbar. Built with the panel and hidden until editing.
 final class EditorLayer: NSObject, CALayerDelegate {
     let root = CALayer()
     private let image = CALayer()
     private let annotations = CALayer()
-    private let cropDim = SelectionStyle.makeDim(Style.cropDim)
+    private let cropDim: CAShapeLayer
     private let cropOutline = CAShapeLayer()
     private let cropHandle = CALayer()
     private let annotationMask = CAShapeLayer()
-    private let outsideDim = SelectionStyle.makeDim()
-    private let crosshair = SelectionStyle.makeCrosshair()
+    private let outsideDim: CAShapeLayer
+    private let crosshair: CALayer
     private let caret = CALayer()
-    private let horizontalToolbar: EditorToolbar
-    private let verticalToolbar: EditorToolbar
-    private let compactToolbar: EditorToolbar
+    private var horizontalToolbar: EditorToolbar
+    private var verticalToolbar: EditorToolbar
+    private var compactToolbar: EditorToolbar
     private var toolbar: EditorToolbar
     private(set) var canHideHUD = false
 
@@ -36,11 +23,21 @@ final class EditorLayer: NSObject, CALayerDelegate {
     private var drawn: [Annotation] = []
     private var drawnOffset = CGPoint.zero
     private var drawnScale: CGFloat = 1
+    private var drawnStyleID: ThemeID?
+    private var drawnStyle: AnnotationStyle
+    private var theme: ResolvedTheme
+    private let backingScale: CGFloat
 
-    init(size: CGSize, scale: CGFloat) {
-        horizontalToolbar = EditorToolbar(scale: scale)
-        verticalToolbar = EditorToolbar(scale: scale, layout: .vertical)
-        compactToolbar = EditorToolbar(scale: scale, layout: .compact)
+    init(size: CGSize, scale: CGFloat, theme: ResolvedTheme) {
+        self.theme = theme
+        drawnStyle = theme.annotation
+        cropDim = SelectionStyle.makeDim(theme.editor.cropDim)
+        outsideDim = SelectionStyle.makeDim(theme.selection.outsideDim)
+        crosshair = SelectionStyle.makeCrosshair(style: theme.selection)
+        backingScale = scale
+        horizontalToolbar = EditorToolbar(scale: scale, theme: theme)
+        verticalToolbar = EditorToolbar(scale: scale, layout: .vertical, theme: theme)
+        compactToolbar = EditorToolbar(scale: scale, layout: .compact, theme: theme)
         toolbar = horizontalToolbar
         super.init()
         root.frame = CGRect(origin: .zero, size: size)
@@ -51,23 +48,43 @@ final class EditorLayer: NSObject, CALayerDelegate {
         annotations.contentsScale = scale
         annotations.needsDisplayOnBoundsChange = true
         annotations.mask = annotationMask
-        cropHandle.backgroundColor = Palette.accent.cgColor
-        cropHandle.borderColor = NSColor.white.cgColor
-        cropHandle.borderWidth = 2
-
         cropDim.frame = root.bounds
         outsideDim.frame = root.bounds
-        cropOutline.shadowColor = Style.cropShadow.cgColor
         cropOutline.shadowOpacity = 1
-        cropOutline.shadowRadius = 0
-        cropOutline.shadowOffset = CGSize(width: PixelArt.cell, height: -PixelArt.cell)
-        caret.borderColor = NSColor(white: 1, alpha: 0.8).cgColor
-        caret.borderWidth = 0.5
+        applyAppearance()
 
         for layer in [image, annotations, cropDim, cropOutline, outsideDim, crosshair, caret, cropHandle,
                       horizontalToolbar.root, verticalToolbar.root, compactToolbar.root] {
             root.addSublayer(layer)
         }
+    }
+
+    /// Called with reusable panel preparation, off the hotkey path.
+    func prepare(theme: ResolvedTheme) {
+        guard self.theme.style != theme.style || self.theme.colorScheme != theme.colorScheme else { return }
+        self.theme = theme
+        for hud in [horizontalToolbar, verticalToolbar, compactToolbar] { hud.root.removeFromSuperlayer() }
+        horizontalToolbar = EditorToolbar(scale: backingScale, theme: theme)
+        verticalToolbar = EditorToolbar(scale: backingScale, layout: .vertical, theme: theme)
+        compactToolbar = EditorToolbar(scale: backingScale, layout: .compact, theme: theme)
+        toolbar = horizontalToolbar
+        for hud in [horizontalToolbar, verticalToolbar, compactToolbar] { root.addSublayer(hud.root) }
+        applyAppearance()
+    }
+
+    private func applyAppearance() {
+        cropDim.fillColor = theme.editor.cropDim.cgColor
+        outsideDim.fillColor = theme.selection.outsideDim.cgColor
+        SelectionStyle.apply(theme.selection, to: crosshair)
+        cropOutline.shadowColor = theme.editor.cropShadow.cgColor
+        cropOutline.shadowRadius = theme.editor.cropShadowRadius
+        cropOutline.shadowOffset = theme.editor.cropShadowOffset
+        caret.borderColor = theme.editor.caretBorder.cgColor
+        caret.borderWidth = theme.editor.caretBorderWidth
+        cropHandle.backgroundColor = theme.editor.active.cgColor
+        cropHandle.borderColor = theme.editor.cropped.cgColor
+        cropHandle.borderWidth = theme.editor.cropHandleBorderWidth
+        cropHandle.cornerRadius = theme.editor.cropHandleRadius
     }
 
     /// `panelFrame` is the panel's frame in Cocoa global space.
@@ -95,10 +112,12 @@ final class EditorLayer: NSObject, CALayerDelegate {
             annotationMask.frame = annotations.bounds
             annotationMask.path = CGPath(rect: clip.offsetBy(dx: -visible.minX, dy: -visible.minY), transform: nil)
             let offset = CGPoint(x: imageRect.minX - visible.minX, y: imageRect.maxY - visible.minY)
-            if scene.annotations != drawn || offset != drawnOffset || scale != drawnScale {
+            if scene.annotations != drawn || offset != drawnOffset || scale != drawnScale || scene.annotationStyle != drawnStyleID {
                 drawn = scene.annotations
                 drawnOffset = offset
                 drawnScale = scale
+                drawnStyleID = scene.annotationStyle
+                drawnStyle = scene.resolvedAnnotationStyle
                 annotations.setNeedsDisplay()
             }
         }
@@ -119,10 +138,11 @@ final class EditorLayer: NSObject, CALayerDelegate {
             cropOutline.frame = imageRect
             let flip = CGAffineTransform(a: scale, b: 0, c: 0, d: -scale, tx: 0, ty: imageRect.height)
             let ring = CGMutablePath()
-            ring.addRects(Self.cropRing(crop).map(PixelArt.rect), transform: flip)
+            ring.addPath(theme.editor.cropOutline.cropPath(around: crop, width: theme.editor.cropWidth), transform: flip)
+            cropOutline.fillRule = .evenOdd
             cropOutline.path = ring
             cropOutline.shadowPath = ring
-            cropOutline.fillColor = (scene.isCropping ? Style.cropping : Style.cropped).cgColor
+            cropOutline.fillColor = (scene.isCropping ? theme.editor.active : theme.editor.cropped).cgColor
         }
 
         crosshair.isHidden = scene.cursor == nil
@@ -135,7 +155,8 @@ final class EditorLayer: NSObject, CALayerDelegate {
         cropHandle.isHidden = scene.cropHandle == nil
         if let handle = scene.cropHandle {
             let position = local(handle)
-            cropHandle.frame = CGRect(x: position.x - 5, y: position.y - 5, width: 10, height: 10)
+            let size = theme.editor.cropHandleSize
+            cropHandle.frame = CGRect(x: position.x - size / 2, y: position.y - size / 2, width: size, height: size)
         }
 
         for hud in [horizontalToolbar, verticalToolbar, compactToolbar] { hud.root.isHidden = true }
@@ -154,17 +175,6 @@ final class EditorLayer: NSObject, CALayerDelegate {
             toolbar.update(scene, canHideHUD: canHideHUD)
             toolbar.root.frame = placement.frame
         }
-    }
-
-    /// A rectangle annotation's ring, on the cells just outside the crop, so it covers only the corner
-    /// cells of what is kept.
-    private static func cropRing(_ crop: CGRect) -> [PixelArt.Cell] {
-        let cell = PixelArt.cell
-        let minX = ((crop.minX / cell).rounded(.down) - 1) * cell
-        let minY = ((crop.minY / cell).rounded(.down) - 1) * cell
-        let maxX = ((crop.maxX / cell).rounded(.up) + 1) * cell
-        let maxY = ((crop.maxY / cell).rounded(.up) + 1) * cell
-        return PixelArt.outline(CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY))
     }
 
     func hide() {
@@ -192,7 +202,7 @@ final class EditorLayer: NSObject, CALayerDelegate {
         // Into image space: origin at the image's top-left, y down.
         context.translateBy(x: drawnOffset.x, y: drawnOffset.y)
         context.scaleBy(x: drawnScale, y: -drawnScale)
-        AnnotationRenderer.draw(drawn, in: context)
+        AnnotationRenderer.draw(drawn, in: context, style: drawnStyle)
     }
 
     func action(for layer: CALayer, forKey event: String) -> CAAction? {
@@ -203,6 +213,8 @@ final class EditorLayer: NSObject, CALayerDelegate {
 /// Wide, stacked, and collapsed versions of the editor HUD, built with the panels. The active tool
 /// replaces the tool list with its tip. Each layout keeps its footprint and output actions steady.
 private final class EditorToolbar {
+    private let theme: ResolvedTheme
+    private var style: HUDStyle { theme.hud }
     let root = CALayer()
     private var buttons: [(item: ToolbarItem, layer: CALayer, entry: HUD.Entry?)] = []
     private let status: CATextLayer
@@ -229,147 +241,149 @@ private final class EditorToolbar {
         (.toggleHUD, HUDKey("o", action: "hide HUD"), 2, 1),
     ]
 
-    init(scale: CGFloat, layout: EditorHUDPlacement.Layout = .horizontal) {
+    init(scale: CGFloat, layout: EditorHUDPlacement.Layout = .horizontal, theme: ResolvedTheme) {
+        self.theme = theme
+        let style = theme.hud
         self.layout = layout
-        status = HUD.makeStatus(scale: scale)
-        colorHint = HUD.makeEntry(HUDKey("tab", action: "color"), scale: scale)
-        let colorWidth = AnnotationColor.allCases.map { HUD.textSize($0.name, font: HUD.textFont).width }.max() ?? 0
+        status = HUD.makeStatus(scale: scale, style: style)
+        colorHint = HUD.makeEntry(HUDKey("tab", action: "color"), scale: scale, style: style)
+        let colorWidth = AnnotationColor.allCases.map { HUD.textSize($0.name, font: style.textFont).width }.max() ?? 0
         colorHint.layer.frame.size.width += max(0, colorWidth - colorHint.action.frame.width)
         colorHint.action.frame.size.width = max(colorHint.action.frame.width, colorWidth)
         // Swatches reserve their selection ring. All other controls reserve the same space vertically,
         // aligning the keycap faces rather than the outside of the ring.
-        let keyHeight = HUD.makeKeycap("a", scale: scale).edge.frame.height
-        let rowHeight = keyHeight + 2 * Style.swatchRing
-        name = HUD.makeName("EDIT", rowHeight: rowHeight, scale: scale)
-        HUD.stylePanel(root)
+        let keyHeight = HUD.makeKeycap("a", scale: scale, style: style.keycap).edge.frame.height
+        let rowHeight = keyHeight + 2 * theme.editor.swatchRing
+        name = HUD.makeName("EDIT", rowHeight: rowHeight, scale: scale, style: style)
+        HUD.stylePanel(root, style: style)
 
         var top: [(layer: CALayer, gap: CGFloat)] = []
         for (item, key) in Self.tools {
-            let entry = HUD.makeEntry(key, scale: scale)
+            let entry = HUD.makeEntry(key, scale: scale, style: style)
             buttons.append((item, entry.layer, entry))
-            top.append((entry.layer, top.isEmpty ? 0 : HUD.entryGap))
+            top.append((entry.layer, top.isEmpty ? 0 : style.entryGap))
         }
         var swatches: [(layer: CALayer, gap: CGFloat)] = []
         for (index, color) in AnnotationColor.allCases.enumerated() {
-            let swatch = Self.makeSwatch(color, key: "\(index + 1)", scale: scale)
+            let swatch = Self.makeSwatch(color, key: "\(index + 1)", scale: scale, theme: theme)
             buttons.append((.color(color), swatch, nil))
-            swatches.append((swatch, index == 0 ? 0 : HUD.keyGap))
+            swatches.append((swatch, index == 0 ? 0 : style.keyGap))
         }
-        swatches.append((colorHint.layer, HUD.actionGap))
+        swatches.append((colorHint.layer, style.actionGap))
 
         var historyParts: [(layer: CALayer, gap: CGFloat)] = []
         for (item, key) in Self.history {
-            let entry = HUD.makeEntry(key, scale: scale)
+            let entry = HUD.makeEntry(key, scale: scale, style: style)
             buttons.append((item, entry.layer, entry))
-            historyParts.append((entry.layer, historyParts.isEmpty ? 0 : HUD.entryGap))
+            historyParts.append((entry.layer, historyParts.isEmpty ? 0 : style.entryGap))
         }
 
         var actions: [ToolbarItem: CALayer] = [:]
         for control in Self.actions {
-            let entry = HUD.makeEntry(control.key, scale: scale)
+            let entry = HUD.makeEntry(control.key, scale: scale, style: style)
             buttons.append((control.item, entry.layer, entry))
             actions[control.item] = entry.layer
         }
 
-        let statusHeight = HUD.textSize("Hg", font: HUD.textFont).height
-        let bottomY = HUD.padding.height
-        let statusY = bottomY + HUD.textY(HUD.textFont, lineHeight: statusHeight, in: rowHeight, scale: scale)
-        let colorY = bottomY + rowHeight + HUD.lineGap
-        let topY = colorY + rowHeight + HUD.lineGap
+        let statusHeight = HUD.textSize("Hg", font: style.textFont).height
+        let bottomY = style.padding.height
+        let statusY = bottomY + HUD.textY(style.textFont, lineHeight: statusHeight, in: rowHeight, scale: scale)
+        let colorY = bottomY + rowHeight + style.lineGap
+        let topY = colorY + rowHeight + style.lineGap
 
         // Reserve enough name space for every tool, so changing context never moves the controls.
         let nameWidth = (["EDIT"] + EditorController.Tool.allCases.map { $0.name.uppercased() })
-            .map { HUD.textSize($0, font: HUD.nameFont).width }.max() ?? 0
-        name.frame.origin.x = HUD.padding.width
+            .map { HUD.textSize($0, font: style.nameFont).width }.max() ?? 0
+        name.frame.origin.x = style.padding.width
         name.frame.origin.y += topY
         name.frame.size.width = nameWidth
         root.addSublayer(name)
-        let indent = name.frame.maxX + HUD.entryGap
+        let indent = name.frame.maxX + style.entryGap
         tools.frame.origin = CGPoint(x: indent, y: topY)
         tools.frame.size = CGSize(width: Self.place(top, x: 0, y: 0, height: rowHeight, in: tools), height: rowHeight)
-        colors.frame.origin = CGPoint(x: HUD.padding.width, y: colorY)
+        colors.frame.origin = CGPoint(x: style.padding.width, y: colorY)
         colors.frame.size = CGSize(width: Self.place(swatches, x: 0, y: 0, height: rowHeight, in: colors), height: rowHeight)
-        history.frame.origin = CGPoint(x: colors.frame.maxX + 2 * HUD.entryGap, y: colorY)
+        history.frame.origin = CGPoint(x: colors.frame.maxX + 2 * style.entryGap, y: colorY)
         history.frame.size = CGSize(width: Self.place(historyParts, x: 0, y: 0, height: rowHeight, in: history), height: rowHeight)
         // Give contextual tips their own measure; the actions never borrow space from the editor.
         let editingRight = max(tools.frame.maxX, history.frame.maxX, indent + 440)
-        let dividerX = editingRight + HUD.entryGap
-        let actionX = dividerX + 2 + HUD.entryGap
+        let dividerX = editingRight + style.entryGap
+        let actionX = dividerX + style.panel.borderWidth + style.entryGap
         let firstColumnWidth = Self.actions.filter { $0.column == 0 }.map { actions[$0.item]!.frame.width }.max() ?? 0
-        let secondColumnX = actionX + firstColumnWidth + HUD.entryGap
+        let secondColumnX = actionX + firstColumnWidth + style.entryGap
         var actionRight = actionX
         for control in Self.actions {
             let layer = actions[control.item]!
             let x = control.column == 0 ? actionX : secondColumnX
-            let y = topY - CGFloat(control.row) * (rowHeight + HUD.lineGap)
+            let y = topY - CGFloat(control.row) * (rowHeight + style.lineGap)
             layer.frame.origin = CGPoint(x: x, y: y + ((rowHeight - layer.frame.height) / 2).rounded())
             root.addSublayer(layer)
             actionRight = max(actionRight, layer.frame.maxX)
         }
 
-        let width = actionRight + HUD.padding.width
-        root.frame.size = CGSize(width: width, height: topY + rowHeight + HUD.padding.height)
-        root.shadowPath = CGPath(rect: root.bounds, transform: nil)
-        idleStatusFrame = CGRect(x: HUD.padding.width, y: statusY, width: editingRight - HUD.padding.width, height: statusHeight)
-        activeStatusFrame = CGRect(x: indent, y: topY + HUD.textY(HUD.textFont, lineHeight: statusHeight, in: rowHeight, scale: scale),
+        let width = actionRight + style.padding.width
+        root.frame.size = CGSize(width: width, height: topY + rowHeight + style.padding.height)
+        root.shadowPath = style.panel.path(in: root.bounds)
+        idleStatusFrame = CGRect(x: style.padding.width, y: statusY, width: editingRight - style.padding.width, height: statusHeight)
+        activeStatusFrame = CGRect(x: indent, y: topY + HUD.textY(style.textFont, lineHeight: statusHeight, in: rowHeight, scale: scale),
                                   width: editingRight - indent, height: statusHeight)
         let divider = CALayer()
-        divider.backgroundColor = Palette.line.cgColor
-        divider.frame = CGRect(x: dividerX, y: HUD.padding.height, width: 2, height: root.bounds.height - 2 * HUD.padding.height)
+        divider.backgroundColor = style.panel.border.cgColor
+        divider.frame = CGRect(x: dividerX, y: style.padding.height, width: style.panel.borderWidth, height: root.bounds.height - 2 * style.padding.height)
         for layer in [tools, colors, history, divider] { root.addSublayer(layer) }
         status.frame = idleStatusFrame
         root.addSublayer(status)
 
         if layout == .vertical {
             let widestEntry = buttons.map { $0.layer.frame.width }.max() ?? 0
-            let width = max(200, widestEntry + 2 * HUD.padding.width)
-            let contentWidth = width - 2 * HUD.padding.width
-            let step = rowHeight + HUD.lineGap
+            let width = max(200, widestEntry + 2 * style.padding.width)
+            let contentWidth = width - 2 * style.padding.width
+            let step = rowHeight + style.lineGap
             // Build down from the heading. Fixed slots keep actions steady when controls are hidden.
-            let height = 2 * HUD.padding.height + CGFloat(1 + top.count + 3 + historyParts.count + actions.count) * step + 80 + 2 * HUD.lineGap
+            let height = 2 * style.padding.height + CGFloat(1 + top.count + 3 + historyParts.count + actions.count) * step + 80 + 2 * style.lineGap
             root.frame.size = CGSize(width: width, height: height)
-            var y = height - HUD.padding.height - rowHeight
-            name.frame.origin.y = y + HUD.textY(HUD.nameFont, lineHeight: name.frame.height, in: rowHeight, scale: scale)
+            var y = height - style.padding.height - rowHeight
+            name.frame.origin.y = y + HUD.textY(style.nameFont, lineHeight: name.frame.height, in: rowHeight, scale: scale)
             y -= step
             let toolHeight = CGFloat((top.count + 1) / 2) * step
-            tools.frame = CGRect(x: HUD.padding.width, y: y - toolHeight + step, width: contentWidth, height: toolHeight)
+            tools.frame = CGRect(x: style.padding.width, y: y - toolHeight + step, width: contentWidth, height: toolHeight)
             for (index, part) in top.enumerated() {
                 part.layer.frame.origin = CGPoint(x: index.isMultiple(of: 2) ? 0 : contentWidth / 2,
-                                                  y: toolHeight - CGFloat(index / 2 + 1) * step + Style.swatchRing)
+                                                  y: toolHeight - CGFloat(index / 2 + 1) * step + theme.editor.swatchRing)
             }
             y -= toolHeight
-            idleStatusFrame = CGRect(x: HUD.padding.width, y: y - 80 + rowHeight, width: contentWidth, height: 80)
-            activeStatusFrame = CGRect(x: HUD.padding.width, y: y - 80 + rowHeight, width: contentWidth, height: 80)
+            idleStatusFrame = CGRect(x: style.padding.width, y: y - 80 + rowHeight, width: contentWidth, height: 80)
+            activeStatusFrame = CGRect(x: style.padding.width, y: y - 80 + rowHeight, width: contentWidth, height: 80)
             status.isWrapped = true
-            y -= 80 + HUD.lineGap
-            colors.frame.origin = CGPoint(x: HUD.padding.width, y: y - 2 * step)
+            y -= 80 + style.lineGap
+            colors.frame.origin = CGPoint(x: style.padding.width, y: y - 2 * step)
             for (index, part) in swatches.enumerated() {
                 if index < 6 {
-                    part.layer.frame.origin = CGPoint(x: CGFloat(index % 3) * (part.layer.frame.width + HUD.keyGap),
+                    part.layer.frame.origin = CGPoint(x: CGFloat(index % 3) * (part.layer.frame.width + style.keyGap),
                                                       y: CGFloat(2 - index / 3) * step)
                 } else {
-                    part.layer.frame.origin = CGPoint(x: 0, y: Style.swatchRing)
+                    part.layer.frame.origin = CGPoint(x: 0, y: theme.editor.swatchRing)
                 }
             }
             colors.frame.size = CGSize(width: contentWidth, height: 3 * step)
             y -= 3 * step
             let historyHeight = step
-            history.frame = CGRect(x: HUD.padding.width, y: y - historyHeight + step, width: contentWidth, height: historyHeight)
+            history.frame = CGRect(x: style.padding.width, y: y - historyHeight + step, width: contentWidth, height: historyHeight)
             for (index, part) in historyParts.enumerated() {
                 part.layer.frame.origin = CGPoint(x: index.isMultiple(of: 2) ? 0 : contentWidth / 2,
-                                                  y: Style.swatchRing)
+                                                  y: theme.editor.swatchRing)
             }
             y -= historyHeight - rowHeight
-            y -= HUD.lineGap
-            divider.frame = CGRect(x: HUD.padding.width, y: y, width: contentWidth, height: 2)
+            y -= style.lineGap
+            divider.frame = CGRect(x: style.padding.width, y: y, width: contentWidth, height: style.panel.borderWidth)
             y -= step
             for control in Self.actions {
                 let layer = actions[control.item]!
-                layer.frame.origin = CGPoint(x: HUD.padding.width, y: y)
+                layer.frame.origin = CGPoint(x: style.padding.width, y: y)
                 y -= step
             }
             // Remove unused space below the last action without changing any of the local slots.
-            let excess = actions.values.map { $0.frame.minY }.min()! - HUD.padding.height
+            let excess = actions.values.map { $0.frame.minY }.min()! - style.padding.height
             for layer in root.sublayers ?? [] { layer.frame.origin.y -= excess }
             idleStatusFrame.origin.y -= excess
             activeStatusFrame.origin.y -= excess
@@ -382,11 +396,11 @@ private final class EditorToolbar {
             discard.isHidden = false
             let toggleEntry = buttons.first { $0.item == .toggleHUD }!.entry!
             toggleEntry.action.string = "show HUD"
-            toggle.frame.origin = CGPoint(x: HUD.padding.width, y: HUD.padding.height + Style.swatchRing)
-            discard.frame.origin = CGPoint(x: toggle.frame.maxX + HUD.entryGap, y: toggle.frame.minY)
-            root.frame.size = CGSize(width: discard.frame.maxX + HUD.padding.width, height: rowHeight + 2 * HUD.padding.height)
+            toggle.frame.origin = CGPoint(x: style.padding.width, y: style.padding.height + theme.editor.swatchRing)
+            discard.frame.origin = CGPoint(x: toggle.frame.maxX + style.entryGap, y: toggle.frame.minY)
+            root.frame.size = CGSize(width: discard.frame.maxX + style.padding.width, height: rowHeight + 2 * style.padding.height)
         }
-        root.shadowPath = CGPath(rect: root.bounds, transform: nil)
+        root.shadowPath = style.panel.path(in: root.bounds)
     }
 
     /// Lays `parts` out left to right from `x`, each after its gap, centred in a row `height` tall at `y`.
@@ -403,13 +417,15 @@ private final class EditorToolbar {
     }
 
     /// A keycap with the color on its face and the number that picks it, in a ring shown while selected.
-    private static func makeSwatch(_ color: AnnotationColor, key: String, scale: CGFloat) -> CALayer {
+    private static func makeSwatch(_ color: AnnotationColor, key: String, scale: CGFloat, theme: ResolvedTheme) -> CALayer {
         let isLight = [.yellow, .green, .white].contains(color)
-        let keycap = HUD.makeKeycap(key, face: NSColor(cgColor: color.cgColor) ?? .gray, text: isLight ? Palette.ink : .white, scale: scale).edge
-        keycap.frame.origin = CGPoint(x: Style.swatchRing, y: Style.swatchRing)
+        let ring = theme.editor.swatchRing
+        let keycap = HUD.makeKeycap(key, face: NSColor(cgColor: color.cgColor)!, text: isLight ? theme.editor.swatchDarkText : theme.editor.swatchLightText, scale: scale, style: theme.hud.keycap).edge
+        keycap.frame.origin = CGPoint(x: ring, y: ring)
         let swatch = CALayer()
-        swatch.borderColor = Palette.text.cgColor
-        swatch.frame.size = CGSize(width: keycap.frame.width + 2 * Style.swatchRing, height: keycap.frame.height + 2 * Style.swatchRing)
+        swatch.borderColor = theme.hud.text.cgColor
+        swatch.cornerRadius = theme.hud.keycap.cornerRadius == 0 ? 0 : theme.hud.keycap.cornerRadius + ring
+        swatch.frame.size = CGSize(width: keycap.frame.width + 2 * ring, height: keycap.frame.height + 2 * ring)
         swatch.addSublayer(keycap)
         return swatch
     }
@@ -425,14 +441,19 @@ private final class EditorToolbar {
             switch item {
             case .tool(let tool):
                 let isActive = tool == scene.context.tool
-                entry?.faces.forEach { $0.backgroundColor = (isActive ? Style.accent : Palette.surfaceRaised).cgColor }
-                entry?.action.foregroundColor = (isActive ? Palette.text : Palette.textMuted).cgColor
+                entry?.faces.forEach { face in
+                    face.backgroundColor = (isActive ? theme.editor.active : style.keycap.face).cgColor
+                    face.sublayers?.compactMap { $0 as? CATextLayer }.forEach {
+                        $0.foregroundColor = (isActive ? theme.editor.activeText : style.keycap.text).cgColor
+                    }
+                }
+                entry?.action.foregroundColor = (isActive ? style.text : style.muted).cgColor
             case .color(let color):
-                layer.borderWidth = color == scene.color ? Style.swatchRing : 0
+                layer.borderWidth = color == scene.color ? theme.editor.swatchRing : 0
             case .undo:
-                layer.opacity = scene.canUndo ? 1 : 0.35
+                layer.opacity = scene.canUndo ? 1 : style.disabledOpacity
             case .redo:
-                layer.opacity = scene.canRedo ? 1 : 0.35
+                layer.opacity = scene.canRedo ? 1 : style.disabledOpacity
             case .escape:
                 // Esc places the current annotation (or applies a resize) before it can discard.
                 entry?.action.string = scene.context.escapeLabel

@@ -3,35 +3,35 @@ import AppKit
 /// Output completion owns the requested pixels and editable state independently of the UI session.
 /// All calls are on the main thread; history persistence remains on HistoryLibrary's worker.
 final class ScreenshotCompletion {
-    typealias Save = (CGImage, CGFloat, URL, Bool, @escaping () -> Void) -> Void
+    typealias Save = (CGImage, CGFloat, URL, OutputStyle, @escaping () -> Void) -> Void
     enum Presentation: Equatable {
         case close
         case history(UUID)
     }
 
     private let history: HistoryLibrary
-    private let copyImage: (CGImage, CGFloat, Bool) -> Void
+    private let copyImage: (CGImage, CGFloat, OutputStyle) -> Void
     private let saveImage: Save
 
     init(history: HistoryLibrary,
          save: Save? = nil,
-         copy: @escaping (CGImage, CGFloat, Bool) -> Void) {
+         copy: @escaping (CGImage, CGFloat, OutputStyle) -> Void) {
         self.history = history
         self.copyImage = copy
         let capturer = Capturer()
-        self.saveImage = save ?? { capturer.save($0, scale: $1, to: $2, watermark: $3, completion: $4) }
+        self.saveImage = save ?? { capturer.save($0, scale: $1, to: $2, output: $3, completion: $4) }
     }
 
     func prepare(document: EditDocument, undo: [EditSnapshot], label: String, windowTitle: String = "",
-                 id: UUID? = nil, session: Int, watermark: Bool, exported: CGImage? = nil) -> Request? {
+                 id: UUID? = nil, session: Int, output: OutputStyle, exported: CGImage? = nil) -> Request? {
         guard let image = exported ?? AnnotationRenderer.export(document) else { return nil }
         return Request(history: history, copy: copyImage, save: saveImage, document: document, undo: undo, label: label,
-            windowTitle: windowTitle, id: id, session: session, watermark: watermark, image: image)
+            windowTitle: windowTitle, id: id, session: session, output: output, image: image)
     }
 
     final class Request {
         private let history: HistoryLibrary
-        private let copyImage: (CGImage, CGFloat, Bool) -> Void
+        private let copyImage: (CGImage, CGFloat, OutputStyle) -> Void
         private let saveImage: Save
         private let document: EditDocument
         private let undo: [EditSnapshot]
@@ -39,15 +39,15 @@ final class ScreenshotCompletion {
         private let windowTitle: String
         private let id: UUID?
         private let session: Int
-        private let watermark: Bool
+        private let output: OutputStyle
         private let recording: Bool
         private let image: CGImage
         private var finished = false
         private var saving = false
 
-        fileprivate init(history: HistoryLibrary, copy: @escaping (CGImage, CGFloat, Bool) -> Void, save: @escaping Save,
+        fileprivate init(history: HistoryLibrary, copy: @escaping (CGImage, CGFloat, OutputStyle) -> Void, save: @escaping Save,
                          document: EditDocument, undo: [EditSnapshot], label: String, windowTitle: String,
-                         id: UUID?, session: Int, watermark: Bool, image: CGImage) {
+                          id: UUID?, session: Int, output: OutputStyle, image: CGImage) {
             self.history = history
             self.copyImage = copy
             self.saveImage = save
@@ -57,7 +57,7 @@ final class ScreenshotCompletion {
             self.windowTitle = windowTitle
             self.id = id
             self.session = session
-            self.watermark = watermark
+            self.output = output
             self.recording = history.retention != .off
             self.image = image
             // Independent from the editor's hold: closing/replacing its session cannot expire
@@ -72,7 +72,7 @@ final class ScreenshotCompletion {
         func copy(currentSession: Int) -> Presentation? {
             guard !finished, !saving else { return nil }
             finished = true
-            copyImage(image, document.scale, watermark)
+            copyImage(image, document.scale, output)
             return complete(currentSession: currentSession)
         }
 
@@ -91,10 +91,10 @@ final class ScreenshotCompletion {
             saving = true
             if copying {
                 finished = true
-                copyImage(image, document.scale, watermark)
+                copyImage(image, document.scale, output)
                 present(complete(currentSession: currentSession()))
             }
-            saveImage(image, document.scale, url, watermark) { [self] in
+            saveImage(image, document.scale, url, output) { [self] in
                 guard !finished else { return }
                 present(complete(currentSession: currentSession()))
             }

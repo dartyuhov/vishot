@@ -485,7 +485,8 @@ final class VideoSession {
     private func showTip(displayID: CGDirectDisplayID, shortcut: CaptureShortcut) {
         guard let screen = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID }) else { return }
         let text = "Press \(shortcut.display) to stop."
-        let size = HUD.textSize(text, font: HUD.textFont)
+        let style = ThemeCatalog.pixel.hud
+        let size = HUD.textSize(text, font: style.textFont)
         let panel = NSPanel(contentRect: CGRect(x: screen.frame.midX - (size.width + 32) / 2,
             y: screen.frame.minY + 24, width: size.width + 32, height: 48),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -499,8 +500,8 @@ final class VideoSession {
         view.wantsLayer = true
         let root = CALayer()
         root.frame = view.bounds
-        HUD.stylePanel(root)
-        let label = HUD.makeText(text, font: HUD.textFont, color: Palette.text, scale: screen.backingScaleFactor)
+        HUD.stylePanel(root, style: style)
+        let label = HUD.makeText(text, font: style.textFont, color: style.text, scale: screen.backingScaleFactor)
         label.frame = CGRect(x: 16, y: 12, width: size.width, height: 24)
         root.addSublayer(label)
         view.layer?.addSublayer(root)
