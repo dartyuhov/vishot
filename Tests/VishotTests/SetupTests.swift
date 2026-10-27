@@ -2,6 +2,22 @@ import XCTest
 @testable import Vishot
 
 final class SetupTests: XCTestCase {
+    func testOptionalCLIStageDoesNotCompleteSetupAndSkipReachesGuide() {
+        var complete = false
+        let flow = SetupFlow(isComplete: { complete }, rememberCompletion: { complete = true },
+                             readAccess: { (true, false) })
+        flow.continueToCLI()
+        XCTAssertEqual(flow.step, .permissions, "Accessibility still needs an explicit choice")
+        flow.continueToCLI(withoutAccessibility: true)
+        XCTAssertEqual(flow.step, .commandLine)
+        flow.finish(dismiss: { XCTFail("CLI is optional, not setup completion") })
+        XCTAssertFalse(complete)
+        flow.continueToGuide(withoutAccessibility: true)
+        XCTAssertEqual(flow.step, .guide)
+        flow.finish(dismiss: {})
+        XCTAssertTrue(complete)
+    }
+
     func testDoneDoesNotCaptureAndLostAccessCannotCompleteTheGuide() {
         var screen = true
         var accessibility = true

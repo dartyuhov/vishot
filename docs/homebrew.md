@@ -206,6 +206,20 @@ VISHOT_TEST_HOMEBREW=1 python3 -B -m unittest discover \
   -s scripts/homebrew -p 'test_*.py' -v
 ```
 
+The cask continues to install only the app; CLI installation remains optional
+in the app's Setup and Settings and points to the actual installed
+`Contents/Helpers/vishot`. There is no separate Homebrew binary artifact,
+package, or CLI version. App replacement upgrades the bundled helper too.
+
+After a release build, `scripts/test-package.py` additionally exercises
+Homebrew's real `app` artifact handler against the local mounted DMG's app,
+redirecting both staging and appdir into temporary directories. It validates
+the installed helper's native architecture, macOS 14 load command, signature,
+and app-matching version, and executes a user-local symlink with a system-only
+PATH before and after a controlled bundle replacement. It never downloads a
+release, changes a user tap or Caskroom receipt, or writes to Applications.
+See [bundled helper validation](packaging.md#bundled-command-line-helper).
+
 The read-only `Homebrew tooling` workflow runs this command on macOS. The
 required `Release tooling` result also runs it on every PR, so Homebrew
 validation failures block that required result. Without

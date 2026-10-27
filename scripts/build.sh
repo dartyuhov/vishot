@@ -19,8 +19,9 @@ swift build -c release --force-resolved-versions --triple "$TRIPLE"
 BIN_DIR="$(swift build -c release --triple "$TRIPLE" --show-bin-path)"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 cp "$BIN_DIR/Vishot" "$APP/Contents/MacOS/Vishot"
+cp "$BIN_DIR/VishotCLI" "$APP/Contents/Helpers/vishot"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp Resources/ThirdPartyNotices.txt "$APP/Contents/Resources/ThirdPartyNotices.txt"
@@ -43,6 +44,8 @@ info.update(CFBundleVersion=build, VishotSourceCommit=commit)
 with open(path, 'wb') as f:
     plistlib.dump(info, f)
 PY
+# Sign nested code first with the same stable identity, then seal the app.
+codesign --force --options runtime --sign "$IDENTITY" "$APP/Contents/Helpers/vishot"
 codesign --force --options runtime --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
 echo "Built $APP"
