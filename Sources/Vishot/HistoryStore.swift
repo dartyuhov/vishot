@@ -1,5 +1,7 @@
 import AppKit
 import ImageIO
+import AVFoundation
+import Darwin
 
 enum HistoryRetention: Int, CaseIterable {
     case off = 0, oneDay = 1, threeDays = 3, sevenDays = 7, thirtyDays = 30
@@ -21,6 +23,7 @@ struct HistoryEntry: Codable, Equatable {
     var video: HistoryVideo? = nil
     /// Transient disk availability; never written into retained metadata.
     var unavailable = false
+    var canUseVideo: Bool { video != nil && !unavailable }
 
     private enum Keys: String, CodingKey {
         case schema, id, revision, createdAt, modifiedAt, label, windowTitle, payload
@@ -119,6 +122,9 @@ final class HistoryStore {
     private func folder(_ id: UUID) -> URL { url.appendingPathComponent(id.uuidString, isDirectory: true) }
     private func metadata(_ id: UUID) -> URL { folder(id).appendingPathComponent("entry.json") }
     private func read(_ id: UUID) throws -> HistoryEntry {
+        guard try folder(id).resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
+            throw SettingsError(message: "History entry directory must be private storage.")
+        }
         let entry = try JSONDecoder().decode(HistoryEntry.self, from: Data(contentsOf: metadata(id)))
         guard (entry.schema == 1 || entry.schema == 2), entry.id == id else { throw SettingsError(message: "Unsupported History entry \(id).") }
         if let video = entry.video { try video.validate() }
@@ -150,7 +156,7 @@ final class HistoryStore {
                 var entry = try read(id)
                 if files.fileExists(atPath: child.appendingPathComponent("deleted").path) { continue }
                 if entry.video != nil {
-                    if (try? movieURL(entry)) == nil {
+                    if (try? validatedMovieURL(entry)) == nil {
                         entry.unavailable = true
                         warnings.append("History video \(id) is unavailable.")
                     }
@@ -319,9 +325,11 @@ final class HistoryStore {
         return id
     }
 
-    func finishDeletions() throws {
-        for id in deleted { if files.fileExists(atPath: folder(id).path) { try files.removeItem(at: folder(id)) } }
-        deleted = []
+    func finishDeletions(holding: Set<UUID> = []) throws {
+        for id in deleted where !holding.contains(id) {
+            if files.fileExists(atPath: folder(id).path) { try files.removeItem(at: folder(id)) }
+        }
+        deleted = deleted.filter { holding.contains($0) }
     }
 
     /// Called on startup only: interrupted deletions and orphan revision files are not recoverable.
@@ -424,7 +432,8 @@ final class HistoryStore {
     }
 
     func movieURL(_ entry: HistoryEntry) throws -> URL {
-        guard let video = entry.video, try read(entry.id).revision == entry.revision,
+        let current = try read(entry.id)
+        guard let video = current.video, current.revision == entry.revision, current.video == entry.video,
               !files.fileExists(atPath: folder(entry.id).appendingPathComponent("deleted").path) else {
             throw SettingsError(message: "History video is unavailable.")
         }
@@ -434,6 +443,56 @@ final class HistoryStore {
         guard values.isRegularFile == true, values.isSymbolicLink != true, (values.fileSize ?? 0) > 0 else {
             throw SettingsError(message: "History video is unavailable.")
         }
+        return movie
+    }
+
+    /// The caller obtained collision approval from NSSavePanel. Copy to a hidden
+    /// sibling first; rename publishes one complete file, including replacement.
+    /// The source and every other private History destination are never writable exports.
+    func exportVideo(_ entry: HistoryEntry, to destination: URL,
+                     cancelled: () -> Bool = { false },
+                     copy: (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }) throws {
+        let source = try movieURL(entry)
+        let target = destination.resolvingSymlinksInPath().standardizedFileURL
+        let owned = url.resolvingSymlinksInPath().standardizedFileURL.path
+        let sessions = stagingURL.resolvingSymlinksInPath().standardizedFileURL.path
+        guard destination.isFileURL, target.path != owned, !target.path.hasPrefix(owned + "/"),
+              target.path != sessions, !target.path.hasPrefix(sessions + "/") else {
+            throw SettingsError(message: "Save As must use a location outside private History.")
+        }
+        let sourceID = try source.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
+        let targetID = try? target.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
+        if let sourceID, let targetID, sourceID.isEqual(targetID) {
+            throw SettingsError(message: "Save As cannot overwrite the private original.")
+        }
+        let temporary = destination.deletingLastPathComponent().appendingPathComponent(".vishot-export-\(UUID().uuidString).mp4")
+        defer { try? files.removeItem(at: temporary) }
+        guard !cancelled() else { throw CancellationError() }
+        try copy(source, temporary)
+        guard !cancelled() else { throw CancellationError() }
+        guard rename(temporary.path, destination.path) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+    }
+
+    /// Called only on the disk worker. Metadata alone cannot establish that a retained
+    /// movie is still playable after restart or external damage.
+    func validatedMovieURL(_ entry: HistoryEntry) throws -> URL {
+        let movie = try movieURL(entry)
+        let video = entry.video!
+        let done = DispatchSemaphore(value: 0)
+        var result: Result<Void, Error>!
+        Task.detached {
+            do {
+                try await VideoRecorder.validateMovie(at: movie, width: video.width, height: video.height)
+                let generator = AVAssetImageGenerator(asset: AVURLAsset(url: movie))
+                _ = try await generator.image(at: .zero)
+                result = .success(())
+            } catch { result = .failure(error) }
+            done.signal()
+        }
+        done.wait()
+        try result.get()
         return movie
     }
 }

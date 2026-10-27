@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import UniformTypeIdentifiers
 
 /// The browser owns input/selection; OverlayController owns its session and editor transitions.
 final class HistoryBrowser: NSObject, NSWindowDelegate {
@@ -19,6 +20,9 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
     private var thumbnailRequests: [UUID: HistoryImageRequest] = [:]
     private var hiddenIDs: Set<UUID> = []
     private var busy = false
+    private var savePanel: NSSavePanel?
+    private var exportRequest: HistoryImageRequest?
+    private var actionError: String?
     private var cachedResults: [HistoryEntry] = []
     private var cachedQuery: String?
     var onClose: (() -> Void)?
@@ -48,7 +52,10 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
         panel.isReleasedWhenClosed = false
         panel.onKey = { [weak self] in self?.handle($0) }
         let view = HistoryView(frame: CGRect(origin: .zero, size: frame.size))
-        view.onSelect = { [weak self] id in self?.selectedID = id; self?.refresh() }
+        view.onSelect = { [weak self] id in
+            guard let self, !self.busy else { return }
+            self.selectedID = id; self.refresh()
+        }
         view.onScroll = { [weak self] in self?.move($0) }
         panel.contentView = view
         self.panel = panel
@@ -56,6 +63,84 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
     }
 
     func setBusy(_ busy: Bool) { self.busy = busy }
+    var isBusy: Bool { busy }
+
+    static func keys(for entry: HistoryEntry?) -> [HUDKey] {
+        var keys = [HUDKey("h/l", action: "move")]
+        if entry?.video != nil {
+            if entry?.canUseVideo == true {
+                keys += [HUDKey("↵", action: "open video"), HUDKey("y", action: "copy file"),
+                         HUDKey("r", action: "Reveal"), HUDKey("s", action: "Save As")]
+            }
+        } else {
+            keys += [HUDKey("y", action: "yank"), HUDKey("e", action: "edit")]
+        }
+        return keys + [HUDKey("/", action: "search"), HUDKey("d", action: "delete"),
+                       HUDKey("u", action: "restore"), HUDKey("esc", action: "close")]
+    }
+
+    private func useVideo(_ entry: HistoryEntry, reveal: Bool) {
+        guard entry.canUseVideo else { return }
+        busy = true
+        actionError = nil
+        let generation = generation
+        library.videoFile(entry) { [weak self] result in
+            guard let self, self.generation == generation else { return }
+            self.busy = false
+            if case .success(let url) = result {
+                if reveal {
+                    // Closing first restores the old app before Finder activates.
+                    self.onClose?()
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                } else {
+                    NSPasteboard.general.clearContents()
+                    if NSPasteboard.general.writeObjects([url as NSURL]) { self.onClose?() }
+                    else { self.actionError = "Could not copy the video file reference."; self.refresh() }
+                }
+            } else { self.refresh() }
+        }
+    }
+
+    private func saveVideo(_ entry: HistoryEntry) {
+        guard entry.canUseVideo else { return }
+        busy = true
+        actionError = nil
+        library.hold(entry.id) // Includes native panel lifetime, cancellation, and disk copy.
+        let generation = generation
+        let save = NSSavePanel()
+        save.allowedContentTypes = [.mpeg4Movie]
+        save.canCreateDirectories = true
+        save.nameFieldStringValue = entry.video!.movie
+        save.title = "Save Video As"
+        savePanel = save
+        suspend()
+        NSApp.activate(ignoringOtherApps: true)
+        save.begin { [weak self] response in
+            guard let self else { return }
+            self.savePanel = nil
+            guard self.generation == generation else { self.library.release(entry.id); return }
+            guard response == .OK, let destination = save.url else {
+                self.library.release(entry.id)
+                self.busy = false
+                self.restoreAfterSavePanel()
+                return
+            }
+            self.exportRequest = self.library.exportVideo(entry, to: destination) { [weak self] _ in
+                guard let self else { return }
+                self.library.release(entry.id)
+                guard self.generation == generation else { return }
+                self.exportRequest = nil
+                self.busy = false
+                self.restoreAfterSavePanel()
+            }
+        }
+    }
+
+    private func restoreAfterSavePanel() {
+        refresh()
+        panel?.orderFrontRegardless()
+        panel?.makeKey()
+    }
 
     func yank(_ entry: HistoryEntry, completion: @escaping (CGImage?) -> Void) {
         guard !busy else { return }
@@ -79,6 +164,7 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
         query = ""
         searching = false
         busy = false
+        actionError = nil
         selectedID = library.entries.first?.id
         view?.showLoading()
         panel?.orderFrontRegardless()
@@ -105,6 +191,10 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
 
     func close() {
         generation += 1
+        savePanel?.cancel(nil)
+        savePanel = nil
+        exportRequest?.cancel()
+        exportRequest = nil
         yankRequest?.cancel()
         yankRequest = nil
         busy = false
@@ -148,15 +238,13 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
         view.title = "HISTORY"
         view.query = searching ? "/" + query + "▏" : ""
         view.keys = searching ? [HUDKey("←", "→", action: "select"), HUDKey("↵", action: "accept"), HUDKey("esc", action: "back")]
-            : selected?.video != nil ? [HUDKey("h/l", action: "move"), HUDKey("↵", action: "open video"),
-                HUDKey("/", action: "search"), HUDKey("d", action: "delete"), HUDKey("u", action: "restore"), HUDKey("esc", action: "close")]
-            : [HUDKey("h/l", action: "move"), HUDKey("y", action: "yank"), HUDKey("e", action: "edit"),
-               HUDKey("/", action: "search"), HUDKey("d", action: "delete"), HUDKey("u", action: "restore"), HUDKey("esc", action: "close")]
+            : Self.keys(for: selected)
         if let entry = selected {
             let date = DateFormatter.localizedString(from: entry.createdAt, dateStyle: .medium, timeStyle: .short)
             view.status = "\(index + 1)/\(matches.count) · \(entry.label) · \(date)" + (entry.video.map { " · VIDEO " + $0.durationLabel } ?? (entry.recognizedText == nil ? " · indexing…" : ""))
             if entry.unavailable { view.status += " · Video unavailable (delete allowed)" }
             if let error = library.error { view.status += " · " + error }
+            if let actionError { view.status += " · " + actionError }
             if previewRevision != entry.revision {
                 previewRequest?.cancel()
                 previewRevision = entry.revision
@@ -221,6 +309,7 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
     func libraryChanged() { cachedQuery = nil; refresh() }
 
     private func move(_ step: Int) {
+        guard !busy else { return }
         let matches = results
         guard !matches.isEmpty else { return }
         let index = matches.firstIndex { $0.id == selectedID } ?? 0
@@ -248,9 +337,15 @@ final class HistoryBrowser: NSObject, NSWindowDelegate {
             case kVK_ANSI_H, kVK_LeftArrow: move(-1)
             case kVK_ANSI_L, kVK_RightArrow: move(1)
             case kVK_ANSI_Y:
-                if !event.isARepeat, let entry = selected, entry.video == nil { onYank?(entry) }
+                if !event.isARepeat, let entry = selected {
+                    if entry.video != nil { useVideo(entry, reveal: false) } else { onYank?(entry) }
+                }
+            case kVK_ANSI_R:
+                if !event.isARepeat, let entry = selected { useVideo(entry, reveal: true) }
+            case kVK_ANSI_S:
+                if !event.isARepeat, let entry = selected { saveVideo(entry) }
             case kVK_Return, kVK_ANSI_KeypadEnter:
-                if !event.isARepeat, let entry = selected, entry.video != nil, !entry.unavailable { onOpenVideo?(entry) }
+                if !event.isARepeat, let entry = selected, entry.canUseVideo { onOpenVideo?(entry) }
             case kVK_ANSI_E:
                 if !event.isARepeat, selected?.video == nil, let id = selectedID, let screen { onEdit?(id, screen) }
             case kVK_ANSI_Slash: searching = true

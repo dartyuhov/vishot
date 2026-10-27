@@ -147,6 +147,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard !isPresentingSavePanel else { return }
         guard !(isCapturing && editor != nil) else { return }
         if browser != nil {
+            guard browser?.isBusy != true else { return }
             guard editor == nil, !isCapturing else { return }
             closeHistory()
             sessions.replaceWithCapture(session)
