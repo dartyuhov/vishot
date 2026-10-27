@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
-import { GitHub, approve, publish } from '../publication.mjs';
+import { GitHub, approve, publish, recoverPublishedLabels } from '../publication.mjs';
 
 const sha = 'a'.repeat(40);
 const lock = Buffer.from('locked dependencies\n');
@@ -53,7 +53,12 @@ function repository() {
     const body = init.body && !Buffer.isBuffer(init.body) ? JSON.parse(init.body) : init.body;
     state.calls.push({ method, path, body, host: u.host });
     state.intercept?.({ method, path, body });
+    if (path === '/pulls') return respond([state.pr]);
     if (path === '/pulls/42') return respond(state.pr);
+    if (path.startsWith('/releases/tags/')) {
+      const release = state.releases.find(r => r.tag_name === path.slice(15));
+      return release ? respond(release) : respond({}, 404);
+    }
     if (path === `/commits/${sha}/pulls`) return respond([state.pr]);
     if (path.startsWith('/compare/')) return respond({ status: state.compareStatus });
     if (path.startsWith('/contents/')) {
@@ -147,6 +152,49 @@ test('a merged bot release PR authorizes its exact source, regular version, and 
   assert.equal(state.refs.get('v0.1.0'), sha);
   assert.equal(state.releases[0].assets.length, 6);
   assert.deepEqual(state.pr.labels, [{ name: 'autorelease: tagged' }]);
+});
+
+test('main push recovery verifies public bytes before repairing stale labels and is idempotent', async () => {
+  const { api, state } = repository();
+  await publish(api, await approve(api, { prNumber: 42, bot }), packages());
+  state.pr.labels = [{ name: 'autorelease: pending' }];
+  state.calls = [];
+  assert.deepEqual(await recoverPublishedLabels(api, { bot, readOnly: true }), [42]);
+  assert.ok(state.calls.every(call => call.method === 'GET'));
+  assert.deepEqual(state.pr.labels, [{ name: 'autorelease: pending' }]);
+  state.calls = [];
+  assert.deepEqual(await recoverPublishedLabels(api, { bot }), [42]);
+  assert.deepEqual(state.pr.labels, [{ name: 'autorelease: tagged' }]);
+  assert.ok(state.calls.filter(call => call.method !== 'GET').every(call => call.path.startsWith('/issues/42/labels')));
+  assert.deepEqual(await recoverPublishedLabels(api, { bot }), []);
+});
+
+test('recovery leaves missing and draft releases pending without publishing them', async () => {
+  const { api, state } = repository();
+  assert.deepEqual(await recoverPublishedLabels(api, { bot }), []);
+  state.failPublish = true;
+  await assert.rejects(publish(api, await approve(api, { prNumber: 42, bot }), packages()));
+  state.calls = [];
+  assert.deepEqual(await recoverPublishedLabels(api, { bot }), []);
+  assert.ok(state.calls.every(call => call.method === 'GET'));
+  assert.equal(state.releases[0].draft, true);
+});
+
+test('recovery refuses corrupt assets, wrong release identity, and mismatched tags before label writes', async () => {
+  for (const change of [
+    state => { state.bytes.set(state.releases[0].assets[0].id, Buffer.from('corrupt')); },
+    state => { state.releases[0].body = 'foreign release'; },
+    state => { state.refs.set('v0.1.0', 'b'.repeat(40)); },
+  ]) {
+    const { api, state } = repository();
+    await publish(api, await approve(api, { prNumber: 42, bot }), packages());
+    state.pr.labels = [{ name: 'autorelease: pending' }];
+    change(state);
+    state.calls = [];
+    await assert.rejects(recoverPublishedLabels(api, { bot }));
+    assert.ok(state.calls.every(call => call.method === 'GET'));
+    assert.deepEqual(state.pr.labels, [{ name: 'autorelease: pending' }]);
+  }
 });
 
 test('ordinary merges do not publish and reruns require the actual merged release PR', async () => {

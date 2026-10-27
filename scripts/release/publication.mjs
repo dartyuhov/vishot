@@ -228,6 +228,30 @@ export async function publish(api, approval, files) {
   return { status: 'published', tag: approval.tag };
 }
 
+// Repair bookkeeping only for complete, already-public releases. Never resume
+// staging or publish a draft from an ordinary main push.
+export async function recoverPublishedLabels(api, { bot, readOnly = false }) {
+  check(bot && bot.endsWith('[bot]'), 'Configure the release App bot login');
+  const recovered = [];
+  for (const pr of await api.list('/pulls?state=closed&base=main')) {
+    if (!pr.merged_at || pr.user?.login !== bot ||
+        pr.head?.ref !== 'release-please--branches--main' ||
+        !pr.labels.some(label => label.name === 'autorelease: pending')) continue;
+    const approval = await approve(api, { prNumber: pr.number, bot });
+    const release = await api.optional(`/releases/tags/${approval.tag}`);
+    if (!release || release.draft) continue;
+    check(!release.prerelease && release.tag_name === approval.tag &&
+      release.target_commitish === approval.sha &&
+      release.body?.includes(`<!-- vishot-release pr=${approval.prNumber} sha=${approval.sha} -->`),
+    'Release identity mismatch');
+    check(await tagCommit(api, approval.tag) === approval.sha, 'Release tag/source mismatch');
+    validatePackages(await remoteFiles(api, release), approval);
+    if (!readOnly) await finishLabels(api, approval.prNumber);
+    recovered.push(approval.prNumber);
+  }
+  return recovered;
+}
+
 async function finishLabels(api, number) {
   // Add first so interruption cannot leave the PR without a lifecycle label.
   await api.request(`/issues/${number}/labels`, { method: 'POST', body: { labels: ['autorelease: tagged'] } });

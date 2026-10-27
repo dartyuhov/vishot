@@ -178,7 +178,11 @@ test('trusted main pushes generate PRs using a repository-scoped App token, neve
   assert.equal(token.with['permission-contents'], 'write');
   assert.equal(token.with['permission-pull-requests'], 'write');
   assert.equal(token.with['permission-issues'], 'write');
-  const command = steps.find(step => step.env?.GH_TOKEN);
+  const recovery = steps.find(step => step.run === 'node recover.mjs');
+  assert.equal(recovery.env.GH_TOKEN, '${{ steps.app-token.outputs.token }}');
+  assert.equal(recovery.env.RELEASE_APP_BOT_LOGIN, '${{ vars.RELEASE_APP_BOT_LOGIN }}');
+  const command = steps.find(step => step.run === 'node release-pr.mjs');
+  assert.ok(steps.indexOf(recovery) < steps.indexOf(command));
   assert.equal(command.env.GH_TOKEN, '${{ steps.app-token.outputs.token }}');
   assert.equal(command.run, 'node release-pr.mjs');
   assert.doesNotMatch(command.run, /github-release|gh release|git tag/);
@@ -207,7 +211,7 @@ test('publication is trusted, serialized, gated by both native packages, and exp
   assert.equal(token.with.repositories, '${{ github.event.repository.name }}');
   assert.equal(token.with['permission-contents'], 'write');
   assert.equal(token.with['permission-issues'], 'write');
-  assert.equal(token.with['permission-pull-requests'], 'read');
+  assert.equal(token.with['permission-pull-requests'], 'write', 'publication updates release PR labels');
   const download = steps.find(step => step.uses?.startsWith('actions/download-artifact@'));
   assert.equal(download.with['merge-multiple'], false, 'duplicate files must not be overwritten');
   assert.equal(download.with['run-id'], undefined, 'consume this successful package run only');
