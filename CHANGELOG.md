@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/dartyuhov/vishot/compare/v0.2.0...v0.3.0) (2026-10-27)
+
+
+### Features
+
+* add agent screenshot annotations ([#11](https://github.com/dartyuhov/vishot/issues/11)) ([fbe9468](https://github.com/dartyuhov/vishot/commit/fbe9468ef9c1d12b911f1eb1e95ee8243ba15c48))
+
 ## [0.2.0](https://github.com/dartyuhov/vishot/compare/v0.1.0...v0.2.0) (2026-10-27)
 
 
