@@ -1,4 +1,5 @@
 import XCTest
+import VishotRendering
 import AppKit
 import AVFoundation
 @testable import Vishot

@@ -1,4 +1,6 @@
 import XCTest
+import VishotRendering
+import VishotConfiguration
 import AppKit
 @testable import Vishot
 

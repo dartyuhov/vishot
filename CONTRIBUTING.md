@@ -58,7 +58,12 @@ npm test --prefix scripts/release
 VISHOT_TEST_HOMEBREW=1 python3 -B -m unittest discover -s scripts/homebrew -p 'test_*.py' -v
 ```
 
-For app changes, build and launch the installed bundle with
+For compile-only preparation, use
+`swift build --force-resolved-versions --build-tests`; this compiles test targets
+without running their assertions or validating runtime behavior. Keep any
+separately requested acceptance session distinct from this evidence.
+
+For authorized installed-app verification, build and launch the bundle with
 `./scripts/build.sh install`. Local builds default to your stable
 `Apple Development` identity; override `VISHOT_SIGN_IDENTITY` if needed. For a
 certificate-free packaging check, use `VISHOT_SIGN_IDENTITY=- bash scripts/build.sh`
@@ -83,6 +88,33 @@ drag installation, ejecting, **Privacy & Security → Open Anyway**, first captu
 and replacing an older app after quitting it. Record permission prompts on both
 first install and upgrade; don't assume approval survives an ad-hoc update.
 Identify unavailable hardware coverage explicitly.
+
+## Shared modules and test ownership
+
+The app and bundled helper consume the same rendering and immutable
+configuration modules. Keep dependencies directed toward those shared owners:
+
+- `VishotRendering`: annotation model, saved treatments, geometry, fonts,
+  measurement, rendering, and image encoding. Tests live in
+  `Tests/VishotRenderingTests/`.
+- `VishotConfiguration`: TOML parsing, defaults, full validation, preference
+  identities, and legacy mapping. Tests live in `Tests/VishotConfigurationTests/`.
+- `VishotCLIExecution`: command parsing, dispatch, local annotation, results,
+  and exit semantics. Tests live in `Tests/VishotCLIExecutionTests/`, including
+  compiled-helper fixtures that contain no GUI binary.
+- `VishotAgent`: existing capture transport and versioned contracts. Its
+  capture/discovery boundary tests remain in `Tests/VishotAgentTests/`.
+- `Vishot`: GUI themes, live Settings, writing/watching, hotkey registration,
+  session deferral, capture authorization, editor, and Capture history.
+  Integration tests remain in `Tests/VishotTests/`.
+
+The CLI process adapter stays in `Sources/VishotCLI/main.swift`. Local annotation
+executes in-process; live capture uses the signed app adapter. Shared modules
+must not import either executable or GUI lifecycle. Supply the containing
+installation's resources explicitly and register fonts before resolving styles.
+TOMLKit and its C++ implementation link into both executables through shared
+configuration; keep their bundled notices and system-runtime-only package checks.
+SwiftPM's unfiltered CI test command discovers all five test targets.
 
 ## Land a validated PR
 

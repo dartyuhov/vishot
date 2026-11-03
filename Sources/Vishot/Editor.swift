@@ -1,4 +1,5 @@
 import AppKit
+import VishotRendering
 import Carbon.HIToolbox
 
 /// A toolbar button.
@@ -75,7 +76,7 @@ struct EditorScene {
     let status: String
     var viewScale: CGFloat = 1
     var annotationStyle: ThemeID = .pixel
-    var resolvedAnnotationStyle: AnnotationStyle = ThemeCatalog.pixel.annotation
+    var resolvedAnnotationStyle: AnnotationStyle = AnnotationCatalog.annotation(.pixel)
 }
 
 /// Edits a capture in place, over the overlay panels. Takes keys and mouse events until it finishes.

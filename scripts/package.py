@@ -36,13 +36,20 @@ def validate_app(app, args):
         "CFBundleIconFile": "AppIcon", "LSUIElement": True,
     }.items():
         require(info.get(key) == expected, f"{key}: expected {expected!r}, got {info.get(key)!r}")
-    binary = app / "Contents/MacOS/Vishot"
-    require(os.access(binary, os.X_OK), "Missing executable permission")
-    require(run("lipo", "-archs", str(binary)).decode().strip() == args.arch,
-            f"Expected exactly the {args.arch} architecture")
-    # Check the Mach-O load command, not just the plist's compatibility claim.
-    load = run("otool", "-l", str(binary)).decode()
-    require(re.search(r"\bminos 14\.0\b", load), "Executable must target macOS 14.0")
+    helper = app / "Contents/Helpers/vishot"
+    for binary in (app / "Contents/MacOS/Vishot", helper):
+        require(binary.is_file() and not binary.is_symlink() and os.access(binary, os.X_OK),
+                f"Missing regular executable or executable permission: {binary.name}")
+        require(run("lipo", "-archs", str(binary)).decode().strip() == args.arch,
+                f"{binary.name}: expected exactly the {args.arch} architecture")
+        # Check the Mach-O load command, not just the plist's compatibility claim.
+        load = run("otool", "-l", str(binary)).decode()
+        require(re.search(r"\bminos 14\.0\b", load), f"{binary.name} must target macOS 14.0")
+        run("codesign", "--verify", "--strict", str(binary))
+        libraries = run("otool", "-L", str(binary)).decode().splitlines()[1:]
+        require(all(line.strip().split(" (", 1)[0].startswith(("/usr/lib/", "/System/Library/"))
+                    for line in libraries if line.strip()),
+                f"{binary.name} must use system runtime libraries only")
     resources = app / "Contents/Resources"
     for name in ("AppIcon.icns", "ThirdPartyNotices.txt", "FontLicenses.txt"):
         require((resources / name).read_bytes() == (ROOT / "Resources" / name).read_bytes(),
@@ -53,9 +60,18 @@ def validate_app(app, args):
             require((resources / "Fonts" / name).read_bytes() == (ROOT / "site/fonts" / name).read_bytes(),
                     f"Missing or inconsistent font: {name}")
     run("codesign", "--verify", "--deep", "--strict", str(app))
+    signatures = [run("codesign", "-dv", "--verbose=4", str(path)).decode() for path in (app, helper)]
+    teams = [re.search(r"^TeamIdentifier=(.+)$", signature, re.MULTILINE) for signature in signatures]
+    require(all(teams) and teams[0][1] == teams[1][1], "App and CLI signing teams must agree")
+    # Run only a metadata command, with no service startup, capture, or development PATH.
+    version = subprocess.run([str(helper), "--version"], env={"PATH": "/usr/bin:/bin"},
+                             capture_output=True, text=True, timeout=10)
+    require(version.returncode == 0 and not version.stderr and
+            json.loads(version.stdout) == {"schemaVersion": 1, "ok": True, "version": args.version},
+            "Bundled CLI version must agree with the app and run without development runtimes")
     if args.adhoc:
-        signature = run("codesign", "-dv", "--verbose=4", str(app)).decode()
-        require("Signature=adhoc" in signature, "CI package must be explicitly ad-hoc signed")
+        require(all("Signature=adhoc" in signature for signature in signatures),
+                "CI app and CLI must be explicitly ad-hoc signed")
 
 
 def asset_name(args):
@@ -180,7 +196,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, OSError, KeyError, subprocess.CalledProcessError) as error:
+    except (ValueError, OSError, KeyError, subprocess.SubprocessError) as error:
         print(f"Package validation failed: {error}", file=sys.stderr)
         if isinstance(error, subprocess.CalledProcessError):
             print(error.output.decode(errors="replace"), file=sys.stderr)

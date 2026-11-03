@@ -7,7 +7,9 @@ final class SetupFlow {
     private let readAccess: () -> (screen: Bool, accessibility: Bool)
     private(set) var screenRecordingAllowed = false
     private(set) var accessibilityAllowed = false
-    private(set) var isShowingGuide = false
+    enum Step { case permissions, commandLine, guide }
+    private(set) var step: Step = .permissions
+    var isShowingGuide: Bool { step == .guide }
     private var continuedWithoutAccessibility = false
     var needsSetup: Bool { !isComplete() }
 
@@ -23,18 +25,25 @@ final class SetupFlow {
         let access = readAccess()
         screenRecordingAllowed = access.screen
         accessibilityAllowed = access.accessibility
-        if !access.screen || (!access.accessibility && !continuedWithoutAccessibility) { isShowingGuide = false }
+        if !access.screen || (!access.accessibility && !continuedWithoutAccessibility) { step = .permissions }
+    }
+
+    func continueToCLI(withoutAccessibility: Bool = false) {
+        refresh()
+        guard screenRecordingAllowed, accessibilityAllowed || withoutAccessibility || continuedWithoutAccessibility else { return }
+        continuedWithoutAccessibility = !accessibilityAllowed && (withoutAccessibility || continuedWithoutAccessibility)
+        step = .commandLine
     }
 
     func continueToGuide(withoutAccessibility: Bool = false) {
         refresh()
-        guard screenRecordingAllowed, accessibilityAllowed || withoutAccessibility else { return }
-        continuedWithoutAccessibility = !accessibilityAllowed && withoutAccessibility
-        isShowingGuide = true
+        guard screenRecordingAllowed, accessibilityAllowed || withoutAccessibility || continuedWithoutAccessibility else { return }
+        continuedWithoutAccessibility = !accessibilityAllowed && (withoutAccessibility || continuedWithoutAccessibility)
+        step = .guide
     }
 
     func returnToChecklist() {
-        isShowingGuide = false
+        step = .permissions
         continuedWithoutAccessibility = false
     }
 

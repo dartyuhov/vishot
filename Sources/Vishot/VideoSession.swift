@@ -1,4 +1,5 @@
 import AppKit
+import VishotConfiguration
 import CoreMedia
 import ScreenCaptureKit
 

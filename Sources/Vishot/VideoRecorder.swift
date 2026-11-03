@@ -1,4 +1,6 @@
 import AppKit
+import VishotConfiguration
+import VishotRendering
 import AVFoundation
 import ScreenCaptureKit
 import CoreImage

@@ -1,3 +1,6 @@
+The app and its bundled CLI include TOMLKit and toml++ through the shared
+configuration module. These notices cover both executables.
+
 TOMLKit 0.6.0 — https://github.com/LebJe/TOMLKit
 
 MIT License

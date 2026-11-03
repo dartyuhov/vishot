@@ -1,4 +1,5 @@
 import XCTest
+import VishotRendering
 import UniformTypeIdentifiers
 @testable import Vishot
 

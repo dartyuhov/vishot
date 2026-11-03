@@ -1,4 +1,5 @@
 import XCTest
+import VishotRendering
 import AppKit
 import Carbon.HIToolbox
 @testable import Vishot

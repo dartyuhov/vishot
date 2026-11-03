@@ -1,4 +1,6 @@
 import AppKit
+import VishotRendering
+import VishotConfiguration
 
 /// A browser request can become obsolete before its turn on the serial disk queue.
 final class HistoryImageRequest {

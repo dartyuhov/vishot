@@ -1,4 +1,5 @@
 import XCTest
+import VishotConfiguration
 import CoreMedia
 import ScreenCaptureKit
 @testable import Vishot

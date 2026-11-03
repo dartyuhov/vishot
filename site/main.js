@@ -40,6 +40,10 @@
     N: '110101101101101', O: '010101101101010', P: '110101110100100', S: '011100010001110',
     T: '111010010010010', W: '101101111111101', '!': '010010010000010',
     H: '101101111101101', R: '110101110101101', Y: '101101010010010',
+    G: '011100101101011', U: '101101101101111', V: '101101101101010',
+    X: '101101010101101', K: '101101110101101',
+    '2': '110001010100111', '4': '101101111001001',
+    '-': '000000111000000', '>': '100010001010100', '.': '000000000000010',
   };
 
   const W1 = { x: 6, y: 9, w: 100, h: 104 };    // chat
@@ -95,8 +99,18 @@
       run: s => { s.historyIndex = 1; } },
     { at: 21400, keys: ['y'], text: 'copies the selected screenshot and closes history', seg: 4,
       run: (s, at) => { s.mode = 'history-copied'; s.copiedAt = at; } },
+    { at: 24500, keys: [], text: 'The agent discovers windows with vishot windows', seg: 6,
+      run: s => { s.mode = 'cli'; s.cliStep = 0; } },
+    { at: 26100, keys: [], text: 'captures the exact window ID to a local PNG', seg: 6,
+      run: s => { s.cliStep = 1; } },
+    { at: 27800, keys: [], text: 'reads that PNG with its image reader', seg: 6,
+      run: s => { s.cliStep = 2; } },
+    { at: 29400, keys: [], text: 'marks the same image with a box, arrow and text', seg: 6,
+      run: (s, at) => { s.cliStep = 3; s.cliAnnotatedAt = at; } },
+    { at: 31300, keys: [], text: 'opens the finished explanation with --open', seg: 6,
+      run: s => { s.cliStep = 4; } },
   ];
-  const LOOP = 24500;
+  const LOOP = 34000;
   // Playback order differs from card order: finish the new capture before opening history.
   const SEG_ORDER = [...new Set(EVENTS.map(e => e.seg))];
   const SEG_START = Array.from({ length: SEG_ORDER.length }, (_, i) => EVENTS.find(e => e.seg === i).at);
@@ -397,6 +411,35 @@
     p.text('COPIED!', x + 18, y + 4, C.textHi);
   }
 
+  function drawCLI(p, s, t) {
+    // The agent's commands above, the same local PNG below. No picker or editor opens.
+    p.ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
+    p.ctx.fillRect(0, 0, 192, 120);
+    const terminal = { x: 6, y: 7, w: 180, h: 52 };
+    drawWindow(p, terminal);
+    p.rect(7, 13, 178, 45, C.code);
+    p.text('AGENT CLI', 76, 8, C.textHi);
+    p.text('> VISHOT WINDOWS', 11, 17, C.green);
+    p.text('42  CHAT', 19, 25, C.textLo);
+    if (s.cliStep >= 1) p.text('> VISHOT CAPTURE --WINDOW-ID 42', 11, 33, C.green);
+    if (s.cliStep >= 2) p.text('READ PNG', 19, 41, C.cyan);
+    if (s.cliStep >= 3) p.text('> VISHOT ANNOTATE' + (s.cliStep === 4 ? ' --OPEN' : ''), 11, 49, C.green);
+
+    if (s.cliStep < 1) return;
+    const preview = { x: 35, y: 64, w: 122, h: 49 };
+    drawWindow(p, preview);
+    p.text(s.cliStep === 4 ? 'EXPLAINED.PNG' : 'CAPTURE.PNG', 51, 65, C.textHi);
+    // The chart is a simplified thumbnail of the captured chat window.
+    historyImage(p, 0, { x: 39, y: 73, w: 114, h: 36 });
+    if (s.cliStep >= 2) p.outline(grow(preview), s.cliStep === 4 ? C.accent : C.cyan);
+    if (s.cliStep >= 3) {
+      p.outline({ x: 93, y: 80, w: 16, h: 27 }, C.hint);
+      const progress = reducedMotion ? 1 : clamp01((t - s.cliAnnotatedAt) / 700);
+      drawArrow(p, { x: 132, y: 94 }, { x: lerp(132, 103, progress), y: lerp(94, 85, progress) });
+      if (progress === 1) p.text('SPIKE', 119, 81, C.hint);
+    }
+  }
+
   function setupScene() {
     const canvas = document.getElementById('scene');
     if (!canvas || !canvas.getContext) return null;
@@ -438,6 +481,9 @@
         case 'copied':
         case 'history-copied':
           drawCopied(p, s, t);
+          break;
+        case 'cli':
+          drawCLI(p, s, t);
           break;
       }
       return s;

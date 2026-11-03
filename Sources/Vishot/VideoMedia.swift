@@ -1,4 +1,5 @@
 import Foundation
+import VishotConfiguration
 import CoreMedia
 import CoreImage
 

@@ -1,4 +1,5 @@
 import XCTest
+import VishotRendering
 import CoreMedia
 @testable import Vishot
 

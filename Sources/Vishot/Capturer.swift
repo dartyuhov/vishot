@@ -1,6 +1,8 @@
 import AppKit
+import VishotRendering
 import ScreenCaptureKit
 import UniformTypeIdentifiers
+import VishotConfiguration
 
 /// A captured image and where its content was on screen, in CoreGraphics global space.
 struct Capture {
@@ -142,18 +144,4 @@ final class ImageOutput {
     }
 
     func data(type: UTType) -> Data? { ImageEncoding.data(marked, scale: scale, type: type) }
-}
-
-enum ImageEncoding {
-    /// Encodes `image`, tagged with its DPI so Retina captures open and paste at their on-screen size
-    /// instead of 2x.
-    static func data(_ image: CGImage, scale: CGFloat, type: UTType) -> Data? {
-        let data = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else { return nil }
-        let dpi = 72 * scale
-        let properties = [kCGImagePropertyDPIWidth: dpi, kCGImagePropertyDPIHeight: dpi] as CFDictionary
-        CGImageDestinationAddImage(destination, image, properties)
-        guard CGImageDestinationFinalize(destination) else { return nil }
-        return data as Data
-    }
 }

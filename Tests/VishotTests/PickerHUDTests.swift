@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import XCTest
+import VishotConfiguration
 @testable import Vishot
 
 final class PickerHUDTests: XCTestCase {

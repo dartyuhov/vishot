@@ -1,6 +1,7 @@
 # Add a built-in theme
 
-You add a theme by defining its complete look in Swift and registering it once.
+You add a theme by defining its complete look in Swift, adding its shared
+preference identity, and registering its GUI definition.
 Themes reuse the existing drawing treatments. You don't need to change picker,
 editor, or history drawing code.
 
@@ -20,12 +21,18 @@ Use an existing definition as a starting point, without inheriting from it.
    for Smooth's vector markup. These stable presets include annotation fonts and
    measurements. They are separate from your theme's selection identifier.
 5. Customize the complete `ThemeStyles` value returned by your factory: HUD,
-   picker, selection feedback, editor controls, history, Settings, and watermark.
-6. Add your definition to `ThemeCatalog.definitions`. Its order determines the
-   order in Settings. Selection, labels, and configuration lookup use this list.
+   picker, selection feedback, editor controls, history, Settings, watermark, and
+   countdown presentation and motion.
+6. Add the preference identity, label, and existing annotation-preset mapping to
+   `VisualStyle` in `Sources/VishotConfiguration/Preferences.swift`. Configuration
+   parsing and the CLI use this shared identity without loading GUI themes.
+7. Add your definition to `ThemeCatalog.definitions`. Keep its identifier and
+   label consistent with the shared preference. Settings uses the shared
+   preference order, and the GUI catalog resolves each preference to its look.
 
-You don't add a case to `VisualStyle` or `ThemeID`. The named Pixel and Smooth
-accessors exist for defaults and legacy compatibility, not registration.
+You don't add a case to `ThemeID` when reusing an existing saved annotation
+preset. The named Pixel and Smooth accessors also provide defaults and legacy
+compatibility.
 
 ## Reuse drawing treatments
 
@@ -35,6 +42,7 @@ Definitions select treatments and values rather than adding drawing algorithms.
 - `PanelStyle` provides background, border, corner, and shadow values.
 - `SelectionDrawingStyle` defines the crosshair and dim treatment.
 - `WatermarkStyle` provides pixel glyphs or system text with a plate.
+- `CountdownStyle` provides the badge, typography, and stepped or fluid motion.
 - Saved annotation presets provide cell-based or vector markup.
 
 Keep the watermark palette independent of light/dark interface appearance.

@@ -7,9 +7,10 @@
   const status = document.querySelector('[data-copy-status]');
   const download = document.querySelector('[data-download]');
   const chooser = document.getElementById('download-chooser');
-  let reset;
 
-  if (controls && !controls.hidden) {
+  function setUpCopy(command, copy, status, label = 'Command') {
+    if (!command || !copy || !status) return;
+    let reset;
     copy.hidden = false;
     copy.addEventListener('click', async () => {
       clearTimeout(reset);
@@ -17,15 +18,24 @@
       try {
         await navigator.clipboard.writeText(command.textContent);
         copy.textContent = 'Copied!';
-        status.textContent = 'Command copied.';
+        status.textContent = `${label} copied.`;
         reset = setTimeout(() => { copy.textContent = 'Copy'; status.textContent = ''; }, 2500);
       } catch {
         copy.textContent = 'Copy';
-        status.textContent = 'Could not copy. Select the command and copy it manually.';
+        status.textContent = `Could not copy. Select the ${label.toLowerCase()} and copy it manually.`;
       } finally {
         copy.disabled = false;
       }
     });
+  }
+
+  setUpCopy(document.querySelector('[data-skill-command]'),
+    document.querySelector('[data-copy-skill]'), document.querySelector('[data-skill-copy-status]'));
+  setUpCopy(document.querySelector('[data-example-prompt]'),
+    document.querySelector('[data-copy-prompt]'), document.querySelector('[data-prompt-copy-status]'), 'Prompt');
+
+  if (controls && !controls.hidden) {
+    setUpCopy(command, copy, status);
     if (typeof chooser?.showModal === 'function') {
       download.setAttribute('aria-haspopup', 'dialog');
       download.setAttribute('aria-controls', chooser.id);

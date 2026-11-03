@@ -1,4 +1,5 @@
 import Foundation
+import VishotConfiguration
 
 struct HistoryVideo: Codable, Equatable {
     let movie: String

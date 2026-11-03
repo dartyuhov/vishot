@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import VishotConfiguration
 @testable import Vishot
 
 final class CountdownTests: XCTestCase {

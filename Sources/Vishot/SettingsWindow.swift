@@ -1,4 +1,5 @@
 import AppKit
+import VishotConfiguration
 
 final class SettingsWindow: NSWindowController, NSWindowDelegate {
     private let store: SettingsStore
@@ -18,6 +19,8 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     private let statusHeading = NSTextField(labelWithString: "")
     private let statusSection = NSStackView()
     private let contentStack = NSStackView()
+    private let cliControls: CLIInstallationView
+    private let skillInstallation: SkillInstallationView
     private let permissionControls = CapturePermission.allCases.map { PermissionControlView(permission: $0) }
     private var activationObserver: NSObjectProtocol?
     func recordGlobalShortcut(_ shortcut: CaptureShortcut) -> Bool {
@@ -28,14 +31,18 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         return true
     }
 
-    init(store: SettingsStore, history: HistoryLibrary? = nil) {
+    init(store: SettingsStore, history: HistoryLibrary? = nil, cliInstallation: CLIInstallation = CLIInstallation(),
+         skillPasteboard: NSPasteboard = .general) {
         self.store = store
         self.history = history
+        cliControls = CLIInstallationView(installation: cliInstallation)
+        skillInstallation = SkillInstallationView(pasteboard: skillPasteboard)
         let window = SettingsPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 400),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Vishot Settings"
         window.isReleasedWhenClosed = false
         super.init(window: window)
+        cliControls.onLayoutChange = { [weak self] in self?.resizeToContent() }
         window.delegate = self
         for control in permissionControls {
             control.onLayoutChange = { [weak self] in self?.resizeToContent() }
@@ -145,6 +152,8 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
                 help("Stores editable full-display originals locally. Off stops new entries; existing entries still expire. There is no disk-size limit.")]),
             separator(),
             section("Configuration", views: [path, buttons, help("File edits reload automatically. Changes are saved as you make them.")]),
+            separator(),
+            section("Agent CLI", views: [cliControls, skillInstallation]),
             statusSection,
         ]
         for view in sections { stack.addArrangedSubview(view) }
@@ -205,7 +214,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         for view in views where view is NSTextField {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
-        for view in views where view is PermissionControlView {
+        for view in views where view is PermissionControlView || view is CLIInstallationView || view is SkillInstallationView {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
         return stack
@@ -240,7 +249,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) { recorder.cancel(); historyRecorder.cancel() }
     func windowDidResignKey(_ notification: Notification) { recorder.cancel(); historyRecorder.cancel() }
-    func windowDidBecomeKey(_ notification: Notification) { refreshPermissions() }
+    func windowDidBecomeKey(_ notification: Notification) { refreshPermissions(); cliControls.refresh() }
 
     func present() {
         store.reload()
@@ -252,8 +261,9 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     }
 
     func refresh() {
+        cliControls.refresh()
         let settings = store.configured ?? store.active
-        if !hasAppliedStyle || resolvedTheme.style != store.active.style || resolvedTheme.colorScheme != store.activeColorScheme {
+        if !hasAppliedStyle || resolvedTheme.definition.id != store.active.style.rawValue || resolvedTheme.colorScheme != store.activeColorScheme {
             resolvedTheme = ThemeCatalog.resolve(style: store.active.style, colorScheme: store.activeColorScheme)
             if let content = window?.contentView { resolvedTheme.settings.apply(to: content) }
             hasAppliedStyle = true

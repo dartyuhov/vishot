@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import VishotConfiguration
 @testable import Vishot
 
 final class ThemeCatalogTests: XCTestCase {
@@ -15,8 +16,8 @@ final class ThemeCatalogTests: XCTestCase {
                     let resolved = ThemeCatalog.resolve(definition, appearance: preference, system: system)
                     XCTAssertEqual(resolved.colorScheme, supported)
                     XCTAssertEqual(resolved.settings.appearance.name, supported.appearance.name)
-                    XCTAssertEqual(resolved.style.rawValue, "single")
-                    XCTAssertEqual(resolved.style.label, "Single")
+                    XCTAssertEqual(resolved.definition.id, "single")
+                    XCTAssertEqual(resolved.definition.label, "Single")
                     XCTAssertEqual(resolved.id, .clean, "New themes can reuse stable saved markup")
                 }
             }
@@ -42,7 +43,7 @@ final class ThemeCatalogTests: XCTestCase {
             XCTAssertEqual(settings.style.label, definition.label)
             for scheme in [ColorScheme.light, .dark] {
                 let resolved = ThemeCatalog.resolve(style: settings.style, colorScheme: scheme)
-                XCTAssertEqual(resolved.style, settings.style)
+                XCTAssertEqual(resolved.definition.id, settings.style.rawValue)
                 XCTAssertEqual(resolved.colorScheme, scheme)
                 XCTAssertGreaterThan(resolved.hud.nameFont.pointSize, 0)
                 XCTAssertGreaterThan(resolved.picker.borderWidth, 0)

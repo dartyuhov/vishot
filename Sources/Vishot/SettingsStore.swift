@@ -1,9 +1,9 @@
 import AppKit
+import VishotConfiguration
 
 /// Main-thread settings state; the returned registration keeps the hotkey alive.
 final class SettingsStore {
-    static let defaultURL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".config/vishot/config.toml")
+    static let defaultURL = AppSettings.defaultURL
     let url: URL
     private(set) var active = AppSettings.defaults
     private(set) var configured: AppSettings?
