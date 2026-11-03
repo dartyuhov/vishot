@@ -442,10 +442,12 @@ final class PickerHUDTests: XCTestCase {
             history = HistoryLibrary(store: HistoryStore(url: root.appendingPathComponent("History")))
             let window = WindowInfo(id: 42, pid: 0, appName: "Window", frame: CGRect(x: 50, y: 50, width: 500, height: 400),
                 anchor: CGPoint(x: 300, y: 250))
-            let hints = (0..<26).map { index in
-                CaptureTarget(kind: .element(windowID: 42, rect: CGRect(x: 100 + index * 10, y: 100, width: 40, height: 40)),
-                    frame: CGRect(x: 100 + index * 10, y: 100, width: 40, height: 40),
-                    anchor: CGPoint(x: 120 + index * 10, y: 120), label: "Element \(index)")
+            let hints: [CaptureTarget] = (0..<26).map { index -> CaptureTarget in
+                let x = CGFloat(100 + index * 10)
+                let frame = CGRect(x: x, y: 100, width: 40, height: 40)
+                let anchor = CGPoint(x: x + 20, y: 120)
+                return CaptureTarget(kind: .element(windowID: 42, rect: frame),
+                    frame: frame, anchor: anchor, label: "Element \(index)")
             }
             let display = display
             controller = OverlayController(sessions: sessions, history: history, presentsPanels: false,
