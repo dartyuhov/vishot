@@ -31,8 +31,8 @@ final class PickerHUD {
         var captureName: String { captureType == .video ? "Video" : "Screenshot" }
         var typeSwitch: HUDKey? {
             guard picker != .hint, !isCountingDown else { return nil }
-            return captureType == .video ? HUDKey("s", action: "Screenshot") :
-                HUDKey("r", action: "Video", unavailableReason: historyAvailable ? nil : PickerHUD.historyUnavailableReason)
+            return captureType == .video ? HUDKey("s", action: "Switch to screenshot") :
+                HUDKey("r", action: "Switch to video", unavailableReason: historyAvailable ? nil : PickerHUD.historyUnavailableReason)
         }
         var choices: [Choice] {
             guard !isCountingDown else { return [] }
@@ -50,15 +50,11 @@ final class PickerHUD {
         var navigation: [HUDKey] {
             guard !isCountingDown else { return [] }
             switch picker {
-            case .window: return [HUDKey("hjkl", action: "Move / arrows"), HUDKey("tab", action: "Next (⇧ previous)"),
-                PickerHUD.elementsKey(accessibilityAvailable: accessibilityAvailable), HUDKey("G", action: "Screen"), HUDKey("v", action: "Region")]
-            case .screen: return [HUDKey("hjkl", action: "Move / arrows"), HUDKey("tab", action: "Next (⇧ previous)"), HUDKey("v", action: "Region")]
-            case .element: return [PickerHUD.elementsKey(accessibilityAvailable: accessibilityAvailable), HUDKey("G", action: "Screen"), HUDKey("v", action: "Region")]
+            case .window, .element: return [PickerHUD.elementsKey(accessibilityAvailable: accessibilityAvailable), HUDKey("G", action: "Whole screen"), HUDKey("v", action: "Select region")]
+            case .screen: return [HUDKey("v", action: "Select region")]
             case .hint: return [HUDKey(action: "Type a hint"), HUDKey("⌫", action: "Undo")]
             case .region:
-                return [HUDKey("hjkl", action: "Move / arrows"), HUDKey("⇧", action: "Far"), HUDKey("⌥", action: "Slow"),
-                    HUDKey("v", action: regionState == .drawing ? "Finish region" : regionState == .ready ? "Redraw" : "Start region")] +
-                    (regionState == .drawing ? [] : [HUDKey("tab", action: "Screen")])
+                return [HUDKey("v", action: regionState == .drawing ? "Finish region" : regionState == .ready ? "Redraw" : "Start region")]
             }
         }
         var actions: [HUDKey] {
@@ -66,7 +62,7 @@ final class PickerHUD {
             let canCapture = picker != .hint && (picker != .region || regionState == .ready)
             let capture: [HUDKey] = !canCapture ? [] : captureType == .video ?
                 [HUDKey("↵", action: "Record", unavailableReason: historyAvailable ? nil : PickerHUD.historyUnavailableReason)] :
-                [HUDKey("↵", action: "Copy"), HUDKey("⇧↵", "e", action: "Edit")]
+                [HUDKey("↵", action: "Copy"), HUDKey("e", action: "Edit")]
             return capture + [HUDKey("esc", action: picker == .window ? "Cancel" :
                 picker == .region && regionState == .drawing ? "Cancel region" : "Back")] +
                 (picker == .region ? [HUDKey("q", action: "Cancel")] : [])
@@ -77,7 +73,7 @@ final class PickerHUD {
     static let historyUnavailableReason = "Video requires History. Enable retention in Vishot Settings."
 
     static func elementsKey(accessibilityAvailable: Bool) -> HUDKey {
-        HUDKey("f", action: "elements", unavailableReason: accessibilityAvailable ? nil : elementUnavailableReason)
+        HUDKey("f", action: "Select elements", unavailableReason: accessibilityAvailable ? nil : elementUnavailableReason)
     }
 
     let root = CALayer()
@@ -85,12 +81,13 @@ final class PickerHUD {
     private let scale: CGFloat
     private var style: HUDStyle
     private var bottomInset: CGFloat = 24
-    private let bands = [CALayer(), CALayer(), CALayer()]
-    private let separators = [CALayer(), CALayer()]
+    private let bands = [CALayer(), CALayer()]
+    private let separators = [CALayer()]
     private struct Band: Equatable {
         var name = ""
         var keys: [HUDKey] = []
         var active: Int? = nil
+        var actionsStart: Int? = nil
     }
     private struct PreparedBand {
         let content: Band
@@ -138,7 +135,8 @@ final class PickerHUD {
                                             rowHeight: HUD.textSize(band.name, font: style.nameFont).height, scale: scale, style: style)))
                                     }
                                     for (index, key) in band.keys.enumerated() {
-                                        let entry = HUD.makeEntry(key, scale: scale, style: style)
+                                        let displayed = key.action == "Copy" ? HUDKey("↵", action: "Copy to clipboard") : key
+                                        let entry = HUD.makeEntry(displayed, scale: scale, style: style)
                                         if band.active != nil && index < 4 { HUD.pad(entry, style: style) }
                                         if band.active == index {
                                             HUD.highlight(entry, color: theme.editor.active, text: theme.editor.activeText, style: style)
@@ -156,18 +154,82 @@ final class PickerHUD {
     }
 
     private func bandContent(_ content: Content) -> [Band] {
-        [Band(name: content.captureName, keys: content.typeSwitch.map { [$0] } ?? []),
-         Band(keys: content.choices.map(\.key) + content.navigation, active: content.choices.firstIndex(where: \.isActive)),
-         Band(keys: content.actions)]
+        [Band(name: content.captureName, keys: content.navigation),
+         Band(keys: (content.typeSwitch.map { [$0] } ?? []) + content.actions,
+              actionsStart: content.typeSwitch == nil ? 0 : 1)]
     }
 
     func show(_ content: Content, status message: String, size: CGSize, visible: Bool) {
         root.isHidden = !visible
         guard visible else { return }
-        let width = max(1, min(720, size.width - 2 * bottomInset) - 2 * style.padding.width)
+        let contents = bandContent(content)
+        var naturalWidth: CGFloat = 0
+        for content in contents {
+            guard let cached = prepared.first(where: { $0.content == content }) else { continue }
+            let itemWidth = cached.items.reduce(CGFloat.zero) { $0 + $1.layer.frame.width }
+            let gaps = CGFloat(max(0, cached.items.count - 1)) * style.entryGap
+            let separation: CGFloat = content.actionsStart == nil ? 0 : 32
+            naturalWidth = max(naturalWidth, itemWidth + gaps + separation)
+        }
+        let allTopItems = prepared.first(where: { $0.content == contents[0] })?.items.map(\.layer) ?? []
+        let topPrefixCount = contents[0].name.isEmpty ? 0 : 1
+        let topItems = Array(allTopItems.dropFirst(topPrefixCount))
+        let bottomItems = prepared.first(where: { $0.content == contents[1] })?.items.map(\.layer) ?? []
+        let prefixCount = contents[1].actionsStart ?? 0
+        let actionItems = Array(bottomItems.dropFirst(prefixCount))
+        var sizingContent = content
+        sizingContent.captureType = .screenshot
+        let columnCount = max(topItems.count, max(actionItems.count, sizingContent.actions.count))
+        // Cancel stays in the last column when Video has no Edit action.
+        let actionColumns = actionItems.indices.map { index in
+            index == actionItems.count - 1 ? columnCount - 1 : index
+        }
+        var columnWidths = Array(repeating: CGFloat.zero, count: columnCount)
+        for (index, item) in topItems.enumerated() { columnWidths[index] = item.frame.width }
+        for (index, item) in actionItems.enumerated() {
+            let column = actionColumns[index]
+            columnWidths[column] = max(columnWidths[column], item.frame.width)
+        }
+        let bottomPrefixWidth = bottomItems.prefix(prefixCount).reduce(CGFloat.zero) { $0 + $1.frame.width } +
+            CGFloat(max(0, prefixCount - 1)) * style.entryGap
+        var prefixWidth = max(bottomPrefixWidth, allTopItems.first.map { topPrefixCount == 0 ? 0 : $0.frame.width } ?? 0)
+        // Reserve the same columns for both capture types, including Screenshot's
+        // Copy/Edit actions and Video's longer switch label.
+        for type in CaptureType.allCases {
+            var variant = content
+            variant.captureType = type
+            let variantBands = bandContent(variant)
+            let top = prepared.first(where: { $0.content == variantBands[0] })?.items ?? []
+            let bottom = prepared.first(where: { $0.content == variantBands[1] })?.items ?? []
+            let prefix = variantBands[1].actionsStart ?? 0
+            let prefixItemsWidth = bottom.prefix(prefix).reduce(CGFloat.zero) { $0 + $1.layer.frame.width }
+            prefixWidth = max(prefixWidth, prefixItemsWidth + CGFloat(max(0, prefix - 1)) * style.entryGap)
+            prefixWidth = max(prefixWidth, top.first?.layer.frame.width ?? 0)
+            let actions = Array(bottom.dropFirst(prefix))
+            for (index, item) in actions.enumerated() {
+                let column = index == actions.count - 1 ? columnCount - 1 : index
+                if columnWidths.indices.contains(column) {
+                    columnWidths[column] = max(columnWidths[column], item.layer.frame.width)
+                }
+            }
+            for band in [top, bottom] {
+                let itemsWidth = band.reduce(CGFloat.zero) { $0 + $1.layer.frame.width }
+                naturalWidth = max(naturalWidth, itemsWidth + CGFloat(max(0, band.count - 1)) * style.entryGap + 32)
+            }
+        }
+        let columnStart = prefixWidth + 32
+        var columnX: [CGFloat] = []
+        var columnEnd = columnStart
+        for width in columnWidths {
+            columnX.append(columnEnd)
+            columnEnd += width + style.entryGap
+        }
+        let alignedWidth = columnEnd - (columnCount == 0 ? 0 : style.entryGap)
+        if !topItems.isEmpty { naturalWidth = max(naturalWidth, alignedWidth) }
+        let width = max(1, min(naturalWidth, size.width - 2 * bottomInset - 2 * style.padding.width))
+        let usesColumns = !topItems.isEmpty && alignedWidth <= width
         if layoutContent != content || layoutWidth != width {
             visibleItems.removeAll(keepingCapacity: true)
-            let contents = bandContent(content)
             var y = style.padding.height
             // Actions remain at the bottom, capture type at the top. Status grows above all three.
             for index in (0..<bands.count).reversed() {
@@ -179,7 +241,19 @@ final class PickerHUD {
                     continue
                 }
                 band.isHidden = false
-                let height = flow(cached.items.map(\.layer), width: width, in: band, breakAfter: index == 1 ? content.choices.count : nil)
+                let height = flow(cached.items.map(\.layer), width: width, in: band, actionsStart: contents[index].actionsStart,
+                                  hasHeading: !contents[index].name.isEmpty)
+                if usesColumns {
+                    if index == 0 {
+                        for (column, item) in cached.items.dropFirst(topPrefixCount).enumerated() {
+                            item.layer.frame.origin.x = (columnX[column] * scale).rounded() / scale
+                        }
+                    } else {
+                        for (action, item) in cached.items.dropFirst(prefixCount).enumerated() {
+                            item.layer.frame.origin.x = (columnX[actionColumns[action]] * scale).rounded() / scale
+                        }
+                    }
+                }
                 band.frame = CGRect(x: style.padding.width, y: y, width: width, height: height)
                 visibleItems.append(contentsOf: cached.items)
                 y += height
@@ -221,23 +295,46 @@ final class PickerHUD {
         !root.isHidden && root.frame.contains(point)
     }
 
-    /// Wrap whole entries, never cut off a keycap. The first four items in the picker band are choices.
-    private func flow(_ items: [CALayer], width: CGFloat, in band: CALayer, breakAfter: Int?) -> CGFloat {
+    /// Keep output actions on the right, wrapping whole entries on compact displays.
+    private func flow(_ items: [CALayer], width: CGFloat, in band: CALayer, actionsStart: Int?, hasHeading: Bool) -> CGFloat {
+        let total = items.reduce(CGFloat.zero) { $0 + $1.frame.width } + CGFloat(max(0, items.count - 1)) * style.entryGap
+        if let actionsStart, total + 32 <= width {
+            let height = items.map(\.frame.height).max() ?? 0
+            let right = items.dropFirst(actionsStart)
+            let rightWidth = right.reduce(CGFloat.zero) { $0 + $1.frame.width } + CGFloat(max(0, right.count - 1)) * style.entryGap
+            var x: CGFloat = 0
+            for (index, item) in items.enumerated() {
+                if index == actionsStart { x = width - rightWidth }
+                let y = index == 0 && hasHeading
+                    ? HUD.textY(style.nameFont, lineHeight: item.frame.height, in: height, scale: scale)
+                    : ((height - item.frame.height) / 2 * scale).rounded() / scale
+                item.frame.origin = CGPoint(x: (x * scale).rounded() / scale, y: y)
+                band.addSublayer(item)
+                x += item.frame.width + style.entryGap
+            }
+            return height
+        }
         var rows: [[CALayer]] = [[]]
         var x: CGFloat = 0
-        for (index, item) in items.enumerated() {
-            if x > 0 && (index == breakAfter || x + item.frame.width > width) { rows.append([]); x = 0 }
+        for item in items {
+            if x > 0 && x + item.frame.width > width { rows.append([]); x = 0 }
             rows[rows.count - 1].append(item)
             x += item.frame.width + style.entryGap
         }
         var y: CGFloat = 0
         for row in rows.reversed() {
             let height = row.map(\.frame.height).max() ?? 0
+            let rowWidth = row.reduce(CGFloat.zero) { $0 + $1.frame.width }
+            let gap = actionsStart == nil && rows.count == 1 && row.count > 1
+                ? (width - rowWidth) / CGFloat(row.count - 1) : style.entryGap
             x = 0
             for item in row {
-                item.frame.origin = CGPoint(x: x, y: y + ((height - item.frame.height) / 2 * scale).rounded() / scale)
+                let itemY = hasHeading && item === items.first
+                    ? HUD.textY(style.nameFont, lineHeight: item.frame.height, in: height, scale: scale)
+                    : ((height - item.frame.height) / 2 * scale).rounded() / scale
+                item.frame.origin = CGPoint(x: (x * scale).rounded() / scale, y: y + itemY)
                 band.addSublayer(item)
-                x += item.frame.width + style.entryGap
+                x += item.frame.width + gap
             }
             y += height + style.lineGap
         }

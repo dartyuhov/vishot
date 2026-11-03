@@ -4,6 +4,44 @@ import XCTest
 @testable import Vishot
 
 final class PickerHUDTests: XCTestCase {
+    func testCaptureTypeSwitchKeepsHUDWidthAndPickerColumnsStable() throws {
+        for visual in VisualStyle.allCases {
+            let theme = ThemeCatalog.resolve(style: visual, colorScheme: .dark)
+            let hud = PickerHUD(scale: 2, style: theme.hud)
+            hud.prepare(theme: theme)
+            for picker in PickerHUD.Picker.allCases {
+                for width: CGFloat in [320, 800, 2000] {
+                    let size = CGSize(width: width, height: 900)
+                    hud.show(PickerHUD.Content(picker: picker), status: "", size: size, visible: true)
+                    let before = hud.root.frame
+                    hud.show(PickerHUD.Content(captureType: .video, picker: picker), status: "", size: size, visible: true)
+                    XCTAssertEqual(hud.root.frame.width, before.width)
+                    XCTAssertEqual(hud.root.frame.minX, before.minX)
+                }
+            }
+        }
+    }
+
+    func testTopControlsShareColumnsWithBottomActions() throws {
+        for visual in VisualStyle.allCases {
+            let theme = ThemeCatalog.resolve(style: visual, colorScheme: .dark)
+            let hud = PickerHUD(scale: 2, style: theme.hud)
+            hud.prepare(theme: theme)
+            for type in PickerHUD.CaptureType.allCases {
+                hud.show(PickerHUD.Content(captureType: type), status: "", size: CGSize(width: 2000, height: 900), visible: true)
+                let pairs = type == .screenshot
+                    ? [("Select elements", "Copy to clipboard"), ("Whole screen", "Edit"), ("Select region", "Cancel")]
+                    : [("Select elements", "Record"), ("Select region", "Cancel")]
+                for (top, bottom) in pairs {
+                    let topEntry = try XCTUnwrap(text(top, in: hud.root)?.superlayer)
+                    let bottomEntry = try XCTUnwrap(text(bottom, in: hud.root)?.superlayer)
+                    XCTAssertEqual(hud.root.convert(topEntry.bounds, from: topEntry).minX,
+                                   hud.root.convert(bottomEntry.bounds, from: bottomEntry).minX, accuracy: 0.01)
+                }
+            }
+        }
+    }
+
     func testControllerPhysicalTypeKeysPreserveTargetsAcrossEveryPickerAndHistoryOff() throws {
         for picker in [PickerHUD.Picker.window, .element, .screen, .region] {
             let fixture = ControllerFixture()
@@ -150,10 +188,12 @@ final class PickerHUDTests: XCTestCase {
                             for width: CGFloat in [320, 800] {
                                 hud.show(content, status: countdown ? "Preparing…" : "", size: CGSize(width: width, height: 900), visible: true)
                                 XCTAssertNotNil(text(content.captureName, in: hud.root))
-                                for key in content.actions + content.navigation + content.choices.map(\.key) {
-                                    let layer = try XCTUnwrap(text(key.action, in: hud.root))
+                                for key in content.actions + content.navigation {
+                                    let layer = try XCTUnwrap(text(key.action == "Copy" ? "Copy to clipboard" : key.action, in: hud.root))
                                     XCTAssertTrue(hud.root.bounds.contains(hud.root.convert(layer.bounds, from: layer)), "\(key.action)")
                                 }
+                                XCTAssertNil(text("Window", in: hud.root))
+                                XCTAssertNil(text("Element", in: hud.root))
                                 if countdown {
                                     XCTAssertNil(text("Record", in: hud.root))
                                     XCTAssertNil(text("Window", in: hud.root))
@@ -210,11 +250,11 @@ final class PickerHUDTests: XCTestCase {
     func testCaptureTypeIsProminentWithOnlyTheAlternativeSwitchAndContextualActions() {
         let screenshot = PickerHUD.Content(captureType: .screenshot, picker: .window)
         XCTAssertEqual(screenshot.captureName, "Screenshot")
-        XCTAssertEqual(screenshot.typeSwitch, HUDKey("r", action: "Video"))
-        XCTAssertEqual(screenshot.actions, [HUDKey("↵", action: "Copy"), HUDKey("⇧↵", "e", action: "Edit"), HUDKey("esc", action: "Cancel")])
+        XCTAssertEqual(screenshot.typeSwitch, HUDKey("r", action: "Switch to video"))
+        XCTAssertEqual(screenshot.actions, [HUDKey("↵", action: "Copy"), HUDKey("e", action: "Edit"), HUDKey("esc", action: "Cancel")])
         let video = PickerHUD.Content(captureType: .video, picker: .window)
         XCTAssertEqual(video.captureName, "Video")
-        XCTAssertEqual(video.typeSwitch, HUDKey("s", action: "Screenshot"))
+        XCTAssertEqual(video.typeSwitch, HUDKey("s", action: "Switch to screenshot"))
         XCTAssertEqual(video.actions, [HUDKey("↵", action: "Record"), HUDKey("esc", action: "Cancel")])
     }
 
@@ -264,7 +304,7 @@ final class PickerHUDTests: XCTestCase {
         XCTAssertTrue(enabledKey.isEnabled)
         XCTAssertNil(enabledKey.unavailableReason)
         XCTAssertEqual(enabledKey.keys, ["f"])
-        XCTAssertEqual(enabledKey.action, "elements")
+        XCTAssertEqual(enabledKey.action, "Select elements")
         let enabled = HUD.makeEntry(enabledKey, scale: 2, style: ThemeCatalog.pixel.hud)
         XCTAssertLessThan(disabled.layer.opacity, enabled.layer.opacity)
         XCTAssertEqual(disabled.layer.bounds.size, enabled.layer.bounds.size)
@@ -282,13 +322,13 @@ final class PickerHUDTests: XCTestCase {
                     for width: CGFloat in [320, 800, 1440] {
                         let size = CGSize(width: width, height: 900)
                         hud.show(content, status: "", size: size, visible: true)
-                        for label in ["Screenshot", "Video", "Window", "Element", "Screen", "Region", "Copy", "Edit", "Cancel"] {
+                        for label in ["Screenshot", "Switch to video", "Select elements", "Whole screen", "Select region", "Copy to clipboard", "Edit", "Cancel"] {
                             let layer = try XCTUnwrap(text(label, in: hud.root))
                             let rect = hud.root.convert(layer.bounds, from: layer)
                             XCTAssertTrue(hud.root.bounds.contains(rect), "\(label) clipped at \(width)")
                             XCTAssertFalse(layer.isHidden)
                         }
-                        let element = try XCTUnwrap(text("Element", in: hud.root))
+                        let element = try XCTUnwrap(text("Select elements", in: hud.root))
                         let point = element.convert(CGPoint(x: element.bounds.midX, y: element.bounds.midY), to: hud.root)
                             .applying(CGAffineTransform(translationX: hud.root.frame.minX, y: hud.root.frame.minY))
                         XCTAssertEqual(hud.unavailableReason(at: point), PickerHUD.elementUnavailableReason)
@@ -315,7 +355,7 @@ final class PickerHUDTests: XCTestCase {
                 var content = PickerHUD.Content(accessibilityAvailable: false)
                 let size = CGSize(width: width, height: 900)
                 hud.show(content, status: "", size: size, visible: true)
-                let entry = try XCTUnwrap(text("Element", in: hud.root)?.superlayer)
+                let entry = try XCTUnwrap(text("Select elements", in: hud.root)?.superlayer)
                 let point = hud.root.convert(CGPoint(x: entry.bounds.midX, y: entry.bounds.midY), from: entry)
                     .applying(CGAffineTransform(translationX: hud.root.frame.minX, y: hud.root.frame.minY))
                 let row = try XCTUnwrap(entry.superlayer)
@@ -335,7 +375,7 @@ final class PickerHUDTests: XCTestCase {
                         .applying(CGAffineTransform(translationX: hud.root.frame.minX, y: hud.root.frame.minY))
                     XCTAssertNil(hud.unavailableReason(at: clippedPoint))
                 }
-                let move = try XCTUnwrap(text("Move / arrows", in: hud.root)?.superlayer)
+                let move = try XCTUnwrap(text("Whole screen", in: hud.root)?.superlayer)
                 let movePoint = hud.root.convert(CGPoint(x: move.bounds.midX, y: move.bounds.midY), from: move)
                     .applying(CGAffineTransform(translationX: hud.root.frame.minX, y: hud.root.frame.minY))
                 XCTAssertNil(hud.unavailableReason(at: movePoint))
