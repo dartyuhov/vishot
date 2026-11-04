@@ -58,6 +58,11 @@ enum PixelTheme {
                     cornerRadius: 0, shadow: Palette.hintLeaf,
                     shadowRadius: 0, shadowOffset: CGSize(width: 2, height: -2)),
                 text: Palette.text, font: .systemFont(ofSize: 12, weight: .semibold),
-                padding: CGSize(width: 8, height: 6), margin: 12))
+                padding: CGSize(width: 8, height: 6), margin: 12),
+            countdown: CountdownStyle(
+                plate: PanelStyle(background: Palette.ink, border: Palette.accent, borderWidth: 2,
+                    cornerRadius: 0, shadow: Palette.accent, shadowRadius: 0,
+                    shadowOffset: CGSize(width: 4, height: -4)),
+                font: Fonts.pixel(48), text: Palette.text, size: CGSize(width: 104, height: 104), motion: .stepped))
     }
 }

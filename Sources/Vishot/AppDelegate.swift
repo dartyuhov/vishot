@@ -51,6 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var historyItem: NSMenuItem?
     private var settingsItem: NSMenuItem?
     private var overlay: OverlayController?
+    private let sessions = CaptureSessionCoordinator()
+    private var video: VideoSession?
+    private var stopItem: NSMenuItem?
     private var launchAtLoginItem: NSMenuItem?
     private lazy var setup = SetupFlow.live()
     private var setupWindow: SetupWindow?
@@ -67,8 +70,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // Before the overlay builds its panels, which ask for the fonts.
         if let resources = Bundle.main.resourceURL { Fonts.register(resourceDirectory: resources) }
-        let overlay = OverlayController()
+        let overlay = OverlayController(sessions: sessions)
         self.overlay = overlay
+        let video = VideoSession(sessions: sessions, history: overlay.historyLibrary)
+        self.video = video
+        overlay.video = video
+        video.onCountdown = { [weak overlay] in overlay?.videoCountdownStatus($0) }
+        video.onReturnToPicker = { [weak overlay] in overlay?.videoReturnToPicker($0) }
+        video.onDismissPicker = { [weak overlay] in overlay?.dismissForVideo() }
+        video.onChange = { [weak self] in self?.settingsChanged() }
+        video.onPermissionSettings = { [weak self] in self?.openSettings() }
+        sessions.onCapture = { [weak overlay] in overlay?.show(session: $0) ?? false }
+        sessions.onHistory = { [weak overlay] in overlay?.showHistory(session: $0) ?? false }
+        sessions.onCaptureAgain = { [weak overlay] in overlay?.toggle(session: $0) }
+        sessions.onQuitReady = { NSApp.reply(toApplicationShouldTerminate: true) }
+        sessions.onQuitCancelled = { NSApp.reply(toApplicationShouldTerminate: false) }
         let settings = SettingsStore(registerHistory: { [weak self] shortcut in
             guard let hotKey = HotKey(keyCode: shortcut.keyCode, modifiers: shortcut.carbonModifiers, action: { [weak self] in
                 if self?.settingsWindow?.recordGlobalShortcut(shortcut) == true { return }
@@ -83,7 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return hotKey
         }
         self.settings = settings
-        overlay.onSessionChange = { [weak settings] in settings?.setSessionActive($0) }
+        sessions.onSessionChange = { [weak settings] in settings?.setSessionActive($0) }
         settings.onChange = { [weak self] in self?.settingsChanged() }
         overlay.historyLibrary.onChange = { [weak self, weak overlay] in
             overlay?.refreshHistory()
@@ -109,6 +125,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         capture.target = self
         menu.addItem(capture)
         captureItem = capture
+        let stop = NSMenuItem(title: "Stop Recording", action: #selector(stopRecording), keyEquivalent: "")
+        stop.target = self
+        stop.isHidden = true
+        menu.addItem(stop)
+        stopItem = stop
         let history = NSMenuItem(title: "Capture History", action: #selector(historyFromMenu), keyEquivalent: "")
         history.target = self
         menu.addItem(history)
@@ -171,8 +192,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func historyFromMenu() { DispatchQueue.main.async { self.showHistory() } }
 
     private func capture() {
-        if overlay?.isSessionActive != true,
-           setupWindow?.window?.isVisible == true, setup.isShowingGuide {
+        if video?.isActive == true { video?.stop(); return }
+        if sessions.isSessionActive { sessions.capture(); return }
+        if setupWindow?.window?.isVisible == true, setup.isShowingGuide {
             setupWindow?.takeFirstScreenshot()
             return
         }
@@ -181,19 +203,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             else { presentSetup() }
             return
         }
-        overlay?.toggle()
+        sessions.capture()
     }
 
     private func showHistory() {
+        guard !sessions.isSessionActive else { return }
         guard !setup.needsSetup else { presentSetup(); return }
-        overlay?.showHistory()
+        sessions.showHistory()
     }
 
     private func presentSetup() {
         if setupWindow == nil {
             setupWindow = SetupWindow(flow: setup, shortcut: { [weak self] in
                 self?.settings?.active.shortcut.display ?? CaptureShortcut.defaults.display
-            }, capture: { [weak self] in self?.overlay?.toggle() })
+            }, capture: { [weak self] in self?.sessions.capture() })
         }
         setupWindow?.present()
     }
@@ -202,7 +225,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let settings else { return }
         // A physical-key title remains accurate on non-Latin layouts; a
         // character-based menu equivalent would advertise a different key.
-        captureItem?.title = "Capture Window  (\(settings.active.shortcut.display))"
+        captureItem?.title = "Capture Window  (\(settings.active.shortcut.display))" + (video?.error == nil ? "" : " — Recording Error")
+        stopItem?.isHidden = video?.canStop != true
+        video?.shortcut = settings.active.shortcut
         historyItem?.title = "Capture History" + (settings.active.historyShortcut.map { "  (\($0.display))" } ?? "") + (overlay?.historyLibrary.error == nil ? "" : " — Storage Error")
         settingsItem?.title = settings.error == nil ? "Settings…" : "Settings… — Configuration Error"
         overlay?.watermark = settings.active.watermark
@@ -230,4 +255,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         launchAtLoginItem?.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        video?.prepareToQuit()
+        return sessions.requestQuit() ? .terminateNow : .terminateLater
+    }
+
+    @objc private func stopRecording() { video?.stop() }
 }

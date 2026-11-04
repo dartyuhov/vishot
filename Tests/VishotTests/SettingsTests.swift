@@ -91,7 +91,13 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(store.activeColorScheme, .dark)
     }
 
-    func testLegacyThemeEditingPreservesIndependentAppearanceAndStyle() throws {
+    func testIndependentAppearanceAndStyleCompatibility() throws {
+        XCTAssertEqual(try AppSettings.parse("").appearance, .system)
+        XCTAssertEqual(try AppSettings.parse("theme = 'clean'").appearance, .dark)
+        XCTAssertEqual(try AppSettings.parse("theme = 'clean'").style, .smooth)
+        let explicit = try AppSettings.parse("theme = 'clean'\nappearance = 'light'\nstyle = 'pixel'")
+        XCTAssertEqual(explicit.appearance, .light)
+        XCTAssertEqual(explicit.style, .pixel)
         let source = "# keep\r\ntheme = 'clean' # old choice\r\n[notes]\r\nx = 1\r\n"
         let edited = try AppSettings.edit(source, appearance: .system)
         XCTAssertEqual(try AppSettings.parse(edited).appearance, .system)
@@ -99,6 +105,9 @@ final class SettingsTests: XCTestCase {
         XCTAssertFalse(edited.contains("theme ="))
         XCTAssertTrue(edited.contains("# old choice"))
         XCTAssertTrue(edited.contains("[notes]\r\nx = 1"))
+        for source in ["appearance = 'auto'", "style = 'clean'", "appearance = true", "style = 1"] {
+            XCTAssertThrowsError(try AppSettings.parse(source))
+        }
     }
 
     func testThemeStorePersistsReloadsAndDefersWithoutLosingLastGoodSettings() throws {
@@ -158,6 +167,17 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(try AppSettings.edit(missing, style: .smooth), "style = \"smooth\"\r\n" + missing)
         XCTAssertEqual(try AppSettings.parse(AppSettings.edit(source, style: .pixel)).appearance, .dark)
         XCTAssertThrowsError(try AppSettings.edit("theme = '''\npixel'''", style: .smooth))
+    }
+
+    func testThemeDefaultsAndValidation() throws {
+        XCTAssertEqual(try AppSettings.parse("").style.annotationID, .pixel)
+        XCTAssertEqual(try AppSettings.parse(AppSettings.defaultSource).style.annotationID, .pixel)
+        XCTAssertEqual(try AppSettings.parse("theme = 'clean'").style.annotationID, .clean)
+        for value in ["'unknown'", "'Clean'", "true", "7", "[]", "{}"] {
+            XCTAssertThrowsError(try AppSettings.parse("theme = \(value)")) { error in
+                XCTAssertTrue(error.localizedDescription.contains("theme"))
+            }
+        }
     }
 
     func testMultilineClosingQuotesDoNotHideRealInsertionHeader() throws {

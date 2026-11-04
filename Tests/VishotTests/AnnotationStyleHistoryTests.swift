@@ -5,6 +5,39 @@ import VishotRendering
 @testable import Vishot
 
 final class AnnotationStyleHistoryTests: XCTestCase {
+    func testThemedSchemaOneScreenshotMigratesOnWriteWithoutChangingMarkupOrRevision() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = HistoryStore(url: folder)
+        let image = try XCTUnwrap(CGContext(data: nil, width: 160, height: 120, bitsPerComponent: 8,
+            bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)?.makeImage())
+        let document = EditDocument(image: image, scale: 1,
+            annotations: [.text("Saved style", at: CGPoint(x: 20, y: 40), color: .purple)],
+            annotationStyle: .clean)
+        var entry = try store.commit(document: document, undo: [], label: "Themed legacy", windowTitle: "Source window")
+        entry.schema = 1
+        let metadata = folder.appendingPathComponent(entry.id.uuidString).appendingPathComponent("entry.json")
+        let legacyBytes = try JSONEncoder().encode(entry)
+        try legacyBytes.write(to: metadata)
+
+        let loaded = try store.load(entry.id)
+        XCTAssertEqual(loaded.entry.schema, 1)
+        XCTAssertEqual(loaded.document.annotationStyle, .clean)
+        XCTAssertEqual(try Data(contentsOf: metadata), legacyBytes)
+        let migrated = try store.commit(document: loaded.document, undo: loaded.undo,
+            label: entry.label, id: entry.id)
+        XCTAssertEqual(migrated.schema, 2)
+        XCTAssertEqual(migrated.revision, entry.revision)
+        XCTAssertEqual(migrated.modifiedAt, entry.modifiedAt)
+        let restarted = try HistoryStore(url: folder).load(entry.id)
+        XCTAssertEqual(restarted.entry.windowTitle, "Source window")
+        XCTAssertEqual(restarted.document.annotationStyle, .clean)
+        XCTAssertEqual(restarted.document.snapshot, document.snapshot)
+        XCTAssertEqual(try pixels(store.preview(restarted.entry)),
+            try pixels(XCTUnwrap(AnnotationRenderer.export(restarted.document))))
+    }
+
     func testCleanSearchExcludesAccentedGlyphsClippedAboveTheTypographicLineBox() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }

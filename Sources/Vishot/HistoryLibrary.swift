@@ -21,12 +21,14 @@ final class HistoryLibrary {
     private var timer: Timer?
     private var indexing: Set<String> = [] // worker queue only
     private var held: [UUID: Int] = [:] // worker queue only; overlapping output/editor holds are independent
+    private var pendingClear = false // worker queue; Clear waits for active file operations
+    private var pendingDeletions = false
     private var storageLifetime = HistoryImageRequest() // worker queue; invalidated by explicit Clear
     private(set) var entries: [HistoryEntry] = []
     private(set) var error: String?
     private enum Operation: Equatable {
         case startup, cleanup, commit(UUID?), delete(UUID), undoDelete, finishDeletions, clear
-        case index(UUID), load(UUID), preview(UUID), publication
+        case index(UUID), load(UUID), preview(UUID), export(UUID), publication
     }
     // A new-capture commit (nil ID) recovers a previous new-capture failure. Updates recover
     // only that entry's commit failure, including an unchanged retry of its committed state.
@@ -63,6 +65,17 @@ final class HistoryLibrary {
         worker.async {
             let count = self.held[id, default: 0]
             if count <= 1 { self.held.removeValue(forKey: id) } else { self.held[id] = count - 1 }
+            do {
+                if self.pendingDeletions {
+                    try self.store.finishDeletions(holding: Set(self.held.keys))
+                    if self.held.isEmpty { self.pendingDeletions = false }
+                }
+                if self.pendingClear, self.held.isEmpty {
+                    try self.clearStorage()
+                    self.pendingClear = false
+                }
+                try self.publish()
+            } catch { self.report(error, operation: self.pendingClear ? .clear : .finishDeletions) }
         }
         cleanup()
     }
@@ -84,6 +97,84 @@ final class HistoryLibrary {
                 DispatchQueue.main.async { completion(document) }
             } catch { self.report(error, operation: .load(id)); DispatchQueue.main.async { completion(nil) } }
         }
+    }
+
+    func stageVideo(completion: @escaping (Result<URL, Error>) -> Void) {
+        worker.async {
+            let result = Result { try self.store.stageVideo() }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// Staging is owned by VideoSession, outside Clear/expiry. Its caller holds
+    /// the app session through panel, copy and completion delivery.
+    func exportCompletedVideo(_ movie: URL, to destination: URL,
+                              completion: @escaping (Result<Void, Error>) -> Void) {
+        worker.async {
+            let result = Result { try self.store.exportCompletedVideo(movie, to: destination) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func publishVideo(staging: URL, video: HistoryVideo, label: String, windowTitle: String = "",
+                      completion: @escaping (Result<HistoryEntry, Error>) -> Void) {
+        worker.async {
+            let result = Result { try self.store.publishVideo(staging: staging, video: video, label: label, windowTitle: windowTitle) }
+            if case .success = result {
+                do { try self.publish() } catch { self.report(error, operation: .publication) }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    /// Resolve under the serial storage boundary with a retention hold covering player launch.
+    func openVideo(_ entry: HistoryEntry, completion: @escaping (Bool) -> Void) {
+        videoFile(entry) { result in
+            switch result {
+            case .success(let url): completion(NSWorkspace.shared.open(url))
+            case .failure: completion(false)
+            }
+        }
+    }
+
+    /// The hold spans delivery to AppKit, but never the clipboard's lifetime or player use.
+    func videoFile(_ entry: HistoryEntry, completion: @escaping (Result<URL, Error>) -> Void) {
+        hold(entry.id)
+        worker.async {
+            let result = Result { try self.store.validatedMovieURL(entry) }
+            switch result {
+            case .success: self.recovered(.load(entry.id))
+            case .failure(let error): self.report(error, operation: .load(entry.id))
+            }
+            DispatchQueue.main.async {
+                completion(result)
+                self.release(entry.id)
+            }
+        }
+    }
+
+    @discardableResult
+    func exportVideo(_ entry: HistoryEntry, to destination: URL,
+                     completion: @escaping (Result<Void, Error>) -> Void) -> HistoryImageRequest {
+        let request = HistoryImageRequest()
+        hold(entry.id)
+        worker.async {
+            let result = Result {
+                guard !request.isCancelled else { throw CancellationError() }
+                _ = try self.store.validatedMovieURL(entry)
+                try self.store.exportVideo(entry, to: destination, cancelled: { request.isCancelled })
+            }
+            switch result {
+            case .success: self.recovered(.export(entry.id))
+            case .failure(let error):
+                if !(error is CancellationError) { self.report(error, operation: .export(entry.id)) }
+            }
+            DispatchQueue.main.async {
+                completion(result)
+                self.release(entry.id)
+            }
+        }
+        return request
     }
 
     @discardableResult
@@ -148,27 +239,41 @@ final class HistoryLibrary {
             } catch { self.report(error, operation: .undoDelete); DispatchQueue.main.async { completion(nil) } }
         }
     }
-    func finishSession() { perform(.finishDeletions) { try self.store.finishDeletions() } }
-    func clear() { perform(.clear) { try self.store.clear() } }
+    func finishSession() {
+        perform(.finishDeletions) {
+            self.pendingDeletions = !self.held.isEmpty
+            try self.store.finishDeletions(holding: Set(self.held.keys))
+        }
+    }
+    func clear() {
+        worker.async {
+            guard self.held.isEmpty else { self.pendingClear = true; return }
+            do { try self.clearStorage(); try self.publish() }
+            catch { self.report(error, operation: .clear) }
+        }
+    }
+
+    private func clearStorage() throws {
+        try store.clear()
+        storageLifetime.cancel()
+        storageLifetime = HistoryImageRequest()
+        failedIndex = []
+        recovered(.clear)
+        DispatchQueue.main.async {
+            self.failures.removeAll { failure in
+                switch failure.0 {
+                case .commit(.some), .delete, .load, .preview, .export, .index, .undoDelete, .finishDeletions: return true
+                default: return false
+                }
+            }
+            self.warning = nil
+            self.updateError()
+        }
+    }
 
     private func perform(_ key: Operation, _ operation: @escaping () throws -> Void) {
         worker.async {
             do { try operation() } catch { self.report(error, operation: key); return }
-            if key == .clear {
-                self.storageLifetime.cancel()
-                self.storageLifetime = HistoryImageRequest()
-                self.failedIndex = []
-                DispatchQueue.main.async {
-                    self.failures.removeAll { failure in
-                        switch failure.0 {
-                        case .commit(.some), .delete, .load, .preview, .index, .undoDelete, .finishDeletions: return true
-                        default: return false
-                        }
-                    }
-                    self.warning = nil
-                    self.updateError()
-                }
-            }
             self.recovered(key)
             do { try self.publish() } catch { self.report(error, operation: .publication) }
         }
@@ -186,14 +291,14 @@ final class HistoryLibrary {
             self.updateError()
         }
         // Queue only one job ahead. Completion schedules the next from fresh committed metadata.
-        guard indexing.isEmpty, let entry = entries.first(where: { $0.recognizedText == nil }) else { return }
+        guard indexing.isEmpty, let entry = entries.first(where: { $0.video == nil && $0.recognizedText == nil }) else { return }
         scheduleIndex(entry)
     }
 
     private var failedIndex: Set<UUID> = []
     private func scheduleIndex(_ entry: HistoryEntry) {
         guard !failedIndex.contains(entry.revision) else {
-            if let next = try? store.entries().first(where: { $0.recognizedText == nil && !failedIndex.contains($0.revision) }) { scheduleIndex(next) }
+            if let next = try? store.entries().first(where: { $0.video == nil && $0.recognizedText == nil && !failedIndex.contains($0.revision) }) { scheduleIndex(next) }
             return
         }
         let key = entry.revision.uuidString

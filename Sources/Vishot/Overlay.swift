@@ -4,42 +4,7 @@ import VishotConfiguration
 import Carbon.HIToolbox
 
 final class OverlayController: NSObject, NSWindowDelegate {
-    private enum Mode: CaseIterable {
-        case window, element, hint, screen, region
-
-        var name: String {
-            switch self {
-            case .window: "WINDOW"
-            case .element: "ELEMENT"
-            case .hint: "HINT"
-            case .screen: "SCREEN"
-            case .region: "REGION"
-            }
-        }
-
-        func keys(accessibilityAvailable: Bool) -> [HUDKey] {
-            switch self {
-            case .window: [
-                HUDKey("hjkl", action: "move"), PickerHUD.elementsKey(accessibilityAvailable: accessibilityAvailable), HUDKey("v", action: "region"),
-                HUDKey("G", action: "screen"), HUDKey("↵", action: "copy"), HUDKey("⇧↵", "e", action: "edit"),
-                HUDKey("esc", action: "cancel"),
-            ]
-            case .element: [
-                PickerHUD.elementsKey(accessibilityAvailable: accessibilityAvailable), HUDKey("v", action: "region"), HUDKey("G", action: "screen"),
-                HUDKey("↵", action: "copy"), HUDKey("⇧↵", "e", action: "edit"), HUDKey("esc", action: "back"),
-            ]
-            case .hint: [HUDKey(action: "type a hint"), HUDKey("⌫", action: "undo"), HUDKey("esc", action: "back")]
-            case .screen: [
-                HUDKey("hjkl", action: "move"), HUDKey("v", action: "region"), HUDKey("↵", action: "copy"),
-                HUDKey("⇧↵", "e", action: "edit"), HUDKey("esc", action: "back"),
-            ]
-            case .region: [
-                HUDKey("hjkl", action: "move (⇧ far, ⌥ slow)"), HUDKey("v", action: "corner"), HUDKey("tab", action: "screen"),
-                HUDKey("↵", action: "copy"), HUDKey("⇧↵", "e", action: "edit"), HUDKey("esc", action: "back"),
-            ]
-            }
-        }
-    }
+    private typealias Mode = PickerHUD.Picker
 
     /// A hint and the element it is shown on.
     private struct Hint {
@@ -57,7 +22,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var sessionOutput: OutputStyle?
 
     func prepareTheme(style: VisualStyle, colorScheme: ColorScheme) {
-        guard !isSessionActive,
+        guard !sessions.isSessionActive,
               preparedTheme.definition.id != style.rawValue || preparedTheme.colorScheme != ThemeCatalog.colorScheme(style: style, requested: colorScheme) else { return }
         preparedTheme = ThemeCatalog.resolve(style: style, colorScheme: colorScheme)
         preparePickerPanels()
@@ -65,14 +30,16 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func preparePickerPanels() {
-        let modes = Mode.allCases.flatMap { mode in
-            [false, true].map { (name: mode.name, keys: mode.keys(accessibilityAvailable: $0)) }
-        }
-        panels.forEach { $0.prepare(theme: preparedTheme, modes: modes) }
+        panels.forEach { $0.prepare(theme: preparedTheme) }
     }
     private var isShowing = false
     private let capturer = Capturer()
-    let historyLibrary = HistoryLibrary()
+    let historyLibrary: HistoryLibrary
+    private let presentsPanels: Bool
+    private let windowCatalog: () -> [WindowInfo]
+    private let displayCatalog: () -> [CaptureTarget]
+    /// Optional discovery adapter; key dispatch and hint matching stay here.
+    private let hintCatalog: ((WindowInfo) -> [CaptureTarget])?
     private lazy var screenshotCompletion = ScreenshotCompletion(history: historyLibrary, save: { [capturer] in
         capturer.save($0, scale: $1, to: $2, output: $3, completion: $4)
     }) { [capturer] image, scale, output in
@@ -83,8 +50,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var historyEditingID: UUID?
     private var captureLabel = ""
     private var captureWindowTitle = ""
-    var isSessionActive: Bool { isShowing || browser != nil }
-    var onSessionChange: ((Bool) -> Void)?
+    private let sessions: CaptureSessionCoordinator
+    var video: VideoSession?
+    private var videoType = false
+    private var videoCountdown = false
+    private var videoRectangle: CGRect?
+    private var countdownFrame: CountdownFrame?
     var watermark = true
     private let elements = ElementCatalog()
     private let accessibility = AccessibilityAvailability()
@@ -129,15 +100,26 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// Set while a capture for the editor runs, then the editor until it finishes.
     private var isCapturing = false
     private var editor: EditorController?
-    /// Increases on every hide, so a capture that finishes after the overlay closed is dropped.
-    private var session = 0
+    /// App-owned identity fences presentation callbacks, including delayed teardown.
+    private var session: Int { sessions.callbackSession }
     /// The save panel hides the overlay, which must not cancel the edit.
     private var isPresentingSavePanel = false
     /// The app that was active before the save panel activated Vishot.
     private var appToReactivate: NSRunningApplication?
 
-    override init() {
+    init(sessions: CaptureSessionCoordinator, history: HistoryLibrary = HistoryLibrary(),
+         presentsPanels: Bool = true,
+         windowCatalog: @escaping () -> [WindowInfo] = WindowCatalog.visibleWindows,
+         displayCatalog: @escaping () -> [CaptureTarget] = DisplayCatalog.displays,
+         hintCatalog: ((WindowInfo) -> [CaptureTarget])? = nil) {
+        self.sessions = sessions
+        historyLibrary = history
+        self.presentsPanels = presentsPanels
+        self.windowCatalog = windowCatalog
+        self.displayCatalog = displayCatalog
+        self.hintCatalog = hintCatalog
         super.init()
+        guard presentsPanels else { return }
         accessibility.onChange = { [weak self] allowed in
             guard let self else { return }
             accessibilityAvailable = allowed
@@ -145,6 +127,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         accessibility.start()
         reusableBrowser = HistoryBrowser(library: historyLibrary)
+        reusableBrowser?.onFileOperation = { [sessions] active in
+            if active { sessions.beginFileOperation() } else { sessions.endFileOperation() }
+        }
         raiser.onKey = { [weak self] in $0.type == .keyDown ? self?.handle($0) : self?.keyUp($0) }
         raiser.onActivated = { [weak self] in
             guard let self, isShowing else { return }
@@ -157,31 +142,55 @@ final class OverlayController: NSObject, NSWindowDelegate {
         )
     }
 
-    func toggle() {
+    func toggle(session: Int) {
+        if videoCountdown { video?.cancelCountdown(); return }
+        guard sessions.acceptsCallbacks(session) else { return }
         guard !isPresentingSavePanel else { return }
         guard !(isCapturing && editor != nil) else { return }
         if browser != nil {
+            guard browser?.isBusy != true else { return }
             guard editor == nil, !isCapturing else { return }
             closeHistory()
-            show()
+            sessions.replaceWithCapture(session)
             return
         }
-        isShowing ? hide() : show()
+        if isShowing { hide() }
     }
 
-    func showHistory() {
-        guard !isShowing, browser == nil,
-              let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main else { return }
+    func showHistory(session: Int) -> Bool {
+        guard sessions.acceptsCallbacks(session), !isShowing, browser == nil,
+              let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main else { return false }
         appToReactivate = NSWorkspace.shared.frontmostApplication
         let browser = reusableBrowser!
         self.browser = browser
         sessionTheme = preparedTheme
         sessionOutput = OutputStyle(watermark: watermark, style: preparedTheme.watermark)
-        browser.onClose = { [weak self] in self?.closeHistory() }
-        browser.onEdit = { [weak self] in self?.editHistory($0, on: $1) }
+        browser.onClose = { [weak self] in
+            guard let self, sessions.acceptsCallbacks(session) else { return }
+            closeHistory()
+        }
+        browser.onEdit = { [weak self] id, screen in
+            guard let self, sessions.acceptsCallbacks(session) else { return }
+            editHistory(id, on: screen)
+        }
+        browser.onOpenVideo = { [weak self] entry in
+            guard let self, sessions.acceptsCallbacks(session) else { return }
+            isCapturing = true
+            browser.setBusy(true)
+            historyLibrary.openVideo(entry) { [weak self] opened in
+                guard let self, sessions.acceptsCallbacks(session) else { return }
+                self.isCapturing = false
+                browser.setBusy(false)
+                if opened {
+                    // Closing History must not reactivate its previous application
+                    // over the player NSWorkspace just opened.
+                    self.appToReactivate = nil
+                    self.hide()
+                }
+            }
+        }
         browser.onYank = { [weak self, weak browser] entry in
-            guard let self, !isCapturing, let output = sessionOutput else { return }
-            let session = session
+            guard let self, sessions.acceptsCallbacks(session), !isCapturing, let output = sessionOutput else { return }
             browser?.yank(entry) { [weak self] image in
                 guard let self, self.session == session, self.browser === browser else { return }
                 guard let image else { return }
@@ -189,8 +198,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
                 self.closeHistory()
             }
         }
-        onSessionChange?(true)
         browser.show(on: screen)
+        return true
     }
 
     func refreshHistory() { browser?.libraryChanged() }
@@ -224,8 +233,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             let capture = Capture(image: loaded.document.image, scale: loaded.document.scale, frame: frame, initialCrop: loaded.document.crop)
             guard let theme = self.sessionTheme else { self.historyLibrary.release(id); return }
             let editor = EditorController(capture: capture, restored: loaded, viewScale: scale, theme: theme)
-            editor.onFinish = { [weak self] in self?.finishEditing($0, export: $1) }
-            editor.onChange = { [weak self] in self?.render() }
+            self.connect(editor, session: session)
             self.editor = editor
             self.panels.forEach { $0.hidePicker(); $0.orderFrontRegardless() }
             self.render()
@@ -243,30 +251,40 @@ final class OverlayController: NSObject, NSWindowDelegate {
         historyLibrary.release(id)
     }
 
-    private func show() {
-        windows = WindowCatalog.visibleWindows()
-        guard !windows.isEmpty, let keyPanel = panels.first else {
+    func show(session: Int) -> Bool {
+        guard sessions.acceptsCallbacks(session) else { return false }
+        windows = windowCatalog()
+        guard !windows.isEmpty, !presentsPanels || !panels.isEmpty else {
             NSSound.beep()
-            return
+            return false
         }
-        capturer.prefetch()
-        raiser.begin(windows)
-        let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if presentsPanels {
+            capturer.prefetch()
+            appToReactivate = NSWorkspace.shared.frontmostApplication
+            raiser.begin(windows)
+        }
+        let frontPID = presentsPanels ? NSWorkspace.shared.frontmostApplication?.processIdentifier : nil
         currentWindow = WindowCatalog.initialSelection(in: windows, frontPID: frontPID) ?? 0
         status = ""
+        videoType = false
+        videoCountdown = false
+        videoRectangle = nil
         hoverStatus = nil
         accessibilityAvailable = accessibility.isAllowed
         enterWindowMode()
         isShowing = true
         sessionTheme = preparedTheme
         sessionOutput = OutputStyle(watermark: watermark, style: preparedTheme.watermark)
-        onSessionChange?(true)
         render()
         panels.forEach { $0.orderFrontRegardless() }
-        keyPanel.makeKey()
+        panels.first?.makeKey()
+        return true
     }
 
-    private func hide() {
+    private func hide(continuingVideo: Bool = false) {
+        let session = session
+        guard sessions.acceptsCallbacks(session) else { return }
+        sessions.dismissPresentation(session)
         if browser != nil {
             browser?.close()
             browser = nil
@@ -275,7 +293,6 @@ final class OverlayController: NSObject, NSWindowDelegate {
         isShowing = false
         sessionTheme = nil
         sessionOutput = nil
-        session += 1
         sourcePreparation.cancel()
         isCapturing = false
         editor = nil
@@ -286,7 +303,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         hints = []
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        panels.forEach { $0.hideEditor() }
+        panels.forEach { $0.hideEditor(); $0.showCountdown(nil, target: nil, visible: false) }
         CATransaction.commit()
         panels.forEach { $0.orderOut(nil) }
         elements.finish()
@@ -294,19 +311,64 @@ final class OverlayController: NSObject, NSWindowDelegate {
         appToReactivate?.activate()
         appToReactivate = nil
         // Activate settings between sessions after presentation has finished unwinding.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, !isSessionActive else { return }
-            onSessionChange?(false)
-        }
+        if !continuingVideo { DispatchQueue.main.async { [sessions] in sessions.finish(session) } }
+    }
+
+    func videoCountdownStatus(_ message: String) {
+        videoCountdown = true
+        status = message
+        render()
+    }
+
+    func videoReturnToPicker(_ message: String) {
+        countdownFrame = nil
+        videoCountdown = false
+        videoRectangle = nil
+        status = message
+        render()
+    }
+
+    func dismissForVideo() {
+        countdownFrame = nil
+        // hide owns presentation teardown and focus restoration; the outer
+        // session remains reserved until recorder publication finishes.
+        videoCountdown = false
+        videoRectangle = nil
+        hide(continuingVideo: true)
     }
 
     /// What ↵ copies and ⇧↵/e edits. Region mode has nothing until a region is drawn.
-    private var selection: CaptureTarget? {
+    var selection: CaptureTarget? {
         if let region { region.target } else { targets[selected] }
     }
 
     private func confirm() {
-        guard !isCapturing, let target = selection, let output = sessionOutput else { return }
+        guard !isCapturing, let target = selection else { return }
+        if videoType {
+            guard historyLibrary.retention != .off else {
+                status = "Video requires History. Enable retention in Vishot Settings."; render(); return
+            }
+            do {
+                let windowFrame: CGRect?
+                if case .element(let id, _) = target.kind { windowFrame = windows.first { $0.id == id }?.frame }
+                else { windowFrame = nil }
+                let selection = try VideoSelection(target: target, windowFrame: windowFrame)
+                videoCountdown = true
+                stopWarmUp()
+                video?.onRectangle = { [weak self] rect in
+                    self?.videoRectangle = rect
+                    self?.render()
+                }
+                video?.onCountdownFrame = { [weak self] frame in
+                    self?.countdownFrame = frame
+                    self?.render()
+                }
+                captureMetadata(for: target)
+                video?.begin(selection: selection, session: session, label: captureLabel, windowTitle: captureWindowTitle)
+            } catch { video?.presentStartupFailure(error, session: session) }
+            return
+        }
+        guard let output = sessionOutput else { return }
         captureMetadata(for: target)
         let label = captureLabel, title = captureWindowTitle
         prepareSource(for: target) { [self] capture in
@@ -332,6 +394,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     /// Captures the selection with the overlay up, then edits it in place.
     private func edit() {
+        if videoType { status = "Video editing is unavailable. Press ↵ to record."; render(); return }
         guard !isCapturing, let target = selection else { return }
         captureMetadata(for: target)
         prepareSource(for: target) { [self] in startEditing($0) }
@@ -344,6 +407,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         Task { @MainActor [weak self] in
             guard let self, session == self.session else { return }
             await sourcePreparation.prepare(for: target) { capture in
+                guard self.sessions.acceptsCallbacks(session) else { return }
                 self.isCapturing = false
                 receive(capture)
             }
@@ -353,11 +417,21 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func startEditing(_ capture: Capture) {
         guard let theme = sessionTheme else { return }
         let editor = EditorController(capture: capture, theme: theme)
-        editor.onFinish = { [weak self] in self?.finishEditing($0, export: $1) }
-        editor.onChange = { [weak self] in self?.render() }
+        connect(editor, session: session)
         self.editor = editor
         status = ""
         render()
+    }
+
+    private func connect(_ editor: EditorController, session: Int) {
+        editor.onFinish = { [weak self] finish, export in
+            guard let self, sessions.acceptsCallbacks(session) else { return }
+            finishEditing(finish, export: export)
+        }
+        editor.onChange = { [weak self] in
+            guard let self, sessions.acceptsCallbacks(session) else { return }
+            render()
+        }
     }
 
     private func finishEditing(_ finish: EditorController.Finish, export: (image: CGImage, scale: CGFloat)?) {
@@ -431,7 +505,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     private func enterScreenMode() {
         let anchor = targets[selected].anchor
-        let displays = DisplayCatalog.displays()
+        let displays = displayCatalog()
         guard !displays.isEmpty else {
             NSSound.beep()
             return
@@ -445,7 +519,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     /// The cursor starts on the selection, until the mouse moves.
     private func enterRegionMode() {
-        let displays = DisplayCatalog.displays()
+        let displays = displayCatalog()
         guard !displays.isEmpty else {
             NSSound.beep()
             return
@@ -456,13 +530,20 @@ final class OverlayController: NSObject, NSWindowDelegate {
         region.onChange = { [weak self] in self?.render() }
         self.region = region
         mode = .region
-        NSCursor.setHiddenUntilMouseMoves(true)
+        if presentsPanels { NSCursor.setHiddenUntilMouseMoves(true) }
     }
 
     // MARK: - Hints
 
     /// Puts hints on the elements of the current window. The window stays selected until a hint is typed.
     private func startHints() {
+        if let hintCatalog {
+            if mode == .window { currentWindow = selected }
+            let found = hintCatalog(windows[currentWindow])
+            guard !found.isEmpty else { return }
+            enterHintMode(zip(Hints.make(count: found.count), found).map { Hint(code: $0, target: $1, isContainer: false) })
+            return
+        }
         accessibilityAvailable = elements.isTrusted()
         guard accessibilityAvailable else {
             status = PickerHUD.elementUnavailableReason
@@ -484,13 +565,17 @@ final class OverlayController: NSObject, NSWindowDelegate {
             status = "nothing to label"
             return
         }
+        enterHintMode(found)
+        if let warmUpEnd { startWarmUp(root, until: warmUpEnd) }
+    }
+
+    private func enterHintMode(_ found: [Hint]) {
         stopWarmUp()
         mode = .hint
         targets = windows.map(\.target)
         selected = currentWindow
         hints = found
         typedHint = ""
-        if let warmUpEnd { startWarmUp(root, until: warmUpEnd) }
     }
 
     private func hints(below root: AXNode) -> [Hint] {
@@ -575,7 +660,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     /// Shows a covered window while it is browsed. Indices in Window mode are those of `windows`.
     private func raiseSelectedWindow() {
-        if mode == .window { raiser.raise(index: selected) }
+        if presentsPanels, mode == .window { raiser.raise(index: selected) }
     }
 
     /// Selects what is under the cursor. Returns false over empty space, keeping the selection.
@@ -608,15 +693,16 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         let target = selection
         // Region mode's HUD follows its cursor, since there may be no region yet.
-        let anchor = (region?.cursor ?? targets[selected].anchor).flippedBetweenCocoaAndCG
+        let anchor = (videoRectangle.map { CGPoint(x: $0.midX, y: $0.midY) }
+            ?? region?.cursor ?? targets[selected].anchor).flippedBetweenCocoaAndCG
         let hudPanel = panels.first { $0.frame.contains(anchor) } ?? panels.first
-        let statusLine = isCapturing ? "capturing…" : hoverStatus ?? (
+        let statusLine = isCapturing ? "capturing…" : videoCountdown ? status : hoverStatus ?? (
             !status.isEmpty ? status
             : warmUpTimer != nil ? "loading page…"
-            : region?.status ?? ""
+            : region?.status(captureType: videoType ? .video : .screenshot) ?? ""
         )
-        let regionRect = region == nil ? nil : target?.frame.flippedBetweenCocoaAndCG
-        let regionCursor = region?.cursor.flippedBetweenCocoaAndCG
+        let regionRect = region == nil ? nil : (videoRectangle ?? target?.frame)?.flippedBetweenCocoaAndCG
+        let regionCursor = videoCountdown ? nil : region?.cursor.flippedBetweenCocoaAndCG
         // Containers are numbered among themselves, so nested ones (adjacent in the list) get different colors.
         var containers = 0
         let marks = hints.compactMap { hint -> HintMark? in
@@ -627,19 +713,32 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        let hudContent = pickerHUDContent
         for panel in panels {
-            panel.highlight(target?.frame.flippedBetweenCocoaAndCG, label: target?.label ?? "")
+            panel.showCountdown(countdownFrame, target: videoRectangle?.flippedBetweenCocoaAndCG,
+                                visible: videoCountdown && panel === hudPanel)
+            panel.highlight((videoRectangle ?? target?.frame)?.flippedBetweenCocoaAndCG, label: target?.label ?? "")
             panel.showRegion(regionRect, cursor: regionCursor)
             panel.showHints(marks, typed: typedHint.count)
-            panel.showHUD(name: mode.name, keys: mode.keys(accessibilityAvailable: accessibilityAvailable), status: statusLine, visible: panel === hudPanel)
+            panel.showHUD(hudContent, status: statusLine, visible: panel === hudPanel)
         }
         CATransaction.commit()
     }
 
     // MARK: - Input
 
+    var pickerHUDContent: PickerHUD.Content {
+        PickerHUD.Content(captureType: videoType ? .video : .screenshot, picker: mode,
+            accessibilityAvailable: accessibilityAvailable, historyAvailable: historyLibrary.retention != .off,
+            regionState: region?.hudState ?? .empty, isCountingDown: videoCountdown)
+    }
+
     /// Key codes, not characters, so the keys keep working with non-Latin keyboard layouts.
-    private func handle(_ event: NSEvent) {
+    func handle(_ event: NSEvent) {
+        if videoCountdown {
+            if Int(event.keyCode) == kVK_Escape { video?.cancelCountdown() }
+            return
+        }
         if isCapturing, editor != nil { return }
         if let editor {
             editor.handle(event)
@@ -658,6 +757,18 @@ final class OverlayController: NSObject, NSWindowDelegate {
             handleHint(keyCode)
             render()
             return
+        }
+        var hudContent = pickerHUDContent
+        switch hudContent.handleCaptureTypeKey(keyCode) {
+        case .unavailable:
+            status = PickerHUD.historyUnavailableReason
+            render()
+            return
+        case .handled:
+            videoType = hudContent.captureType == .video
+            render()
+            return
+        case .unhandled: break
         }
         if let region {
             switch region.handle(event) {
@@ -703,7 +814,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func mouseMoved(to point: CGPoint) {
-        guard isShowing, !isCapturing else { return }
+        guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             // The cursor stays on the image while the pointer is over the toolbar.
             if let panel = panels.first(where: { $0.toolbarContains(point) }) {
@@ -714,15 +825,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
             render()
             return
         }
+        let previousHover = hoverStatus
+        hoverStatus = panels.compactMap { $0.hudUnavailableReason(at: point) }.first
+        if panels.contains(where: { $0.hudContains(point) }) {
+            if hoverStatus != previousHover { render() }
+            return
+        }
         if let region {
             region.mouseMoved(to: point)
             render()
-            return
-        }
-        let previousHover = hoverStatus
-        hoverStatus = panels.compactMap { $0.hudUnavailableReason(at: point) }.first
-        if hoverStatus != nil {
-            if hoverStatus != previousHover { render() }
             return
         }
         let before = selected
@@ -730,8 +841,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if selected != before || previousHover != nil { render() }
     }
 
-    private func mouseDown(at point: CGPoint) {
-        guard isShowing, !isCapturing else { return }
+    func mouseDown(at point: CGPoint) {
+        guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             if let panel = panels.first(where: { $0.toolbarContains(point) }) {
                 if let item = panel.toolbarItem(at: point) { editor.select(item) }
@@ -741,13 +852,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
             if isShowing, self.editor != nil { render() }
             return
         }
-        if let region {
-            region.mouseDown(at: point)
+        if let reason = panels.compactMap({ $0.hudUnavailableReason(at: point) }).first {
+            status = reason
             render()
             return
         }
-        if let reason = panels.compactMap({ $0.hudUnavailableReason(at: point) }).first {
-            status = reason
+        guard !panels.contains(where: { $0.hudContains(point) }) else { return }
+        if let region {
+            region.mouseDown(at: point)
             render()
             return
         }
@@ -755,8 +867,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         confirm()
     }
 
-    private func mouseDragged(to point: CGPoint) {
-        guard isShowing, !isCapturing else { return }
+    func mouseDragged(to point: CGPoint) {
+        guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             editor.mouseDragged(to: point)
         } else if let region, !isCapturing {
@@ -767,8 +879,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         render()
     }
 
-    private func mouseUp(at point: CGPoint) {
-        guard isShowing, !isCapturing else { return }
+    func mouseUp(at point: CGPoint) {
+        guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             editor.mouseUp(at: point)
             if isShowing, self.editor != nil { render() }
@@ -786,6 +898,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     @objc private func screensChanged() {
+        if videoCountdown { video?.cancelCountdown() }
         if browser != nil { closeHistory() }
         hide()
         rebuildPanels()
@@ -810,10 +923,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
     /// Clicking elsewhere or switching Spaces cancels the selection. A click on another screen's
     /// panel moves key focus between our own panels, which is not a cancel.
     func windowDidResignKey(_ notification: Notification) {
+        let session = session
         DispatchQueue.main.async { [self] in
+            guard sessions.acceptsCallbacks(session) else { return }
             if isCapturing, editor != nil { return }
             if browser != nil, editor == nil { return }
-            if isShowing, !isPresentingSavePanel, !raiser.isSwitchingApps, !panels.contains(where: \.isKeyWindow) { hide() }
+            if isShowing, !isPresentingSavePanel, !raiser.isSwitchingApps, !panels.contains(where: \.isKeyWindow) {
+                if videoCountdown { video?.cancelCountdown() }
+                hide()
+            }
         }
     }
 }

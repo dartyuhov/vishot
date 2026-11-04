@@ -60,6 +60,12 @@ enum SmoothTheme {
                     cornerRadius: 5, shadow: Palette.shadow,
                     shadowRadius: 4, shadowOffset: CGSize(width: 0, height: -2)),
                 text: Palette.text, font: .systemFont(ofSize: 12, weight: .semibold),
-                padding: CGSize(width: 8, height: 6), margin: 12))
+                padding: CGSize(width: 8, height: 6), margin: 12),
+            countdown: CountdownStyle(
+                plate: PanelStyle(background: Palette.ink, border: Palette.accent, borderWidth: 1,
+                    cornerRadius: 18, shadow: Palette.shadow, shadowRadius: 12,
+                    shadowOffset: CGSize(width: 0, height: -4)),
+                font: .systemFont(ofSize: 56, weight: .semibold), text: Palette.text,
+                size: CGSize(width: 104, height: 104), motion: .fluid))
     }
 }

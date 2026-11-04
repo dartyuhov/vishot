@@ -32,9 +32,9 @@ final class OverlayPanel: NSPanel {
     private let regionDim: CAShapeLayer
     private let crosshair: CALayer
     private let editor: EditorLayer
+    private let countdown = CountdownLayer()
     private var theme: ResolvedTheme
     private var style: PickerStyle { theme.picker }
-    private var hudStyle: HUDStyle { theme.hud }
 
     init(screen: NSScreen, theme: ResolvedTheme) {
         self.theme = theme
@@ -85,10 +85,11 @@ final class OverlayPanel: NSPanel {
         view.layer?.addSublayer(crosshair)
         view.layer?.addSublayer(hud.root)
         view.layer?.addSublayer(editor.root)
+        view.layer?.addSublayer(countdown.root)
     }
 
     /// Called only at startup, screen changes, or an idle preference change.
-    func prepare(theme: ResolvedTheme, modes: [(name: String, keys: [HUDKey])]) {
+    func prepare(theme: ResolvedTheme) {
         editor.prepare(theme: theme)
         self.theme = theme
         CATransaction.begin()
@@ -97,7 +98,7 @@ final class OverlayPanel: NSPanel {
         border.fillColor = style.accent.cgColor
         style.label.apply(to: labelBackground)
         HUD.configure(labelText, font: style.labelFont, color: style.labelText, scale: backingScaleFactor)
-        hud.prepare(style: hudStyle, modes: modes)
+        hud.prepare(theme: theme)
         regionDim.fillColor = theme.selection.outsideDim.cgColor
         SelectionStyle.apply(theme.selection, to: crosshair)
         for layers in hintLayers { styleHint(layers) }
@@ -150,14 +151,18 @@ final class OverlayPanel: NSPanel {
         labelText.string = label
     }
 
-    /// The mode's name and keys, and optional status above them, at the bottom centre of the screen.
-    func showHUD(name: String, keys: [HUDKey], status: String, visible: Bool) {
-        hud.show(name: name, keys: keys, status: status, size: frame.size, visible: visible)
+    /// Three themed guidance areas, with optional status above them, on the selected display.
+    func showHUD(_ content: PickerHUD.Content, status: String, visible: Bool) {
+        hud.show(content, status: status, size: frame.size, visible: visible)
     }
 
     func hudUnavailableReason(at point: CGPoint) -> String? {
         guard isVisible, frame.contains(point.flippedBetweenCocoaAndCG) else { return nil }
         return hud.unavailableReason(at: localPoint(point))
+    }
+
+    func hudContains(_ point: CGPoint) -> Bool {
+        isVisible && frame.contains(point.flippedBetweenCocoaAndCG) && hud.contains(localPoint(point))
     }
 
     /// Region mode: dims everything around `rect` and shows the cursor, both in Cocoa global space.
@@ -177,11 +182,19 @@ final class OverlayPanel: NSPanel {
 
     /// Replaces the picker's border, hints, region and HUD with the editor. The toolbar shows on one screen.
     func hidePicker() {
+        countdown.hide()
         border.isHidden = true
         labelBackground.isHidden = true
         hud.root.isHidden = true
         showHints([], typed: 0)
         showRegion(nil, cursor: nil)
+    }
+
+    /// Only the selected display presents the badge, even when it exceeds a tiny target.
+    func showCountdown(_ value: CountdownFrame?, target: CGRect?, visible: Bool) {
+        guard visible, let value, let target else { countdown.hide(); return }
+        countdown.show(value, target: target, display: frame, panel: frame, scale: backingScaleFactor,
+                       style: theme.countdown, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
     }
 
     func showEditor(_ scene: EditorScene, showsToolbar: Bool) {
