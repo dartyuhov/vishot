@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/dartyuhov/vishot/compare/v0.2.0...v0.3.0) (2026-11-05)
+
+
+### Features
+
+* add agent screenshot annotations ([#11](https://github.com/dartyuhov/vishot/issues/11)) ([fbe9468](https://github.com/dartyuhov/vishot/commit/fbe9468ef9c1d12b911f1eb1e95ee8243ba15c48))
+* add silent video recording and aligned capture HUD ([#13](https://github.com/dartyuhov/vishot/issues/13)) ([50aec56](https://github.com/dartyuhov/vishot/commit/50aec56fa13008d55cb520815c98e0e4921cd204))
+
+
+### Bug Fixes
+
+* prevent overlapping element hints ([#14](https://github.com/dartyuhov/vishot/issues/14)) ([72fb56b](https://github.com/dartyuhov/vishot/commit/72fb56b4c4bb8da74df2e32ca25a15d60df763bc))
+
 ## [0.2.0](https://github.com/dartyuhov/vishot/compare/v0.1.0...v0.2.0) (2026-10-27)
 
 
