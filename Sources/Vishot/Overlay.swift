@@ -705,10 +705,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let regionCursor = videoCountdown ? nil : region?.cursor.flippedBetweenCocoaAndCG
         // Containers are numbered among themselves, so nested ones (adjacent in the list) get different colors.
         var containers = 0
-        let marks = hints.compactMap { hint -> HintMark? in
+        let marks = hints.map { hint -> HintMark in
             let colorIndex = hint.isContainer ? containers : nil
             if hint.isContainer { containers += 1 }
-            guard hint.code.hasPrefix(typedHint) else { return nil }
             return HintMark(rect: hint.target.frame.flippedBetweenCocoaAndCG, code: hint.code, colorIndex: colorIndex)
         }
         CATransaction.begin()
@@ -719,7 +718,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
                                 visible: videoCountdown && panel === hudPanel)
             panel.highlight((videoRectangle ?? target?.frame)?.flippedBetweenCocoaAndCG, label: target?.label ?? "")
             panel.showRegion(regionRect, cursor: regionCursor)
-            panel.showHints(marks, typed: typedHint.count)
+            panel.showHints(marks, prefix: typedHint)
             panel.showHUD(hudContent, status: statusLine, visible: panel === hudPanel)
         }
         CATransaction.commit()
