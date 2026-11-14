@@ -22,6 +22,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     private let cliControls: CLIInstallationView
     private let skillInstallation: SkillInstallationView
     private let permissionControls = CapturePermission.allCases.map { PermissionControlView(permission: $0) }
+    private let microphone: MicrophonePermissionView
     private var activationObserver: NSObjectProtocol?
     func recordGlobalShortcut(_ shortcut: CaptureShortcut) -> Bool {
         guard window?.isKeyWindow == true else { return false }
@@ -32,9 +33,10 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     }
 
     init(store: SettingsStore, history: HistoryLibrary? = nil, cliInstallation: CLIInstallation = CLIInstallation(),
-         skillPasteboard: NSPasteboard = .general) {
+         skillPasteboard: NSPasteboard = .general, microphonePermission: MicrophonePermission = .shared) {
         self.store = store
         self.history = history
+        microphone = MicrophonePermissionView(permission: microphonePermission)
         cliControls = CLIInstallationView(installation: cliInstallation)
         skillInstallation = SkillInstallationView(pasteboard: skillPasteboard)
         let window = SettingsPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 400),
@@ -47,6 +49,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         for control in permissionControls {
             control.onLayoutChange = { [weak self] in self?.resizeToContent() }
         }
+        microphone.onLayoutChange = { [weak self] in self?.resizeToContent() }
         activationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -144,7 +147,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
             separator(),
             section("Capture", views: [row, help("Click the shortcut to record a new one. Include ⌘ or ⌃; Esc cancels.")]),
             separator(),
-            section("Permissions", views: permissionControls),
+            section("Permissions", views: permissionControls + [microphone]),
             separator(),
             section("Watermark", views: [watermark, help("Keep this on to help others discover Vishot.")]),
             separator(),
@@ -194,6 +197,8 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
 
     private func refreshPermissions() {
         for control in permissionControls { control.refresh() }
+        microphone.refresh()
+        resizeToContent()
     }
 
     private func help(_ text: String) -> NSTextField {
@@ -214,7 +219,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         for view in views where view is NSTextField {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
-        for view in views where view is PermissionControlView || view is CLIInstallationView || view is SkillInstallationView {
+        for view in views where view is PermissionControlView || view is MicrophonePermissionView || view is CLIInstallationView || view is SkillInstallationView {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
         return stack
@@ -247,7 +252,11 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         window.setFrame(frame, display: true)
     }
 
-    func windowWillClose(_ notification: Notification) { recorder.cancel(); historyRecorder.cancel() }
+    func windowWillClose(_ notification: Notification) {
+        recorder.cancel()
+        historyRecorder.cancel()
+        microphone.cancelPendingRequest()
+    }
     func windowDidResignKey(_ notification: Notification) { recorder.cancel(); historyRecorder.cancel() }
     func windowDidBecomeKey(_ notification: Notification) { refreshPermissions(); cliControls.refresh() }
 
@@ -261,6 +270,7 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
     }
 
     func refresh() {
+        microphone.refresh()
         cliControls.refresh()
         let settings = store.configured ?? store.active
         if !hasAppliedStyle || resolvedTheme.definition.id != store.active.style.rawValue || resolvedTheme.colorScheme != store.activeColorScheme {
