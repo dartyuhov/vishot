@@ -36,10 +36,11 @@ final class MicrophonePermissionView: NSStackView {
         icon.widthAnchor.constraint(equalToConstant: 24).isActive = true
         icon.heightAnchor.constraint(equalToConstant: 24).isActive = true
         availability.font = .systemFont(ofSize: 12)
+        availability.setContentCompressionResistancePriority(.required, for: .horizontal)
         enable.target = self
         enable.action = #selector(enablePermission)
         enable.bezelStyle = .rounded
-        let row = NSStackView(views: [icon, labels, NSView(), enable])
+        let row = NSStackView(views: [icon, labels, NSView(), availability, enable])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 12
@@ -48,7 +49,7 @@ final class MicrophonePermissionView: NSStackView {
         instructions.textColor = .secondaryLabelColor
         openingError.font = .systemFont(ofSize: 12)
         openingError.isSelectable = true
-        for view in [row, explanation, availability, instructions, openingError] {
+        for view in [row, explanation, instructions, openingError] {
             addArrangedSubview(view)
             view.widthAnchor.constraint(equalTo: widthAnchor, constant: -32).isActive = true
         }
@@ -101,7 +102,7 @@ final class MicrophonePermissionView: NSStackView {
             availability.stringValue = "Restricted"
             instructions.stringValue = "Microphone access is restricted by macOS policy. Check System Settings → Privacy & Security → Microphone or contact your administrator. You can continue without microphone audio."
         }
-        availability.textColor = status == .authorized ? .systemGreen : .secondaryLabelColor
+        availability.textColor = .secondaryLabelColor
         availability.setAccessibilityLabel("Microphone: \(availability.stringValue)")
         instructions.isHidden = instructions.stringValue.isEmpty
         openingError.isHidden = openingError.stringValue.isEmpty
