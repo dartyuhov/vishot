@@ -294,6 +294,10 @@ final class SettingsWindow: NSWindowController, NSWindowDelegate {
         recorder.toolTip = "\(settings.shortcut.display) — Click to record a new shortcut"
         watermark.state = settings.watermark ? .on : .off
         watermark.isEnabled = store.configured != nil
+        watermark.attributedTitle = NSAttributedString(string: watermark.title, attributes: [
+            .font: watermark.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize),
+            .foregroundColor: watermark.isEnabled ? resolvedTheme.settings.labelColor : NSColor.disabledControlTextColor,
+        ])
         recorder.isEnabled = store.configured != nil
         if let error = store.error {
             showStatus("Configuration Error", message: "\(error)\nActive: \(store.active.style.label); \(store.active.shortcut.display); watermark \(store.active.watermark ? "on" : "off").", isError: true)
