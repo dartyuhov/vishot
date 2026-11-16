@@ -155,8 +155,8 @@ final class PickerHUD {
 
     private func bandContent(_ content: Content) -> [Band] {
         [Band(name: content.captureName, keys: content.navigation),
-         Band(keys: (content.typeSwitch.map { [$0] } ?? []) + content.actions,
-              actionsStart: content.typeSwitch == nil ? 0 : 1)]
+         Band(keys: (content.typeSwitch.map { [$0, HUDKey("o", action: "Options")] } ?? []) + content.actions,
+              actionsStart: content.typeSwitch == nil ? 0 : 2)]
     }
 
     func show(_ content: Content, status message: String, size: CGSize, visible: Bool) {
@@ -293,6 +293,19 @@ final class PickerHUD {
 
     func contains(_ point: CGPoint) -> Bool {
         !root.isHidden && root.frame.contains(point)
+    }
+
+    func optionsContains(_ point: CGPoint) -> Bool {
+        guard contains(point) else { return false }
+        let local = CGPoint(x: point.x - root.frame.minX, y: point.y - root.frame.minY)
+        return visibleItems.contains { item in
+            item.key?.action == "Options" && item.layer.bounds.contains(item.layer.convert(local, from: root))
+        }
+    }
+
+    var optionsFrame: CGRect? {
+        guard !root.isHidden, let item = visibleItems.first(where: { $0.key?.action == "Options" }) else { return nil }
+        return root.convert(item.layer.bounds, from: item.layer).offsetBy(dx: root.frame.minX, dy: root.frame.minY)
     }
 
     /// Keep output actions on the right, wrapping whole entries on compact displays.

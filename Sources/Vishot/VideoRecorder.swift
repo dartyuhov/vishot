@@ -37,6 +37,17 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
     private let callbacks = DispatchQueue(label: "dev.vishot.video.capture", qos: .userInitiated)
     private let media = DispatchQueue(label: "dev.vishot.video.media", qos: .userInitiated)
     private let intake = VideoIntake()
+    private let audioIntake = VideoIntake()
+    private var audioInput: AVAssetWriterInput?
+    private var audioWriterReady: () -> Bool = { true }
+    private var canAppendAudio: Bool { audioWriterReady() && audioInput?.isReadyForMoreMediaData == true }
+    private var audioSource: RecordingAudioSource?
+    private var audioEnabled = false
+    private var lastAudioEnd = CMTime.zero
+    private var pendingAudio: [CMSampleBuffer] = []
+    private var audioReady = false
+    private var audioConverter: AVAudioConverter?
+    private let pcmFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 48_000, channels: 1, interleaved: true)!
     private var stream: SCStream!
     private var writer: AVAssetWriter!
     private var input: AVAssetWriterInput!
@@ -69,7 +80,11 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
         super.init()
     }
 
-    static func prepare(rectangle: VideoRectangle, directory: URL) async throws -> VideoRecorder {
+    static func prepare(rectangle: VideoRectangle, directory: URL, microphone: MicrophoneDevice? = nil,
+                        audioSource: RecordingAudioSource? = nil) async throws -> VideoRecorder {
+        guard microphone == nil || audioSource == nil else {
+            throw SettingsError(message: "Multiple requested audio sources require one mixed source delivery adapter.")
+        }
         guard CGPreflightScreenCaptureAccess() else {
             throw VideoPermissionError()
         }
@@ -83,6 +98,8 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
             throw SettingsError(message: "Recording display geometry changed. Select the target again.")
         }
         let recorder = try VideoRecorder(directory: directory, rectangle: rectangle)
+        recorder.audioEnabled = microphone != nil || audioSource != nil
+        recorder.audioSource = audioSource ?? microphone.map(MicrophoneCapture.init)
         let filter = SCContentFilter(display: display, excludingApplications: [own], exceptingWindows: [])
         let config = SCStreamConfiguration()
         config.width = recorder.canvas.width
@@ -113,12 +130,17 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
     /// Exercises the production media pipeline without a desktop capture. Only
     /// stream operations and clock readings are supplied by the caller.
     static func preparedWriter(rectangle: VideoRectangle, directory: URL, startupTimeout: TimeInterval = 5,
+        audioEnabled: Bool = false, audioSource: RecordingAudioSource? = nil,
+        audioWriterReady: @escaping () -> Bool = { true },
         startCapture: @escaping (@escaping (Error?) -> Void) -> Void = { $0(nil) },
         stopCapture: @escaping (@escaping (Error?) -> Void) -> Void = { $0(nil) }) async throws -> VideoRecorder {
         let recorder = try VideoRecorder(directory: directory, rectangle: rectangle)
         recorder.startCapture = startCapture
         recorder.stopCapture = stopCapture
         recorder.startupTimeout = startupTimeout
+        recorder.audioEnabled = audioEnabled || audioSource != nil
+        recorder.audioSource = audioSource
+        recorder.audioWriterReady = audioWriterReady
         try await recorder.onMedia { try recorder.prepareWriter() }
         return recorder
     }
@@ -146,6 +168,17 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
         adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: attributes)
         guard writer.canAdd(input) else { throw SettingsError(message: "Video writer rejected its input.") }
         writer.add(input)
+        if audioEnabled {
+            let settings: [String: Any] = [AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: 48_000, AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 96_000]
+            let audio = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
+            audio.expectsMediaDataInRealTime = true
+            guard writer.canApply(outputSettings: settings, forMediaType: .audio), writer.canAdd(audio) else {
+                throw SettingsError(message: "AAC recording audio is unsupported.")
+            }
+            writer.add(audio)
+            audioInput = audio
+        }
         guard CVPixelBufferPoolCreate(nil, nil, attributes as CFDictionary, &pool) == kCVReturnSuccess else {
             throw SettingsError(message: "Could not allocate recording buffer pool.")
         }
@@ -160,10 +193,22 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
         defer {
             if !ready {
                 operation.abandon()
-                intake.close(at: CMClockGetTime(CMClockGetHostTimeClock()))
+                closeIntake(at: CMClockGetTime(CMClockGetHostTimeClock()))
             }
         }
         let stop = stopCapture!
+        if let audioSource {
+            // Source startup is fenced by this same bounded operation. Late
+            // completion after Stop must tear down rather than reopen intake.
+            Task.detached { [weak self] in
+                do {
+                    try await audioSource.start(deliver: { [weak self] in self?.enqueueAudio($0) },
+                        failed: { [weak self] in self?.sourceFailed($0) })
+                    _ = try? await self?.onMedia { self?.audioReady = true }
+                    if self?.intake.isClosed != false { await audioSource.stop() }
+                } catch { self?.sourceFailed(error); await audioSource.stop() }
+            }
+        }
         startCapture { error in
             // An OS operation is not necessarily cancellation-cooperative. A
             // late successful start must stop its own stream, never reopen intake.
@@ -175,7 +220,7 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
             if let result = operation.result { try result.get() }
             let started = try await onMedia { () throws -> Bool in
                 if let error = self.terminalError { throw error }
-                return self.timeline.origin != nil
+                return self.timeline.origin != nil && (self.audioSource == nil || self.audioReady)
             }
             if started, operation.result != nil { ready = true; return }
             try await Task.sleep(nanoseconds: 5_000_000)
@@ -238,13 +283,181 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
             fail(writer.error ?? SettingsError(message: "Video frame append failed.")); return false
         }
         lastFrame = buffer
+        // Keep only a small late-arrival allowance; quiet intervals are encoded
+        // as we go so a long quiet clip never creates unbounded Stop work.
+        if audioEnabled, relative > CMTime(value: 1, timescale: 2) {
+            let safe = time - CMTime(value: 1, timescale: 2)
+            drainAudio(until: safe)
+            appendSilence(until: safe - timeline.origin!)
+        }
         return true
+    }
+
+    private func enqueueAudio(_ sample: CMSampleBuffer) {
+        guard abs((CMClockGetTime(CMClockGetHostTimeClock()) - sample.presentationTimeStamp).seconds) < 5 else {
+            sourceFailed(SettingsError(message: "Audio source timestamps do not match the host clock.")); return
+        }
+        guard audioIntake.admit(sample.presentationTimeStamp) else { return }
+        media.async {
+            defer { self.audioIntake.release() }
+            self.appendAudio(sample)
+        }
+    }
+
+    /// Fixture and native source delivery share admission, trimming and encoding.
+    func receiveAudio(_ sample: CMSampleBuffer) async {
+        guard audioIntake.admit(sample.presentationTimeStamp) else { return }
+        _ = try? await onMedia {
+            defer { self.audioIntake.release() }
+            self.appendAudio(sample)
+        }
+    }
+
+    private func appendAudio(_ sample: CMSampleBuffer) {
+        guard let sample = canonicalAudio(sample) else {
+            fail(SettingsError(message: "Audio source format could not be converted to recording PCM.")); return
+        }
+        guard audioEnabled, terminalError == nil, sample.isValid,
+              let origin = timeline.origin, let format = sample.formatDescription,
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
+              asbd.mSampleRate > 0, sample.numSamples > 0 else { return }
+        let duration = CMTime(seconds: Double(sample.numSamples) / asbd.mSampleRate, preferredTimescale: 48_000)
+        guard sample.presentationTimeStamp + duration > origin, CMTimeGetSeconds(duration) <= 0.25 else { return }
+        // A 250ms tail bounds retained memory and lets Stop trim a straddling
+        // buffer before AAC encoding. No timestamps are shifted to arrival time.
+        pendingAudio.append(sample)
+        let safe = sample.presentationTimeStamp - CMTime(value: 1, timescale: 4)
+        drainAudio(until: min(safe, audioIntake.endpoint ?? safe))
+        if pendingAudio.count > 32 { pendingAudio.removeFirst(pendingAudio.count - 32) }
+    }
+
+    private func canonicalAudio(_ sample: CMSampleBuffer) -> CMSampleBuffer? {
+        guard let description = sample.formatDescription, sample.numSamples > 0, sample.numSamples <= 48_000 else { return nil }
+        let format = AVAudioFormat(cmAudioFormatDescription: description)
+        if format == pcmFormat { return sample }
+        guard let input = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(sample.numSamples)) else { return nil }
+        input.frameLength = AVAudioFrameCount(sample.numSamples)
+        guard CMSampleBufferCopyPCMDataIntoAudioBufferList(sample, at: 0, frameCount: Int32(sample.numSamples), into: input.mutableAudioBufferList) == noErr else { return nil }
+        if audioConverter?.inputFormat != format { audioConverter = AVAudioConverter(from: format, to: pcmFormat) }
+        guard let converter = audioConverter,
+              let output = AVAudioPCMBuffer(pcmFormat: pcmFormat, frameCapacity: AVAudioFrameCount(ceil(Double(sample.numSamples) * 48_000 / format.sampleRate)) + 128) else { return nil }
+        var supplied = false
+        var error: NSError?
+        let status = converter.convert(to: output, error: &error) { _, state in
+            if supplied { state.pointee = .noDataNow; return nil }
+            supplied = true; state.pointee = .haveData; return input
+        }
+        guard status != .error, error == nil, output.frameLength > 0 else { return nil }
+        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 48_000),
+            presentationTimeStamp: sample.presentationTimeStamp, decodeTimeStamp: .invalid)
+        var result: CMSampleBuffer?
+        var sampleSize = 2
+        guard CMSampleBufferCreate(allocator: kCFAllocatorDefault, dataBuffer: nil, dataReady: false,
+            makeDataReadyCallback: nil, refcon: nil, formatDescription: pcmFormat.formatDescription,
+            sampleCount: Int(output.frameLength), sampleTimingEntryCount: 1, sampleTimingArray: &timing,
+            sampleSizeEntryCount: 1, sampleSizeArray: &sampleSize, sampleBufferOut: &result) == noErr,
+            let result,
+            CMSampleBufferSetDataBufferFromAudioBufferList(result, blockBufferAllocator: kCFAllocatorDefault,
+                blockBufferMemoryAllocator: kCFAllocatorDefault, flags: 0, bufferList: output.audioBufferList) == noErr else { return nil }
+        CMSampleBufferSetDataReady(result)
+        return result
+    }
+
+    private func drainAudio(until endpoint: CMTime) {
+        guard let origin = timeline.origin, let audioInput else { return }
+        let deadline = DispatchTime.now() + 2
+        while let sample = pendingAudio.first, sample.presentationTimeStamp < endpoint {
+            let start = sample.presentationTimeStamp
+            guard let format = sample.formatDescription,
+                  let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
+                  asbd.mSampleRate > 0 else { pendingAudio.removeFirst(); continue }
+            let rate = asbd.mSampleRate
+            let end = start + CMTime(seconds: Double(sample.numSamples) / rate, preferredTimescale: 48_000)
+            guard end <= endpoint || audioIntake.isClosed else { break }
+            if !canAppendAudio {
+                guard audioIntake.isClosed else { break }
+                while !canAppendAudio, writer.status == .writing, DispatchTime.now() < deadline {
+                    Thread.sleep(forTimeInterval: 0.002)
+                }
+            }
+            let lower = max(origin + lastAudioEnd, start)
+            let upper = min(endpoint, end)
+            let first = max(0, Int(ceil(CMTimeGetSeconds(lower - start) * rate - 0.00001)))
+            let limit = min(sample.numSamples, Int(floor(CMTimeGetSeconds(upper - start) * rate + 0.00001)))
+            guard canAppendAudio else { return }
+            guard limit > first else { pendingAudio.removeFirst(); continue }
+            var trimmed: CMSampleBuffer?
+            let copyStatus = CMSampleBufferCopySampleBufferForRange(allocator: kCFAllocatorDefault, sampleBuffer: sample,
+                sampleRange: CFRange(location: first, length: limit - first), sampleBufferOut: &trimmed)
+            guard copyStatus == noErr,
+                let trimmed else { fail(SettingsError(message: "Could not trim recording audio.")); return }
+            let stamp = start + CMTime(seconds: Double(first) / rate, preferredTimescale: 1_000_000_000) - origin
+            appendSilence(until: stamp)
+            // Silence can itself encounter encoder backpressure. Keep the real
+            // buffer queued for retry instead of consuming it or filling over it.
+            guard canAppendAudio else { return }
+            var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: Int32(rate.rounded())),
+                presentationTimeStamp: stamp, decodeTimeStamp: .invalid)
+            var relative: CMSampleBuffer?
+            guard CMSampleBufferCreateCopyWithNewTiming(allocator: kCFAllocatorDefault, sampleBuffer: trimmed,
+                sampleTimingEntryCount: 1, sampleTimingArray: &timing, sampleBufferOut: &relative) == noErr,
+                let relative else { fail(SettingsError(message: "Could not retime recording audio.")); return }
+            if !audioInput.append(relative) { fail(writer.error ?? SettingsError(message: "Audio encoding failed.")); return }
+            pendingAudio.removeFirst()
+            lastAudioEnd = stamp + CMTime(seconds: Double(limit - first) / rate, preferredTimescale: 1_000_000_000)
+        }
+    }
+
+    /// Missing callbacks represent elapsed silence, never a compressed timeline.
+    /// Generate small PCM packets directly on the media worker without retaining
+    /// a clip-sized buffer. AAC remains one track, including an immediate Stop.
+    private func appendSilence(until endpoint: CMTime) {
+        // A safe video watermark can bisect a queued audio buffer, or the
+        // encoder can defer it. Only fill the genuine gap before that buffer;
+        // never advance lastAudioEnd through narration awaiting admission.
+        let endpoint = min(endpoint, pendingAudio.first.flatMap { sample in
+            timeline.origin.map { sample.presentationTimeStamp - $0 }
+        } ?? endpoint)
+        guard let audioInput, endpoint > lastAudioEnd else { return }
+        var asbd = AudioStreamBasicDescription(mSampleRate: 48_000, mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: 2, mFramesPerPacket: 1, mBytesPerFrame: 2, mChannelsPerFrame: 1,
+            mBitsPerChannel: 16, mReserved: 0)
+        var format: CMAudioFormatDescription?
+        guard CMAudioFormatDescriptionCreate(allocator: kCFAllocatorDefault, asbd: &asbd, layoutSize: 0,
+            layout: nil, magicCookieSize: 0, magicCookie: nil, extensions: nil, formatDescriptionOut: &format) == noErr else { return }
+        let deadline = DispatchTime.now() + 2
+        while endpoint - lastAudioEnd >= CMTime(value: 1, timescale: 48_000) {
+            guard DispatchTime.now() < deadline else { return }
+            if !canAppendAudio {
+                guard audioIntake.isClosed, writer.status == .writing, DispatchTime.now() < deadline else { return }
+                Thread.sleep(forTimeInterval: 0.002); continue
+            }
+            let count = min(4800, Int(floor((endpoint - lastAudioEnd).seconds * 48_000 + 0.00001)))
+            guard count > 0 else { return }
+            var block: CMBlockBuffer?
+            guard CMBlockBufferCreateWithMemoryBlock(allocator: kCFAllocatorDefault, memoryBlock: nil,
+                blockLength: count * 2, blockAllocator: kCFAllocatorDefault, customBlockSource: nil,
+                offsetToData: 0, dataLength: count * 2, flags: 0, blockBufferOut: &block) == noErr,
+                let block else { return }
+            CMBlockBufferFillDataBytes(with: 0, blockBuffer: block, offsetIntoDestination: 0, dataLength: count * 2)
+            var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 48_000),
+                presentationTimeStamp: lastAudioEnd, decodeTimeStamp: .invalid)
+            var size = 2
+            var sample: CMSampleBuffer?
+            guard CMSampleBufferCreateReady(allocator: kCFAllocatorDefault, dataBuffer: block, formatDescription: format,
+                sampleCount: count, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
+                sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sample) == noErr,
+                let sample, audioInput.append(sample) else { return }
+            lastAudioEnd = lastAudioEnd + CMTime(value: Int64(count), timescale: 48_000)
+        }
     }
 
     private func fail(_ error: Error) {
         guard terminalError == nil else { return }
         terminalError = error
         intake.close(at: CMClockGetTime(CMClockGetHostTimeClock()))
+        audioIntake.close(at: CMClockGetTime(CMClockGetHostTimeClock()))
         DispatchQueue.main.async { self.onFailure?(error) }
     }
 
@@ -257,6 +470,7 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
         // Close on the callback thread, then drain already admitted work before
         // marking the source error. Source loss is not a failed writer append.
         intake.close(at: CMClockGetTime(CMClockGetHostTimeClock()))
+        audioIntake.close(at: CMClockGetTime(CMClockGetHostTimeClock()))
         callbacks.async {
             self.media.async {
                 if self.terminalError == nil {
@@ -270,11 +484,22 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
     /// Main-thread entry; repeated requests share exactly one finalization task.
     @MainActor func stop(at endpoint: CMTime = CMClockGetTime(CMClockGetHostTimeClock())) async throws -> Output {
         if let stopTask { return try await stopTask.value }
+        let endpoint = min(endpoint, intake.endpoint ?? endpoint)
         stopping = true
         starting?.abandon()
         intake.close(at: endpoint)
+        audioIntake.close(at: endpoint)
         let task = Task.detached(priority: .userInitiated) { () throws -> Output in
             var stopError: Error?
+            if let source = self.audioSource {
+                let operation = VideoStreamOperation()
+                Task.detached { await source.stop(); _ = operation.complete(nil) }
+                let deadline = ProcessInfo.processInfo.systemUptime + self.startupTimeout
+                while operation.result == nil, ProcessInfo.processInfo.systemUptime < deadline {
+                    try await Task.sleep(nanoseconds: 5_000_000)
+                }
+                if operation.result == nil { stopError = SettingsError(message: "Audio source stop timed out; intake is closed.") }
+            }
             do {
                 let operation = VideoStreamOperation()
                 self.stopCapture { _ = operation.complete($0) }
@@ -289,12 +514,27 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
             // A callback admitted just before Stop must enqueue its media work
             // before the finish marker is queued on the separate media worker.
             self.callbacks.sync {}
+            // A foreign source may have admitted just before closing intake but
+            // not yet enqueued. Bound that handoff before final media work.
+            let drainDeadline = ProcessInfo.processInfo.systemUptime + 2
+            while self.audioIntake.pendingCount > 0, ProcessInfo.processInfo.systemUptime < drainDeadline {
+                try await Task.sleep(nanoseconds: 2_000_000)
+            }
             try await self.onMedia { try self.finishFrames(at: endpoint) }
-            await self.writer.finishWriting()
+            let finish = VideoStreamOperation()
+            self.writer.finishWriting { _ = finish.complete(nil) }
+            let finishDeadline = ProcessInfo.processInfo.systemUptime + 5
+            while finish.result == nil, ProcessInfo.processInfo.systemUptime < finishDeadline {
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            guard finish.result != nil else {
+                self.writer.cancelWriting()
+                throw SettingsError(message: "Recording finalization timed out.")
+            }
             guard self.writer.status == .completed else {
                 throw self.writer.error ?? SettingsError(message: "Recording could not be finalized.")
             }
-            try await Self.validateMovie(at: self.movie, width: self.canvas.width, height: self.canvas.height)
+            try await Self.validateMovie(at: self.movie, width: self.canvas.width, height: self.canvas.height, audioExpected: self.audioEnabled)
             await MainActor.run { self.hasCompletedMovie = true }
             // A finalized file remains owned here even if thumbnail or publication fails.
             let asset = AVURLAsset(url: self.movie)
@@ -306,9 +546,10 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
                 throw SettingsError(message: "Could not encode video thumbnail.")
             }
             try data.write(to: self.directory.appendingPathComponent("thumbnail.png"), options: .atomic)
-            let video = HistoryVideo(movie: self.movie.lastPathComponent, thumbnail: "thumbnail.png",
+            var video = HistoryVideo(movie: self.movie.lastPathComponent, thumbnail: "thumbnail.png",
                 duration: CMTimeGetSeconds(duration), width: self.canvas.width, height: self.canvas.height,
                 displayID: self.displayID, frame: self.frame, scale: self.scale)
+            video.audioCodec = self.audioEnabled ? "aac" : nil
             let interruption = try await self.onMedia { self.terminalError ?? stopError }
             return Output(directory: self.directory, movie: self.movie, video: video, interruption: interruption)
         }
@@ -316,9 +557,11 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
         return try await task.value
     }
 
-    func closeIntake(at endpoint: CMTime) { intake.close(at: endpoint) }
+    func closeIntake(at endpoint: CMTime) { intake.close(at: endpoint); audioIntake.close(at: endpoint) }
 
     func cancelPreparation() async {
+        closeIntake(at: CMClockGetTime(CMClockGetHostTimeClock()))
+        if let audioSource { await audioSource.stop() }
         _ = try? await onMedia {
             self.writer.cancelWriting()
             try? FileManager.default.removeItem(at: self.movie)
@@ -327,10 +570,20 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
     }
 
     private func finishFrames(at host: CMTime) throws {
+        guard audioSource == nil || audioReady else {
+            writer.cancelWriting()
+            throw terminalError ?? SettingsError(message: "The requested audio source never became ready; recording was not published.")
+        }
         guard let lastFrame, let endpoint = timeline.endpoint(host: host) else {
             writer.cancelWriting()
             throw terminalError ?? SettingsError(message: "Recording contains no playable frames.")
         }
+        // Picture padding gives an immediate Stop one playable frame, but does
+        // not extend source admission. Drop all queued post-cutoff samples before
+        // generating silence for the padded picture tail.
+        drainAudio(until: min(host, audioIntake.endpoint ?? host))
+        pendingAudio.removeAll()
+        appendSilence(until: endpoint)
         // Finalization has bounded backpressure waiting, independent of UI/main.
         let deadline = DispatchTime.now() + 5
         while !input.isReadyForMoreMediaData, writer.status == .writing, DispatchTime.now() < deadline {
@@ -342,15 +595,30 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
         }
         writer.endSession(atSourceTime: endpoint)
         input.markAsFinished()
+        audioInput?.markAsFinished()
         self.lastFrame = nil
     }
 
-    static func validateMovie(at url: URL, width: Int, height: Int) async throws {
+    static func validateMovie(at url: URL, width: Int, height: Int, audioExpected: Bool = false) async throws {
         let asset = AVURLAsset(url: url)
         let tracks = try await asset.loadTracks(withMediaType: .video)
         let audio = try await asset.loadTracks(withMediaType: .audio)
-        guard let track = tracks.first, tracks.count == 1, audio.isEmpty,
-              try await asset.load(.isPlayable) else { throw SettingsError(message: "Recording is not playable silent video.") }
+        guard let track = tracks.first, tracks.count == 1, audio.count == (audioExpected ? 1 : 0),
+              try await asset.load(.isPlayable) else { throw SettingsError(message: "Recording has unexpected tracks (video \(tracks.count), audio \(audio.count), expected \(audioExpected)) or is not playable.") }
+        if let audioTrack = audio.first {
+            let formats = try await audioTrack.load(.formatDescriptions)
+            guard formats.contains(where: { CMFormatDescriptionGetMediaSubType($0) == kAudioFormatMPEG4AAC }) else {
+                throw SettingsError(message: "Recording audio is not AAC.")
+            }
+            let reader = try AVAssetReader(asset: asset)
+            let decoded = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM])
+            guard reader.canAdd(decoded) else { throw SettingsError(message: "Recording audio is unreadable.") }
+            reader.add(decoded)
+            guard reader.startReading(), decoded.copyNextSampleBuffer() != nil else {
+                throw SettingsError(message: "Recording has no readable audio.")
+            }
+            reader.cancelReading()
+        }
         let duration = try await asset.load(.duration)
         let size = try await track.load(.naturalSize)
         let formats = try await track.load(.formatDescriptions)
@@ -377,7 +645,7 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, VideoReco
 }
 
 /// A callback may settle only once; abandoning never waits for the OS callback.
-private final class VideoStreamOperation {
+private final class VideoStreamOperation: @unchecked Sendable {
     private let lock = NSLock()
     private var abandoned = false
     private var settled: Result<Void, Error>?

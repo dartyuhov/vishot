@@ -46,6 +46,11 @@ final class VideoSession {
     private var state = VideoSessionState()
     private var recorder: VideoRecording?
     private let prepare: (VideoRectangle, URL) async throws -> VideoRecording
+    private let prepareWithMicrophone: ((VideoRectangle, URL, MicrophoneDevice?) async throws -> VideoRecording)?
+    private let microphonePreflight: MicrophonePreflight
+    var microphoneOptions: () -> (enabled: Bool, device: String) = { (false, "") }
+    var onMicrophonePrompt: ((Bool) -> Void)?
+    private(set) var isCheckingMicrophone = false
     private let resolveSelection: ((VideoSelection) throws -> VideoRectangle)?
     private let countdown: CaptureCountdown
     private let reportError: ((String, Bool) -> Void)?
@@ -85,13 +90,19 @@ final class VideoSession {
     var isCountingDown: Bool { state.phase == .countdown || state.phase == .preparing }
 
     init(sessions: CaptureSessionCoordinator, history: HistoryLibrary,
-         prepare: @escaping (VideoRectangle, URL) async throws -> VideoRecording = { try await VideoRecorder.prepare(rectangle: $0, directory: $1) },
+         prepare: ((VideoRectangle, URL) async throws -> VideoRecording)? = nil,
          resolve: ((VideoSelection) throws -> VideoRectangle)? = nil,
          countdown: CaptureCountdown = CaptureCountdown(),
-         presentsControls: Bool = true, reportError: ((String, Bool) -> Void)? = nil) {
+         presentsControls: Bool = true, reportError: ((String, Bool) -> Void)? = nil,
+         microphonePreflight: MicrophonePreflight = MicrophonePreflight(),
+         prepareWithMicrophone: ((VideoRectangle, URL, MicrophoneDevice?) async throws -> VideoRecording)? = nil) {
         self.sessions = sessions
         self.history = history
-        self.prepare = prepare
+        self.prepare = prepare ?? { try await VideoRecorder.prepare(rectangle: $0, directory: $1) }
+        self.prepareWithMicrophone = prepareWithMicrophone ?? (prepare == nil ? {
+            try await VideoRecorder.prepare(rectangle: $0, directory: $1, microphone: $2)
+        } : nil)
+        self.microphonePreflight = microphonePreflight
         self.resolveSelection = resolve
         self.countdown = countdown
         self.reportError = reportError
@@ -125,6 +136,27 @@ final class VideoSession {
                     guard let self else { return }
                     defer { self.sessions.endFileOperation() }
                     do {
+                        self.microphonePreflight.onPrompt = { [weak self] active in
+                            guard let self, self.state.accepts(token) else { return }
+                            self.onMicrophonePrompt?(active)
+                        }
+                        self.isCheckingMicrophone = true
+                        self.onCountdown?("Checking microphone… · esc cancel")
+                        var frozenMicrophone: MicrophoneDevice?
+                        while self.state.accepts(token) {
+                            let options = self.microphoneOptions()
+                            do { frozenMicrophone = try await self.microphonePreflight.resolve(enabled: options.enabled, device: options.device) }
+                            catch {
+                                guard self.state.accepts(token) else { throw error }
+                                if options != self.microphoneOptions() { continue }
+                                throw error
+                            }
+                            guard self.state.accepts(token) else { self.removeUnfinished(directory); return }
+                            let current = self.microphoneOptions()
+                            if options == current { break }
+                        }
+                        guard self.state.accepts(token) else { self.removeUnfinished(directory); return }
+                        self.isCheckingMicrophone = false
                         var rectangle = try self.resolve(selection)
                         var prepared: VideoRecording?
                         while self.state.accepts(token) {
@@ -142,7 +174,9 @@ final class VideoSession {
                             _ = self.state.advance(token, to: .preparing)
                             self.onCountdown?("Preparing recording… · esc cancel")
                             guard self.state.accepts(token) else { break }
-                            let recorder = try await self.prepare(rectangle, directory)
+                            let recorder: VideoRecording
+                            if let prepare = self.prepareWithMicrophone { recorder = try await prepare(rectangle, directory, frozenMicrophone) }
+                            else { recorder = try await self.prepare(rectangle, directory) }
                             guard self.state.accepts(token) else {
                                 await recorder.cancelPreparation()
                                 break
@@ -185,7 +219,15 @@ final class VideoSession {
                             if self.recorder?.directory != directory { self.removeUnfinished(directory) }
                             return
                         }
-                        if self.recorder != nil { self.stop(because: error) }
+                        self.isCheckingMicrophone = false
+                        if error is MicrophonePreflightError {
+                            self.removeUnfinished(directory)
+                            self.state.finish()
+                            self.sessionID = nil
+                            self.error = error.localizedDescription
+                            self.onReturnToPicker?(error.localizedDescription)
+                            self.onChange?()
+                        } else if self.recorder != nil { self.stop(because: error) }
                         else { self.removeUnfinished(directory); self.startupFailed(error, token: token) }
                     }
                 }
@@ -215,6 +257,9 @@ final class VideoSession {
 
     func cancelCountdown() {
         guard state.cancel(state.generation) else { return }
+        microphonePreflight.cancel()
+        onMicrophonePrompt?(false)
+        isCheckingMicrophone = false
         countdown.cancel()
         onCountdownFrame?(nil)
         // Let preparation settle so its writer can be canceled and its directory

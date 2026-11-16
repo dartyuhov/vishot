@@ -11,6 +11,8 @@ struct HintMark: Equatable {
 /// One transparent panel per screen. Panels are created once and reused, so showing the
 /// overlay costs only an order-front plus a layer move.
 final class OverlayPanel: NSPanel {
+    var onOptions: (() -> Void)?
+    private let optionsButton = NSButton()
     var onKeyDown: ((NSEvent) -> Void)?
     var onKeyUp: ((NSEvent) -> Void)?
     /// Points are in CoreGraphics global space.
@@ -63,6 +65,14 @@ final class OverlayPanel: NSPanel {
         view.onMouseDragged = { [weak self] in self?.onMouseDragged?($0) }
         view.onMouseUp = { [weak self] in self?.onMouseUp?($0) }
         contentView = view
+        optionsButton.title = ""
+        optionsButton.isBordered = false
+        optionsButton.setAccessibilityLabel("Capture options")
+        optionsButton.toolTip = "Capture options (o)"
+        optionsButton.target = self
+        optionsButton.action = #selector(openOptions)
+        optionsButton.isHidden = true
+        view.addSubview(optionsButton)
 
         border.frame = view.bounds
         border.fillColor = style.accent.cgColor
@@ -158,7 +168,11 @@ final class OverlayPanel: NSPanel {
     /// Three themed guidance areas, with optional status above them, on the selected display.
     func showHUD(_ content: PickerHUD.Content, status: String, visible: Bool) {
         hud.show(content, status: status, size: frame.size, visible: visible)
+        optionsButton.isHidden = !visible || hud.optionsFrame == nil
+        if let frame = hud.optionsFrame { optionsButton.frame = frame }
     }
+
+    @objc private func openOptions() { onOptions?() }
 
     func hudUnavailableReason(at point: CGPoint) -> String? {
         guard isVisible, frame.contains(point.flippedBetweenCocoaAndCG) else { return nil }
@@ -167,6 +181,10 @@ final class OverlayPanel: NSPanel {
 
     func hudContains(_ point: CGPoint) -> Bool {
         isVisible && frame.contains(point.flippedBetweenCocoaAndCG) && hud.contains(localPoint(point))
+    }
+
+    func optionsContains(_ point: CGPoint) -> Bool {
+        isVisible && frame.contains(point.flippedBetweenCocoaAndCG) && hud.optionsContains(localPoint(point))
     }
 
     /// Region mode: dims everything around `rect` and shows the cursor, both in Cocoa global space.
@@ -186,6 +204,7 @@ final class OverlayPanel: NSPanel {
 
     /// Replaces the picker's border, hints, region and HUD with the editor. The toolbar shows on one screen.
     func hidePicker() {
+        optionsButton.isHidden = true
         countdown.hide()
         border.isHidden = true
         labelBackground.isHidden = true

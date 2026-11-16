@@ -5,6 +5,76 @@ import VishotConfiguration
 @testable import Vishot
 
 final class PickerHUDTests: XCTestCase {
+    func testNativeOptionsControlDismissesExistingPopupWithoutLosingTarget() throws {
+        _ = NSApplication.shared
+        let fixture = ControllerFixture()
+        defer { fixture.remove() }
+        let controller = fixture.controller
+        let before = try XCTUnwrap(controller.selection)
+        let panel = OverlayPanel(screen: try XCTUnwrap(NSScreen.main), theme: ThemeCatalog.pixel)
+        defer { panel.close() }
+        panel.prepare(theme: ThemeCatalog.pixel)
+        panel.showHUD(controller.pickerHUDContent, status: "", visible: true)
+        panel.onOptions = { controller.openCaptureOptions() }
+        let button = try XCTUnwrap(panel.contentView?.subviews.compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == "Capture options" })
+        button.performClick(nil)
+        XCTAssertTrue(controller.captureOptions.isOpen)
+        button.performClick(nil)
+        XCTAssertFalse(controller.captureOptions.isOpen, "Native HUD invocation dismisses rather than replaces an open popup")
+        controller.mouseUp(at: before.anchor)
+        XCTAssertFalse(controller.pickerHUDContent.isCountingDown)
+        assertTarget(controller.selection, matches: before)
+    }
+
+    func testKeyboardOptionsDismissalImmediatelyRestoresPointerNavigation() throws {
+        for code in [kVK_Escape, kVK_ANSI_O] {
+            let fixture = ControllerFixture()
+            defer { fixture.remove() }
+            let controller = fixture.controller
+            controller.handle(try key(kVK_ANSI_V))
+            controller.handle(try key(kVK_ANSI_V)) // Anchor a region at the cursor.
+            controller.handle(try key(kVK_ANSI_O))
+            controller.handle(try key(code))
+            XCTAssertFalse(controller.captureOptions.isOpen)
+            controller.mouseMoved(to: CGPoint(x: 500, y: 450))
+            XCTAssertEqual(controller.selection?.frame.maxX, 500)
+            XCTAssertEqual(controller.selection?.frame.maxY, 450)
+        }
+    }
+    func testPhysicalOptionsInputPreservesTargetAndOutsideGestureIsConsumed() throws {
+        let fixture = ControllerFixture()
+        defer { fixture.remove() }
+        let controller = fixture.controller
+        controller.microphoneDevices = { [.init(id: "usb", name: "USB")] }
+        let before = try XCTUnwrap(controller.selection)
+        controller.handle(try key(kVK_ANSI_R))
+        controller.handle(try key(kVK_ANSI_O, characters: "я"))
+        XCTAssertTrue(controller.captureOptions.isOpen)
+        controller.handle(try key(kVK_Space))
+        XCTAssertTrue(controller.microphoneEnabled)
+        controller.handle(try key(kVK_ANSI_J))
+        controller.handle(try key(kVK_Return))
+        XCTAssertTrue(controller.captureOptions.isChoosing)
+        controller.handle(try key(kVK_Escape))
+        XCTAssertTrue(controller.captureOptions.isOpen)
+        controller.mouseDown(at: before.anchor)
+        controller.mouseUp(at: before.anchor)
+        XCTAssertFalse(controller.captureOptions.isOpen)
+        XCTAssertFalse(controller.pickerHUDContent.isCountingDown)
+        assertTarget(controller.selection, matches: before)
+        controller.handle(try key(kVK_ANSI_O))
+        controller.handle(try key(kVK_ANSI_O))
+        XCTAssertFalse(controller.captureOptions.isOpen)
+        controller.handle(try key(kVK_ANSI_S))
+        controller.handle(try key(kVK_ANSI_O))
+        XCTAssertTrue(controller.captureOptions.visibleRows.isEmpty, "Screenshot must not expose audio preferences")
+        controller.captureOptions.close()
+        controller.handle(try key(kVK_ANSI_F))
+        controller.handle(try key(kVK_ANSI_O))
+        XCTAssertFalse(controller.captureOptions.isOpen)
+        XCTAssertEqual(controller.pickerHUDContent.picker, .element)
+    }
     func testCaptureTypeSwitchKeepsHUDWidthAndPickerColumnsStable() throws {
         for visual in VisualStyle.allCases {
             let theme = ThemeCatalog.resolve(style: visual, colorScheme: .dark)

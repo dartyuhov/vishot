@@ -52,6 +52,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var captureWindowTitle = ""
     private let sessions: CaptureSessionCoordinator
     var video: VideoSession?
+    let captureOptions = CaptureOptions()
+    var microphoneEnabled = false
+    var microphoneDevice = ""
+    var microphoneDevices: () -> [MicrophoneDevice] = MicrophoneDevice.available
+    var onMicrophoneOptions: ((Bool, String) -> Void)?
+    private var microphonePrompt = false
+    private var consumeOptionsGesture = false
     private var videoType = false
     private var videoCountdown = false
     private var videoRectangle: CGRect?
@@ -119,6 +126,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
         self.displayCatalog = displayCatalog
         self.hintCatalog = hintCatalog
         super.init()
+        captureOptions.onClose = { [weak self] in
+            guard let self, self.isShowing else { return }
+            self.render()
+        }
+        captureOptions.onPointerDismiss = { [weak self] in self?.consumeOptionsGesture = true }
         guard presentsPanels else { return }
         accessibility.onChange = { [weak self] allowed in
             guard let self else { return }
@@ -291,6 +303,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             historyLibrary.finishSession()
         }
         isShowing = false
+        captureOptions.close()
         sessionTheme = nil
         sessionOutput = nil
         sourcePreparation.cancel()
@@ -325,6 +338,61 @@ final class OverlayController: NSObject, NSWindowDelegate {
         videoCountdown = false
         videoRectangle = nil
         status = message
+        render()
+    }
+
+    func microphonePromptChanged(_ active: Bool) {
+        microphonePrompt = active
+        if active {
+            // Permission dialogs must be visible above our screen-saver panels.
+            panels.forEach { $0.orderOut(nil) }
+        } else if isShowing {
+            panels.forEach { $0.orderFrontRegardless() }
+            panels.first?.makeKey()
+        }
+    }
+
+    func openCaptureOptions() {
+        guard isShowing, !videoCountdown, !isCapturing, mode != .hint else { return }
+        if captureOptions.isOpen { captureOptions.outsideClick(); return }
+        region?.suspendCursor()
+        let invoker = panels.first(where: \.isKeyWindow) ?? panels.first(where: {
+            $0.frame.contains((selection?.anchor ?? .zero).flippedBetweenCocoaAndCG)
+        })
+        captureOptions.open(rows: optionRows(), restoreFocus: { [weak self, weak invoker] in
+            guard self?.isShowing == true else { return }
+            invoker?.makeKey()
+        })
+        if presentsPanels, let theme = sessionTheme {
+            captureOptions.present(near: (selection?.anchor ?? .zero).flippedBetweenCocoaAndCG, theme: theme)
+        }
+    }
+
+    private func optionRows() -> [CaptureOptions.Row] {
+        guard videoType else { return [] }
+        let devices = microphoneDevices()
+        let value = microphoneDevice.isEmpty ? "System default" : devices.first(where: { $0.id == microphoneDevice })?.name ?? "Unavailable: \(microphoneDevice)"
+        var choices = [CaptureOptions.Row(id: "", title: "System default", activate: { [weak self] in self?.setMicrophone(device: "") })]
+        choices += devices.map { device in
+            CaptureOptions.Row(id: device.id, title: device.name, activate: { [weak self] in self?.setMicrophone(device: device.id) })
+        }
+        if !microphoneDevice.isEmpty, !devices.contains(where: { $0.id == microphoneDevice }) {
+            choices.append(.init(id: microphoneDevice, title: "Unavailable: \(microphoneDevice)", enabled: false))
+        }
+        return [
+            .init(id: "microphone", title: "Microphone", value: microphoneEnabled ? "On" : "Off", activate: { [weak self] in
+                guard let self else { return }
+                self.microphoneEnabled.toggle()
+                self.setMicrophone(device: self.microphoneDevice)
+            }),
+            .init(id: "microphone-device", title: "Microphone device", value: value, choices: choices)
+        ]
+    }
+
+    private func setMicrophone(device: String) {
+        microphoneDevice = device
+        onMicrophoneOptions?(microphoneEnabled, device)
+        captureOptions.update(rows: optionRows())
         render()
     }
 
@@ -699,7 +767,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let statusLine = isCapturing ? "capturing…" : videoCountdown ? status : hoverStatus ?? (
             !status.isEmpty ? status
             : warmUpTimer != nil ? "loading page…"
-            : region?.status(captureType: videoType ? .video : .screenshot) ?? ""
+            : region?.status(captureType: videoType ? .video : .screenshot) ?? (videoType ? (microphoneEnabled ? "Microphone" : "Audio off") : "")
         )
         let regionRect = region == nil ? nil : (videoRectangle ?? target?.frame)?.flippedBetweenCocoaAndCG
         let regionCursor = videoCountdown ? nil : region?.cursor.flippedBetweenCocoaAndCG
@@ -734,6 +802,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     /// Key codes, not characters, so the keys keep working with non-Latin keyboard layouts.
     func handle(_ event: NSEvent) {
+        if captureOptions.handle(Int(event.keyCode), backwards: event.modifierFlags.contains(.shift)) { return }
         if videoCountdown {
             if Int(event.keyCode) == kVK_Escape { video?.cancelCountdown() }
             return
@@ -757,6 +826,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             render()
             return
         }
+        if keyCode == kVK_ANSI_O { if !event.isARepeat { openCaptureOptions() }; return }
         var hudContent = pickerHUDContent
         switch hudContent.handleCaptureTypeKey(keyCode) {
         case .unavailable:
@@ -812,7 +882,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if isShowing { render() }
     }
 
-    private func mouseMoved(to point: CGPoint) {
+    func mouseMoved(to point: CGPoint) {
+        guard !captureOptions.isOpen, !consumeOptionsGesture else { return }
         guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             // The cursor stays on the image while the pointer is over the toolbar.
@@ -841,6 +912,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func mouseDown(at point: CGPoint) {
+        consumeOptionsGesture = false
+        if captureOptions.isOpen {
+            if !captureOptions.contains(cgPoint: point) { captureOptions.outsideClick(); consumeOptionsGesture = true }
+            return
+        }
         guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             if let panel = panels.first(where: { $0.toolbarContains(point) }) {
@@ -856,6 +932,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             render()
             return
         }
+        if panels.contains(where: { $0.optionsContains(point) }) { openCaptureOptions(); consumeOptionsGesture = true; return }
         guard !panels.contains(where: { $0.hudContains(point) }) else { return }
         if let region {
             region.mouseDown(at: point)
@@ -867,6 +944,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func mouseDragged(to point: CGPoint) {
+        guard !captureOptions.isOpen, !consumeOptionsGesture else { return }
         guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             editor.mouseDragged(to: point)
@@ -879,6 +957,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func mouseUp(at point: CGPoint) {
+        if consumeOptionsGesture { consumeOptionsGesture = false; return }
+        guard !captureOptions.isOpen else { return }
         guard isShowing, !isCapturing, !videoCountdown else { return }
         if let editor {
             editor.mouseUp(at: point)
@@ -893,6 +973,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func keyUp(_ event: NSEvent) {
+        guard !captureOptions.isOpen else { return }
         if let editor { editor.keyUp(event) } else { region?.keyUp(event) }
     }
 
@@ -909,6 +990,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             let panel = OverlayPanel(screen: screen, theme: preparedTheme)
             panel.delegate = self
             panel.onKeyDown = { [weak self] in self?.handle($0) }
+            panel.onOptions = { [weak self] in self?.openCaptureOptions() }
             panel.onKeyUp = { [weak self] in self?.keyUp($0) }
             panel.onMouseMoved = { [weak self] in self?.mouseMoved(to: $0) }
             panel.onMouseDown = { [weak self] in self?.mouseDown(at: $0) }
@@ -927,7 +1009,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             guard sessions.acceptsCallbacks(session) else { return }
             if isCapturing, editor != nil { return }
             if browser != nil, editor == nil { return }
-            if isShowing, !isPresentingSavePanel, !raiser.isSwitchingApps, !panels.contains(where: \.isKeyWindow) {
+            if isShowing, !microphonePrompt, !captureOptions.isKeyWindow, !isPresentingSavePanel, !raiser.isSwitchingApps, !panels.contains(where: \.isKeyWindow) {
                 if videoCountdown { video?.cancelCountdown() }
                 hide()
             }

@@ -11,6 +11,84 @@ import ScreenCaptureKit
         frame: CGRect(x: 0, y: 0, width: 100, height: 100), scale: 1),
         rect: CGRect(x: 0, y: 0, width: 100, height: 100))
 
+    func testMicrophonePermissionPrecedesCountdownAndCancellationFencesDelayedGrant() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let clock = CountdownTestClock()
+        var status = MicrophoneAuthorization.notDetermined
+        var reply: ((Bool) -> Void)?
+        let permission = MicrophonePermission(readStatus: { status }, requestAccess: { reply = $0 })
+        let preflight = MicrophonePreflight(permission: permission,
+            devices: { XCTAssertTrue(Thread.isMainThread); return [.init(id: "frozen", name: "Input")] }, defaultDevice: { "frozen" })
+        let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
+            prepare: { _, directory in try Recorder(directory: directory) },
+            resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
+            presentsControls: false, reportError: { _, _ in }, microphonePreflight: preflight)
+        video.microphoneOptions = { (true, "") }
+        var returned = ""
+        video.onReturnToPicker = { returned = $0 }
+        try begin(video, fixture)
+        try await eventually { reply != nil }
+        XCTAssertFalse(clock.hasJobs)
+        XCTAssertTrue(video.isCheckingMicrophone)
+        video.cancelCountdown()
+        status = .authorized
+        reply?(true)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertFalse(clock.hasJobs)
+        XCTAssertFalse(video.isActive)
+        XCTAssertTrue(fixture.sessions.isSessionActive)
+        status = .denied
+        try begin(video, fixture)
+        try await eventually { !video.isActive }
+        XCTAssertTrue(returned.contains("denied"))
+        XCTAssertTrue(fixture.sessions.isSessionActive)
+        XCTAssertFalse(clock.hasJobs)
+    }
+
+    func testPreflightRechecksChangedOptionsThenFreezesResolvedUIDThroughPreparation() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let clock = CountdownTestClock()
+        var status = MicrophoneAuthorization.notDetermined
+        var reply: ((Bool) -> Void)?
+        var options = (enabled: true, device: "")
+        var defaultID = "one"
+        let permission = MicrophonePermission(readStatus: { status }, requestAccess: { reply = $0 })
+        let preflight = MicrophonePreflight(permission: permission,
+            devices: { [.init(id: "one", name: "Input"), .init(id: "two", name: "Input")] }, defaultDevice: { defaultID })
+        var prepared: MicrophoneDevice?
+        var starts = 0
+        let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
+            resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
+            presentsControls: false, reportError: { _, _ in }, microphonePreflight: preflight,
+            prepareWithMicrophone: { _, directory, device in
+                prepared = device; starts += 1
+                return try Recorder(directory: directory)
+            })
+        video.microphoneOptions = { options }
+        try begin(video, fixture)
+        try await eventually { reply != nil }
+        options = (false, "")
+        status = .denied
+        reply?(false)
+        try await eventually { clock.hasJobs || !video.isActive }
+        XCTAssertTrue(clock.hasJobs, "A changed source-off choice must supersede the delayed denial")
+        video.cancelCountdown()
+        clock.advance(to: 3) // Discard canceled ticks before observing the new countdown.
+        status = .authorized
+        options = (true, "")
+        try begin(video, fixture)
+        try await eventually { clock.hasJobs }
+        defaultID = "two"
+        options = (true, "two")
+        clock.advance(to: 6)
+        try await eventually { starts == 1 }
+        XCTAssertEqual(prepared?.id, "one", "Default identity freezes before countdown, not at preparation")
+        video.stop()
+        try await eventually { !fixture.sessions.isSessionActive }
+    }
+
     func testChangedBoundsBeforeAndAfterPreparationRestartFullCountdownAndFreezeLatestRectangle() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -32,7 +110,7 @@ import ScreenCaptureKit
             }, resolve: { _ in current }, countdown: CaptureCountdown(schedule: clock.schedule),
             presentsControls: false, reportError: { _, _ in })
         video.onRectangle = { outlines.append($0) }
-        video.onCountdownFrame = { if let frame = $0 { numbers.append(frame.number) } }
+        video.onCountdownFrame = { XCTAssertTrue(Thread.isMainThread); if let frame = $0 { numbers.append(frame.number) } }
         try begin(video, fixture)
         try await eventually { numbers == [3] }
         current = moved

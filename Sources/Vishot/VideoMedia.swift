@@ -143,6 +143,8 @@ final class VideoIntake {
     private var pending = 0
     private var cutoff: CMTime?
     var isClosed: Bool { lock.lock(); defer { lock.unlock() }; return cutoff != nil }
+    var endpoint: CMTime? { lock.lock(); defer { lock.unlock() }; return cutoff }
+    var pendingCount: Int { lock.lock(); defer { lock.unlock() }; return pending }
     func admit(_ time: CMTime) -> Bool {
         lock.lock(); defer { lock.unlock() }
         guard cutoff == nil, pending < 3, time.isNumeric else { return false }
