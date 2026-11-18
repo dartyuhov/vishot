@@ -12,7 +12,12 @@ struct HintMark: Equatable {
 /// overlay costs only an order-front plus a layer move.
 final class OverlayPanel: NSPanel {
     var onOptions: (() -> Void)?
+    var onAudioToggle: ((PickerHUD.AudioControl) -> Void)?
+    /// Returns true when the popup consumed an outside pointer gesture.
+    var onDismissOptions: (() -> Bool)?
+    private var consumesOptionsPointer = false
     private let optionsButton = NSButton()
+    private let audioButtons = PickerHUD.AudioControl.allCases.map { AudioHUDButton(control: $0) }
     var onKeyDown: ((NSEvent) -> Void)?
     var onKeyUp: ((NSEvent) -> Void)?
     /// Points are in CoreGraphics global space.
@@ -73,6 +78,14 @@ final class OverlayPanel: NSPanel {
         optionsButton.action = #selector(openOptions)
         optionsButton.isHidden = true
         view.addSubview(optionsButton)
+        for button in audioButtons {
+            button.wantsLayer = true
+            button.layer?.zPosition = 1
+            button.target = self
+            button.action = #selector(toggleAudio(_:))
+            button.isHidden = true
+            view.addSubview(button)
+        }
 
         border.frame = view.bounds
         border.fillColor = style.accent.cgColor
@@ -120,6 +133,27 @@ final class OverlayPanel: NSPanel {
     }
 
     override var canBecomeKey: Bool { true }
+
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown:
+            // The popup is a separate window: any down delivered here is outside.
+            // Intercept before NSWindow changes focus or NSButton starts tracking.
+            consumesOptionsPointer = onDismissOptions?() == true
+            if consumesOptionsPointer { return }
+        case .leftMouseDragged:
+            if consumesOptionsPointer { return }
+        case .leftMouseUp:
+            if consumesOptionsPointer {
+                consumesOptionsPointer = false
+                // Clear the owner's consumed-gesture state without native tracking.
+                onMouseUp?(convertPoint(toScreen: event.locationInWindow).flippedBetweenCocoaAndCG)
+                return
+            }
+        default: break
+        }
+        super.sendEvent(event)
+    }
 
     override func keyDown(with event: NSEvent) {
         onKeyDown?(event)
@@ -170,9 +204,16 @@ final class OverlayPanel: NSPanel {
         hud.show(content, status: status, size: frame.size, visible: visible)
         optionsButton.isHidden = !visible || hud.optionsFrame == nil
         if let frame = hud.optionsFrame { optionsButton.frame = frame }
+        for button in audioButtons {
+            let frame = hud.audioFrame(button.control)
+            button.isHidden = !visible || frame == nil
+            if let frame { button.frame = frame }
+            button.configure(theme: theme, enabled: button.control == .microphone ? content.microphoneEnabled : content.systemAudioEnabled)
+        }
     }
 
     @objc private func openOptions() { onOptions?() }
+    @objc private func toggleAudio(_ sender: AudioHUDButton) { onAudioToggle?(sender.control) }
 
     func hudUnavailableReason(at point: CGPoint) -> String? {
         guard isVisible, frame.contains(point.flippedBetweenCocoaAndCG) else { return nil }
@@ -205,6 +246,7 @@ final class OverlayPanel: NSPanel {
     /// Replaces the picker's border, hints, region and HUD with the editor. The toolbar shows on one screen.
     func hidePicker() {
         optionsButton.isHidden = true
+        audioButtons.forEach { $0.isHidden = true }
         countdown.hide()
         border.isHidden = true
         labelBackground.isHidden = true

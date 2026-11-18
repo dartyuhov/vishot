@@ -308,7 +308,7 @@ import ScreenCaptureKit
         defaultID = "two"
         options = (true, "two")
         clock.advance(to: 6)
-        try await eventually { starts == 1 }
+        try await eventually { starts == 1 && video.canStop }
         XCTAssertEqual(prepared?.id, "one", "Default identity freezes before countdown, not at preparation")
         video.stop()
         try await eventually { !fixture.sessions.isSessionActive }

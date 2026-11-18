@@ -360,7 +360,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func openCaptureOptions() {
-        guard isShowing, !videoCountdown, !isCapturing, mode != .hint else { return }
+        guard isShowing, videoType, !videoCountdown, !isCapturing, mode != .hint else { return }
         if captureOptions.isOpen { captureOptions.outsideClick(); return }
         region?.suspendCursor()
         let invoker = panels.first(where: \.isKeyWindow) ?? panels.first(where: {
@@ -379,28 +379,22 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard videoType else { return [] }
         let devices = microphoneDevices()
         let value = microphoneDevice.isEmpty ? "System default" : devices.first(where: { $0.id == microphoneDevice })?.name ?? "Unavailable: \(microphoneDevice)"
-        var choices = [CaptureOptions.Row(id: "", title: "System default", activate: { [weak self] in self?.setMicrophone(device: "") })]
+        var choices = [CaptureOptions.Row(id: "", title: "System default", value: microphoneDevice.isEmpty ? "Selected" : "", activate: { [weak self] in self?.setMicrophone(device: "") })]
         choices += devices.map { device in
-            CaptureOptions.Row(id: device.id, title: device.name, activate: { [weak self] in self?.setMicrophone(device: device.id) })
+            CaptureOptions.Row(id: device.id, title: device.name, value: microphoneDevice == device.id ? "Selected" : "", activate: { [weak self] in self?.setMicrophone(device: device.id) })
         }
         if !microphoneDevice.isEmpty, !devices.contains(where: { $0.id == microphoneDevice }) {
             choices.append(.init(id: microphoneDevice, title: "Unavailable: \(microphoneDevice)", enabled: false))
         }
         var rows: [CaptureOptions.Row] = [
-            .init(id: "microphone", title: "Microphone", value: microphoneEnabled ? "On" : "Off", activate: { [weak self] in
-                guard let self else { return }
-                self.microphoneEnabled.toggle()
-                self.setMicrophone(device: self.microphoneDevice)
-            }),
-            .init(id: "microphone-device", title: "Microphone device", value: value, choices: choices)
+            .init(id: "microphone", title: "Microphone", value: microphoneEnabled ? "On" : "Off", isOn: microphoneEnabled, activate: { [weak self] in
+                self?.toggleAudio(.microphone)
+            })
         ]
-        rows.append(.init(id: "system-audio", title: "System audio", value: systemAudioEnabled ? "On" : "Off", activate: { [weak self] in
-            guard let self else { return }
-            self.systemAudioEnabled.toggle()
-            self.onSystemAudioOptions?(self.systemAudioEnabled)
-            self.captureOptions.update(rows: self.optionRows())
-            self.render()
+        rows.append(.init(id: "system-audio", title: "System audio", value: systemAudioEnabled ? "On" : "Off", isOn: systemAudioEnabled, activate: { [weak self] in
+            self?.toggleAudio(.system)
         }))
+        rows.append(.init(id: "microphone-device", title: "Microphone device", value: value, choices: choices))
         rows.append(.init(id: "system-audio-help", title: "Captures audio from all apps and notifications, regardless of the picture target (excluding Vishot).", enabled: false))
         return rows
     }
@@ -408,8 +402,22 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func setMicrophone(device: String) {
         microphoneDevice = device
         onMicrophoneOptions?(microphoneEnabled, device)
-        captureOptions.update(rows: optionRows())
+        if captureOptions.isOpen { captureOptions.update(rows: optionRows()) }
         render()
+    }
+
+    func toggleAudio(_ control: PickerHUD.AudioControl) {
+        guard isShowing, videoType, !videoCountdown, !isCapturing, mode != .hint else { return }
+        switch control {
+        case .microphone:
+            microphoneEnabled.toggle()
+            setMicrophone(device: microphoneDevice)
+        case .system:
+            systemAudioEnabled.toggle()
+            onSystemAudioOptions?(systemAudioEnabled)
+            if captureOptions.isOpen { captureOptions.update(rows: optionRows()) }
+            render()
+        }
     }
 
     func dismissForVideo() {
@@ -783,7 +791,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let statusLine = isCapturing ? "capturing…" : videoCountdown ? status : hoverStatus ?? (
             !status.isEmpty ? status
             : warmUpTimer != nil ? "loading page…"
-            : region.map { $0.status(captureType: videoType ? .video : .screenshot) + (videoType ? " · " + audioSummary : "") } ?? (videoType ? audioSummary : "")
+            : region.map { $0.status(captureType: videoType ? .video : .screenshot) } ?? ""
         )
         let regionRect = region == nil ? nil : (videoRectangle ?? target?.frame)?.flippedBetweenCocoaAndCG
         let regionCursor = videoCountdown ? nil : region?.cursor.flippedBetweenCocoaAndCG
@@ -813,7 +821,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     var pickerHUDContent: PickerHUD.Content {
         PickerHUD.Content(captureType: videoType ? .video : .screenshot, picker: mode,
             accessibilityAvailable: accessibilityAvailable, historyAvailable: historyLibrary.retention != .off,
-            regionState: region?.hudState ?? .empty, isCountingDown: videoCountdown)
+            regionState: region?.hudState ?? .empty, isCountingDown: videoCountdown,
+            microphoneEnabled: microphoneEnabled, systemAudioEnabled: systemAudioEnabled)
     }
 
     /// Key codes, not characters, so the keys keep working with non-Latin keyboard layouts.
@@ -1007,6 +1016,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
             panel.delegate = self
             panel.onKeyDown = { [weak self] in self?.handle($0) }
             panel.onOptions = { [weak self] in self?.openCaptureOptions() }
+            panel.onDismissOptions = { [weak self] in self?.captureOptions.outsideClick() ?? false }
+            panel.onAudioToggle = { [weak self] in self?.toggleAudio($0) }
             panel.onKeyUp = { [weak self] in self?.keyUp($0) }
             panel.onMouseMoved = { [weak self] in self?.mouseMoved(to: $0) }
             panel.onMouseDown = { [weak self] in self?.mouseDown(at: $0) }

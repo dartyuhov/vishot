@@ -4,6 +4,46 @@ import Carbon.HIToolbox
 @testable import Vishot
 
 final class MicrophoneOptionsTests: XCTestCase {
+    func testAdjacentTogglesShareRowWithDeviceChooserBelow() {
+        let popup = CaptureOptions()
+        popup.open(rows: [
+            .init(id: "mic", title: "Microphone", isOn: false),
+            .init(id: "system", title: "System audio", isOn: true),
+            .init(id: "device", title: "Microphone device", choices: [.init(id: "default", title: "System default")])])
+        let frames = popup.rowFrames(width: 396)
+        XCTAssertEqual(frames[0].minY, frames[1].minY)
+        XCTAssertFalse(frames[0].intersects(frames[1]))
+        XCTAssertEqual(frames[2].minY, frames[0].maxY)
+        XCTAssertEqual(frames[2].width, 396)
+        popup.handle(kVK_ANSI_J)
+        popup.handle(kVK_ANSI_J)
+        popup.handle(kVK_Return)
+        XCTAssertTrue(popup.isChoosing)
+        popup.handle(kVK_Escape)
+        XCTAssertEqual(popup.selected, 2)
+        let compact = popup.rowFrames(width: 260)
+        XCTAssertEqual(compact[1].minY, compact[0].maxY)
+    }
+
+    func testPopupFitsContentAndNestedChooserWithinSmallDisplay() {
+        let popup = CaptureOptions()
+        popup.open(rows: [
+            .init(id: "toggle", title: "Microphone", value: "Off"),
+            .init(id: "device", title: "Microphone device", choices: (0..<20).map {
+                .init(id: "\($0)", title: "Input \($0)")
+            })])
+        let bounds = CGSize(width: 420, height: 600)
+        let outer = popup.fittingSize(in: bounds)
+        XCTAssertLessThan(outer.height, 200, "Two rows should not leave a fixed-height empty popup")
+        popup.activate(1)
+        XCTAssertEqual(popup.fittingSize(in: bounds).height, 600, "Long choosers scroll within the display")
+        popup.handle(kVK_Escape)
+        XCTAssertEqual(popup.fittingSize(in: bounds), outer)
+        let compact = popup.fittingSize(in: CGSize(width: 280, height: 160))
+        XCTAssertLessThanOrEqual(compact.width, 280)
+        XCTAssertLessThanOrEqual(compact.height, 160)
+    }
+
     func testSystemAudioIsOptionalAndCombinedSourcesAreSupported() throws {
         var options = VideoAudioOptions()
         XCTAssertEqual(options.summary(), "Audio off")
