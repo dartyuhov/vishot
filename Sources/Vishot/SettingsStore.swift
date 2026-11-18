@@ -7,6 +7,7 @@ final class SettingsStore {
     let url: URL
     private(set) var active = AppSettings.defaults
     private(set) var configured: AppSettings?
+    private(set) var lastGood = AppSettings.defaults
     private(set) var error: String?
     private(set) var isSessionActive = false
     private(set) var activeColorScheme = ColorScheme.light
@@ -108,6 +109,7 @@ final class SettingsStore {
         lastReadError = nil
         do {
             configured = try AppSettings.parse(source)
+            lastGood = configured!
             error = nil
             if !isSessionActive { applyConfigured() }
         } catch {
@@ -160,12 +162,15 @@ final class SettingsStore {
     func update(appearance: AppearancePreference? = nil, style: VisualStyle? = nil,
                 watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
                 historyRetention: HistoryRetention? = nil, historyShortcut: CaptureShortcut? = nil,
-                clearHistoryShortcut: Bool = false) {
+                clearHistoryShortcut: Bool = false, microphoneEnabled: Bool? = nil,
+                microphoneDevice: String? = nil, systemAudioEnabled: Bool? = nil) {
         do {
             let target = url.resolvingSymlinksInPath()
             let original = try String(contentsOf: target, encoding: .utf8)
             let edited = try AppSettings.edit(original, appearance: appearance, style: style, watermark: watermark, shortcut: shortcut,
-                historyRetention: historyRetention, historyShortcut: historyShortcut, clearHistoryShortcut: clearHistoryShortcut)
+                historyRetention: historyRetention, historyShortcut: historyShortcut, clearHistoryShortcut: clearHistoryShortcut,
+                microphoneEnabled: microphoneEnabled, microphoneDevice: microphoneDevice,
+                systemAudioEnabled: systemAudioEnabled)
             guard url.resolvingSymlinksInPath() == target,
                   try String(contentsOf: target, encoding: .utf8) == original else {
                 throw SettingsError(message: "Configuration changed while saving. Try again.")

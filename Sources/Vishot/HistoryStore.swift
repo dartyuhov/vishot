@@ -138,12 +138,13 @@ final class HistoryStore {
         let changedNanos: Int
         let width: Int
         let height: Int
+        let audio: String?
     }
     private var movieValidation: [URL: (MovieFingerprint, Result<Void, Error>)] = [:]
-    private let validateMovie: (URL, Int, Int) async throws -> Void
+    private let validateMovie: ((URL, Int, Int) async throws -> Void)?
 
     init(url: URL = defaultURL,
-         validateMovie: @escaping (URL, Int, Int) async throws -> Void = { try await VideoRecorder.validateMovie(at: $0, width: $1, height: $2) }) {
+         validateMovie: ((URL, Int, Int) async throws -> Void)? = nil) {
         self.url = url
         self.validateMovie = validateMovie
     }
@@ -542,7 +543,7 @@ final class HistoryStore {
         let fingerprint = MovieFingerprint(device: info.st_dev, inode: info.st_ino, size: info.st_size,
             modifiedSeconds: info.st_mtimespec.tv_sec, modifiedNanos: info.st_mtimespec.tv_nsec,
             changedSeconds: info.st_ctimespec.tv_sec, changedNanos: info.st_ctimespec.tv_nsec,
-            width: video.width, height: video.height)
+            width: video.width, height: video.height, audio: video.audioCodec)
         if let cached = movieValidation[movie], cached.0 == fingerprint {
             try cached.1.get()
             return movie
@@ -554,7 +555,8 @@ final class HistoryStore {
             do {
                 // Validation already decodes a frame. A second thumbnail decode
                 // provides no additional availability evidence.
-                try await validate(movie, video.width, video.height)
+                if let validate { try await validate(movie, video.width, video.height) }
+                else { try await VideoRecorder.validateMovie(at: movie, width: video.width, height: video.height, audioExpected: video.audioCodec != nil) }
                 result = .success(())
             } catch { result = .failure(error) }
             done.signal()

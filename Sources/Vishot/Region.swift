@@ -166,6 +166,8 @@ final class RegionSelector {
         keyboard.keyUp(event)
     }
 
+    func suspendCursor() { keyboard.stop() }
+
     // MARK: - Mouse
 
     /// Points are in CoreGraphics global space.
