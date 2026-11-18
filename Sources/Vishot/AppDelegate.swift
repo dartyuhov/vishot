@@ -104,6 +104,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let error = settings?.error { overlay?.videoReturnToPicker(error) }
         }
         video.microphoneOptions = { [weak overlay] in (overlay?.microphoneEnabled ?? false, overlay?.microphoneDevice ?? "") }
+        video.audioOptions = { [weak overlay] in overlay?.audioOptions ?? VideoAudioOptions() }
+        overlay.onSystemAudioOptions = { [weak settings, weak overlay] enabled in
+            settings?.update(systemAudioEnabled: enabled)
+            if let error = settings?.error { overlay?.videoReturnToPicker(error) }
+        }
         video.onMicrophonePrompt = { [weak overlay] in overlay?.microphonePromptChanged($0) }
         sessions.onSessionChange = { [weak settings] in settings?.setSessionActive($0) }
         settings.onChange = { [weak self] in self?.settingsChanged() }
@@ -240,6 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let audio = settings.lastGood
         overlay?.microphoneEnabled = audio.microphoneEnabled
         overlay?.microphoneDevice = audio.microphoneDevice
+        overlay?.systemAudioEnabled = audio.systemAudioEnabled
         overlay?.prepareTheme(style: settings.active.style, colorScheme: settings.activeColorScheme)
         overlay?.historyLibrary.retention = settings.active.historyRetention
         settingsWindow?.refresh()

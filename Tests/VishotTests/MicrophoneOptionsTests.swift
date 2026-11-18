@@ -4,6 +4,41 @@ import Carbon.HIToolbox
 @testable import Vishot
 
 final class MicrophoneOptionsTests: XCTestCase {
+    func testSystemAudioIsOptionalAndCombinedSourcesAreSupported() throws {
+        var options = VideoAudioOptions()
+        XCTAssertEqual(options.summary(), "Audio off")
+        options.systemEnabled = true
+        try options.validate()
+        XCTAssertEqual(options.summary(), "All system audio")
+        options.microphoneEnabled = true
+        XCTAssertEqual(options.summary(), "System + Mic")
+        try options.validate()
+        XCTAssertTrue(options.systemEnabled)
+        XCTAssertTrue(options.microphoneEnabled)
+    }
+    func testSystemTogglePersistsIndependentlyAndInvalidValueKeepsLastGood() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try "# keep audio notes\n[video]\nmicrophone = true # narration\n[custom]\nvalue = 42\n".write(to: url, atomically: true, encoding: .utf8)
+        let store = SettingsStore(url: url, register: { _ in NSObject() })
+        store.start(watching: false)
+        store.update(systemAudioEnabled: true)
+        XCTAssertNil(store.error)
+        XCTAssertTrue(store.active.systemAudioEnabled)
+        XCTAssertTrue(store.active.microphoneEnabled)
+        XCTAssertTrue(try AppSettings.read(url: url).systemAudioEnabled)
+        let source = try String(contentsOf: url)
+        XCTAssertTrue(source.contains("# narration"))
+        XCTAssertTrue(source.contains("# keep audio notes"))
+        store.update(systemAudioEnabled: false)
+        XCTAssertFalse(try AppSettings.read(url: url).systemAudioEnabled)
+        XCTAssertTrue(store.active.microphoneEnabled)
+        try "[video]\nsystem_audio = 'anything'".write(to: url, atomically: true, encoding: .utf8)
+        store.reload()
+        XCTAssertNotNil(store.error)
+        XCTAssertTrue(store.active.microphoneEnabled)
+        XCTAssertFalse(store.active.systemAudioEnabled)
+    }
     func testSharedPopupRestoresInjectedInvokerOnlyOnOuterDismissalOnce() {
         let popup = CaptureOptions()
         var restored: [String] = []

@@ -11,6 +11,231 @@ import ScreenCaptureKit
         frame: CGRect(x: 0, y: 0, width: 100, height: 100), scale: 1),
         rect: CGRect(x: 0, y: 0, width: 100, height: 100))
 
+    func testScreenGrantPrecedesCountdownAndRecoveryRetainsSelection() async throws {
+        for options in [VideoAudioOptions(), VideoAudioOptions(microphoneEnabled: true), VideoAudioOptions(systemEnabled: true), VideoAudioOptions(microphoneEnabled: true, systemEnabled: true)] {
+            let fixture = try Fixture()
+            defer { fixture.remove() }
+            let clock = CountdownTestClock()
+            var granted = false
+            var prepared: [RecordingAudioSnapshot] = []
+            var rectangles: [VideoRectangle] = []
+            var dismissed = 0
+            let permission = MicrophonePermission(readStatus: {
+                XCTAssertTrue(granted, "Screen denial must be resolved before microphone work")
+                return .authorized
+            }, requestAccess: { _ in XCTFail("No prompt") })
+            let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
+                resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
+                presentsControls: false, reportError: { _, _ in XCTFail("Retain the picker for preflight recovery") },
+                screenCaptureGranted: { granted },
+                microphonePreflight: MicrophonePreflight(permission: permission,
+                    devices: { [.init(id: "input", name: "Input")] }, defaultDevice: { "input" }),
+                prepareWithAudio: { rectangle, directory, snapshot in
+                    rectangles.append(rectangle); prepared.append(snapshot)
+                    return try Recorder(directory: directory)
+                })
+            video.audioOptions = { options }
+            video.onDismissPicker = { dismissed += 1 }
+            var returned = ""
+            video.onReturnToPicker = { returned = $0 }
+            fixture.sessions.capture()
+            let target = CaptureTarget(kind: .region(displayID: 1, rect: rectangle.rect),
+                frame: rectangle.rect, anchor: .zero, label: "Region")
+            let selection = try VideoSelection(target: target, windowFrame: nil)
+            video.begin(selection: selection, session: fixture.id, label: "Region")
+            try await eventually { !video.isActive || clock.hasJobs }
+            XCTAssertFalse(clock.hasJobs)
+            XCTAssertFalse(video.isActive)
+            XCTAssertTrue(returned.contains("Screen Recording"))
+            XCTAssertTrue(returned.contains("Settings"))
+            XCTAssertEqual(dismissed, 0)
+            XCTAssertTrue(fixture.sessions.acceptsCallbacks(fixture.id))
+            XCTAssertTrue(prepared.isEmpty)
+            video.cancelCountdown() // Also release a failed implementation's countdown.
+            granted = true
+            video.begin(selection: selection, session: fixture.id, label: "Region")
+            try await eventually { clock.hasJobs }
+            clock.advance(to: 3)
+            try await eventually { prepared.count == 1 }
+            XCTAssertEqual(rectangles, [rectangle])
+            XCTAssertEqual(prepared[0].systemEnabled, options.systemEnabled)
+            XCTAssertEqual(prepared[0].microphone?.id, options.microphoneEnabled ? "input" : nil)
+            video.stop()
+            try await eventually { !fixture.sessions.isSessionActive }
+        }
+    }
+
+    func testScreenRevocationDuringMicrophonePromptRechecksAndCancellationFencesReply() async throws {
+        for cancel in [false, true] {
+            let fixture = try Fixture()
+            defer { fixture.remove() }
+            let clock = CountdownTestClock()
+            var granted = true
+            var status = MicrophoneAuthorization.notDetermined
+            var reply: ((Bool) -> Void)?
+            let permission = MicrophonePermission(readStatus: { status }, requestAccess: { reply = $0 })
+            let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
+                prepare: { _, directory in XCTFail("Revoked/canceled preflight must not prepare"); return try Recorder(directory: directory) },
+                resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
+                presentsControls: false, reportError: { _, _ in XCTFail("Keep picker") },
+                screenCaptureGranted: { granted },
+                microphonePreflight: MicrophonePreflight(permission: permission,
+                    devices: { [.init(id: "one", name: "Input")] }, defaultDevice: { "one" }))
+            video.microphoneOptions = { (true, "") }
+            var returns: [String] = []
+            video.onReturnToPicker = { returns.append($0) }
+            try begin(video, fixture)
+            try await eventually { reply != nil }
+            granted = false
+            if cancel { video.cancelCountdown() }
+            status = .authorized
+            reply?(true)
+            try await eventually { !video.isActive }
+            // Queue behind the delayed permission delivery and startup continuation.
+            try await Task.sleep(nanoseconds: 20_000_000)
+            XCTAssertFalse(clock.hasJobs)
+            XCTAssertEqual(returns.count, 1)
+            XCTAssertEqual(returns.first?.contains("Screen Recording"), !cancel)
+            XCTAssertTrue(fixture.sessions.acceptsCallbacks(fixture.id))
+        }
+    }
+
+    func testScreenRevocationDuringCountdownOrPreparationNeverDismissesPicker() async throws {
+        for duringPreparation in [false, true] {
+            let fixture = try Fixture()
+            defer { fixture.remove() }
+            let clock = CountdownTestClock()
+            var granted = true
+            var preparation: CheckedContinuation<VideoRecording, Error>?
+            var recorder: Recorder?
+            let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
+                prepare: { _, directory in
+                    XCTAssertTrue(duringPreparation)
+                    recorder = try Recorder(directory: directory)
+                    return try await withCheckedThrowingContinuation { preparation = $0 }
+                }, resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
+                presentsControls: false, reportError: { _, _ in XCTFail("Keep picker") },
+                screenCaptureGranted: { granted })
+            video.onDismissPicker = { XCTFail("Revoked grant must retain picker") }
+            var returned = ""
+            video.onReturnToPicker = { returned = $0 }
+            try begin(video, fixture)
+            try await eventually { clock.hasJobs }
+            if !duringPreparation { granted = false }
+            clock.advance(to: 3)
+            if duringPreparation {
+                try await eventually { preparation != nil }
+                granted = false
+                preparation?.resume(returning: try XCTUnwrap(recorder))
+            }
+            try await eventually { !video.isActive }
+            XCTAssertTrue(returned.contains("Screen Recording"))
+            XCTAssertTrue(fixture.sessions.acceptsCallbacks(fixture.id))
+            XCTAssertEqual(recorder?.starts ?? 0, 0)
+            XCTAssertEqual(recorder?.cancellations ?? 0, duringPreparation ? 1 : 0)
+        }
+    }
+
+    func testEveryPictureTargetPreparesWholeSystemAudioWithoutMicrophoneAccess() async throws {
+        let kinds: [CaptureTarget.Kind] = [.window(42), .element(windowID: 42, rect: rectangle.rect),
+            .display(1), .region(displayID: 1, rect: rectangle.rect)]
+        for kind in kinds {
+            let fixture = try Fixture()
+            defer { fixture.remove() }
+            var prepared: [RecordingAudioSnapshot] = []
+            var pictures: [VideoRectangle] = []
+            let permission = MicrophonePermission(readStatus: {
+                XCTFail("System-only recording must not access the microphone"); return .denied
+            }, requestAccess: { _ in XCTFail("No microphone prompt") })
+            let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
+                resolve: { selection in
+                    try selection.resolve(displays: [self.rectangle.display], windowFrame: self.rectangle.rect)
+                }, countdown: immediateCountdown(), presentsControls: false,
+                reportError: { message, _ in XCTFail(message) }, screenCaptureGranted: { true },
+                microphonePreflight: MicrophonePreflight(permission: permission),
+                prepareWithAudio: { picture, directory, audio in
+                    pictures.append(picture); prepared.append(audio)
+                    return try Recorder(directory: directory)
+                })
+            video.audioOptions = { VideoAudioOptions(systemEnabled: true) }
+            fixture.sessions.capture()
+            let target = CaptureTarget(kind: kind, frame: rectangle.rect, anchor: .zero, label: "Picture")
+            video.begin(selection: try VideoSelection(target: target, windowFrame: rectangle.rect),
+                session: fixture.id, label: "Picture")
+            try await eventually { video.canStop && prepared.count == 1 }
+            XCTAssertEqual(prepared, [RecordingAudioSnapshot(microphone: nil, systemEnabled: true)])
+            XCTAssertEqual(pictures, [rectangle], "Audio must not change the picture rectangle")
+            video.stop()
+            try await eventually { !fixture.sessions.isSessionActive }
+        }
+    }
+
+    func testCombinedAudioSnapshotFreezesBothSourcesAndMicrophoneIdentity() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let clock = CountdownTestClock()
+        let permission = MicrophonePermission(readStatus: { .authorized }, requestAccess: { _ in XCTFail("No prompt") })
+        var options = VideoAudioOptions(microphoneEnabled: true, systemEnabled: true)
+        var prepared: [RecordingAudioSnapshot] = []
+        let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
+            resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
+            presentsControls: false, reportError: { _, _ in },
+            screenCaptureGranted: { true },
+            microphonePreflight: MicrophonePreflight(permission: permission,
+                devices: { [.init(id: "frozen-input", name: "Input")] }, defaultDevice: { "frozen-input" }),
+            prepareWithAudio: { _, directory, snapshot in
+                prepared.append(snapshot)
+                return try Recorder(directory: directory)
+            })
+        video.audioOptions = { options }
+        fixture.sessions.capture()
+        let target = CaptureTarget(kind: .window(42), frame: rectangle.rect, anchor: .zero, label: "App")
+        let selection = try VideoSelection(target: target, windowFrame: nil)
+        video.begin(selection: selection, session: fixture.id, label: "App")
+        try await eventually { clock.hasJobs }
+        options.systemEnabled = false
+        options.microphoneEnabled = false
+        options.microphoneDevice = "different-input"
+        clock.advance(to: 3)
+        try await eventually { prepared.count == 1 }
+        XCTAssertEqual(prepared[0], RecordingAudioSnapshot(microphone: .init(id: "frozen-input", name: "Input"), systemEnabled: true))
+        video.stop()
+        try await eventually { !fixture.sessions.isSessionActive }
+    }
+
+    func testDelayedMicrophoneAuthorizationRevalidatesSystemChoiceBeforeCountdown() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let clock = CountdownTestClock()
+        var status = MicrophoneAuthorization.notDetermined
+        var reply: ((Bool) -> Void)?
+        let permission = MicrophonePermission(readStatus: { status }, requestAccess: { reply = $0 })
+        var options = VideoAudioOptions(microphoneEnabled: true)
+        var prepared: [RecordingAudioSnapshot] = []
+        let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
+            resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
+            presentsControls: false, reportError: { _, _ in },
+            screenCaptureGranted: { true },
+            microphonePreflight: MicrophonePreflight(permission: permission, devices: { [.init(id: "one", name: "Input")] }, defaultDevice: { "one" }),
+            prepareWithAudio: { _, directory, snapshot in
+                prepared.append(snapshot)
+                return try Recorder(directory: directory)
+            })
+        video.audioOptions = { options }
+        try begin(video, fixture)
+        try await eventually { reply != nil }
+        options.systemEnabled = true
+        status = .authorized
+        reply?(true)
+        try await eventually { clock.hasJobs }
+        clock.advance(to: 3)
+        try await eventually { prepared.count == 1 }
+        XCTAssertEqual(prepared[0], RecordingAudioSnapshot(microphone: .init(id: "one", name: "Input"), systemEnabled: true))
+        XCTAssertTrue(fixture.sessions.isSessionActive)
+        video.stop()
+        try await eventually { !fixture.sessions.isSessionActive }
+    }
+
     func testMicrophonePermissionPrecedesCountdownAndCancellationFencesDelayedGrant() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -23,7 +248,7 @@ import ScreenCaptureKit
         let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
             prepare: { _, directory in try Recorder(directory: directory) },
             resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
-            presentsControls: false, reportError: { _, _ in }, microphonePreflight: preflight)
+            presentsControls: false, reportError: { _, _ in }, screenCaptureGranted: { true }, microphonePreflight: preflight)
         video.microphoneOptions = { (true, "") }
         var returned = ""
         video.onReturnToPicker = { returned = $0 }
@@ -61,7 +286,7 @@ import ScreenCaptureKit
         var starts = 0
         let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
             resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
-            presentsControls: false, reportError: { _, _ in }, microphonePreflight: preflight,
+            presentsControls: false, reportError: { _, _ in }, screenCaptureGranted: { true }, microphonePreflight: preflight,
             prepareWithMicrophone: { _, directory, device in
                 prepared = device; starts += 1
                 return try Recorder(directory: directory)
@@ -108,7 +333,7 @@ import ScreenCaptureKit
                 if recorders.count == 1 { current = scaled }
                 return recorder
             }, resolve: { _ in current }, countdown: CaptureCountdown(schedule: clock.schedule),
-            presentsControls: false, reportError: { _, _ in })
+            presentsControls: false, reportError: { _, _ in }, screenCaptureGranted: { true })
         video.onRectangle = { outlines.append($0) }
         video.onCountdownFrame = { XCTAssertTrue(Thread.isMainThread); if let frame = $0 { numbers.append(frame.number) } }
         try begin(video, fixture)
@@ -146,7 +371,7 @@ import ScreenCaptureKit
                 directory = url
                 return try await withCheckedThrowingContinuation { preparation = $0 }
             }, resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
-            presentsControls: false, reportError: { _, _ in })
+            presentsControls: false, reportError: { _, _ in }, screenCaptureGranted: { true })
         video.onCountdownFrame = { if let frame = $0 { numbers.append(frame.number) } }
         video.onReturnToPicker = { _ in returns += 1 }
         try begin(video, fixture)
@@ -181,7 +406,7 @@ import ScreenCaptureKit
         let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
             prepare: { _, directory in preparations += 1; return try Recorder(directory: directory) },
             resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
-            presentsControls: false, reportError: { _, _ in })
+            presentsControls: false, reportError: { _, _ in }, screenCaptureGranted: { true })
         video.onCountdownFrame = { number = $0?.number }
         video.onReturnToPicker = { _ in returns += 1 }
         video.onCountdown = { if $0.contains("Preparing") { video.cancelCountdown() } }
@@ -211,7 +436,7 @@ import ScreenCaptureKit
                 directory = url
                 return try await withCheckedThrowingContinuation { preparation = $0 }
             }, resolve: { _ in self.rectangle }, countdown: CaptureCountdown(schedule: clock.schedule),
-            presentsControls: false, reportError: { _, _ in })
+            presentsControls: false, reportError: { _, _ in }, screenCaptureGranted: { true })
         video.onCountdownFrame = { if let frame = $0 { numbers.append(frame.number) } }
         video.onCountdown = { feedback.append($0) }
         video.onDismissPicker = { dismissed = true }
@@ -290,7 +515,7 @@ import ScreenCaptureKit
         var reports = 0
         let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
             resolve: { _ in throw SettingsError(message: "Target disappeared") },
-            countdown: immediateCountdown(), presentsControls: false, reportError: { _, _ in reports += 1 })
+            countdown: immediateCountdown(), presentsControls: false, reportError: { _, _ in reports += 1 }, screenCaptureGranted: { true })
         video.onDismissPicker = { fixture.sessions.dismissPresentation(fixture.id) }
         try begin(video, fixture)
         try await eventually { !fixture.sessions.isSessionActive }
@@ -440,14 +665,18 @@ import ScreenCaptureKit
         XCTAssertTrue(fixture.sessions.requestQuit())
     }
 
-    func testPermissionDenialOffersRecoveryReleasesSessionAndDoesNotStart() async throws {
+    func testPermissionDenialDuringPreparationRetainsPickerAndOffersRecovery() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
         var permissionAction = false
         let video = makeSession(fixture, prepare: { _ in throw VideoPermissionError() })
+        var returned = ""
+        video.onReturnToPicker = { returned = $0 }
         video.onPermissionSettings = { permissionAction = true }
         try begin(video, fixture)
-        try await eventually { !fixture.sessions.isSessionActive }
+        try await eventually { !video.isActive }
+        XCTAssertTrue(fixture.sessions.acceptsCallbacks(fixture.id))
+        XCTAssertTrue(returned.contains("Screen Recording"))
         XCTAssertNotNil(video.error)
         XCTAssertNil(video.completedUnpublishedMovie)
         video.openPermissionRecovery()
@@ -582,7 +811,7 @@ import ScreenCaptureKit
                              report: @escaping (String) -> Void = { _ in }) -> VideoSession {
         let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
             prepare: { _, directory in try await prepare(directory) }, resolve: { _ in self.rectangle },
-            countdown: immediateCountdown(), presentsControls: false, reportError: { message, _ in report(message) })
+            countdown: immediateCountdown(), presentsControls: false, reportError: { message, _ in report(message) }, screenCaptureGranted: { true })
         video.onDismissPicker = { fixture.sessions.dismissPresentation(fixture.id) }
         return video
     }

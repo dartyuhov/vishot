@@ -73,15 +73,6 @@ final class MicrophonePreflight {
     }
 }
 
-/// Delivery timestamps must be in CMClockGetHostTimeClock's domain, not arrival
-/// time. Sources own clock conversion and lifecycle; the recorder owns admission.
-/// Later SC audio and process-tap adapters use this same capture-independent seam.
-protocol RecordingAudioSource: AnyObject {
-    var id: String { get }
-    func start(deliver: @escaping (CMSampleBuffer) -> Void, failed: @escaping (Error) -> Void) async throws
-    func stop() async
-}
-
 final class MicrophoneCapture: NSObject, RecordingAudioSource, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
     let id: String
     private let queue = DispatchQueue(label: "dev.vishot.microphone", qos: .userInitiated)

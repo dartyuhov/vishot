@@ -57,6 +57,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
     var microphoneDevice = ""
     var microphoneDevices: () -> [MicrophoneDevice] = MicrophoneDevice.available
     var onMicrophoneOptions: ((Bool, String) -> Void)?
+    var systemAudioEnabled = false
+    var onSystemAudioOptions: ((Bool) -> Void)?
+    var audioOptions: VideoAudioOptions {
+        VideoAudioOptions(microphoneEnabled: microphoneEnabled, microphoneDevice: microphoneDevice,
+            systemEnabled: systemAudioEnabled)
+    }
+    var audioSummary: String { audioOptions.summary() }
     private var microphonePrompt = false
     private var consumeOptionsGesture = false
     private var videoType = false
@@ -379,7 +386,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if !microphoneDevice.isEmpty, !devices.contains(where: { $0.id == microphoneDevice }) {
             choices.append(.init(id: microphoneDevice, title: "Unavailable: \(microphoneDevice)", enabled: false))
         }
-        return [
+        var rows: [CaptureOptions.Row] = [
             .init(id: "microphone", title: "Microphone", value: microphoneEnabled ? "On" : "Off", activate: { [weak self] in
                 guard let self else { return }
                 self.microphoneEnabled.toggle()
@@ -387,6 +394,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
             }),
             .init(id: "microphone-device", title: "Microphone device", value: value, choices: choices)
         ]
+        rows.append(.init(id: "system-audio", title: "System audio", value: systemAudioEnabled ? "On" : "Off", activate: { [weak self] in
+            guard let self else { return }
+            self.systemAudioEnabled.toggle()
+            self.onSystemAudioOptions?(self.systemAudioEnabled)
+            self.captureOptions.update(rows: self.optionRows())
+            self.render()
+        }))
+        rows.append(.init(id: "system-audio-help", title: "Captures audio from all apps and notifications, regardless of the picture target (excluding Vishot).", enabled: false))
+        return rows
     }
 
     private func setMicrophone(device: String) {
@@ -767,7 +783,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let statusLine = isCapturing ? "capturing…" : videoCountdown ? status : hoverStatus ?? (
             !status.isEmpty ? status
             : warmUpTimer != nil ? "loading page…"
-            : region?.status(captureType: videoType ? .video : .screenshot) ?? (videoType ? (microphoneEnabled ? "Microphone" : "Audio off") : "")
+            : region.map { $0.status(captureType: videoType ? .video : .screenshot) + (videoType ? " · " + audioSummary : "") } ?? (videoType ? audioSummary : "")
         )
         let regionRect = region == nil ? nil : (videoRectangle ?? target?.frame)?.flippedBetweenCocoaAndCG
         let regionCursor = videoCountdown ? nil : region?.cursor.flippedBetweenCocoaAndCG

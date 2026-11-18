@@ -120,6 +120,9 @@ struct VideoTimeline {
         // A bounded 1ms early allowance never accumulates into a faster cadence.
         let interval = CMTime(value: 1, timescale: 30)
         let tolerance = CMTime(value: 1, timescale: 1000)
+        // A late sample can satisfy the old deadline and leave the next one
+        // only a 60Hz update away. Never spend that deadline debt as a burst.
+        if let last, host - last + tolerance < interval { return nil }
         if let nextFrame {
             guard host + tolerance >= nextFrame else { return nil }
             // Rebase after a gap; idle time cannot bank catch-up frames.

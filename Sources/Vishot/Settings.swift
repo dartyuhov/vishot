@@ -9,7 +9,7 @@ extension AppSettings {
                      style: VisualStyle? = nil, watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
                      historyRetention: HistoryRetention? = nil, historyShortcut: CaptureShortcut? = nil,
                      clearHistoryShortcut: Bool = false, microphoneEnabled: Bool? = nil,
-                     microphoneDevice: String? = nil) throws -> String {
+                     microphoneDevice: String? = nil, systemAudioEnabled: Bool? = nil) throws -> String {
         let current = try parse(source)
         var expected = current
         if let appearance { expected.appearance = appearance }
@@ -21,6 +21,7 @@ extension AppSettings {
         if clearHistoryShortcut { expected.historyShortcut = nil }
         if let microphoneEnabled { expected.microphoneEnabled = microphoneEnabled }
         if let microphoneDevice { expected.microphoneDevice = microphoneDevice }
+        if let systemAudioEnabled { expected.systemAudioEnabled = systemAudioEnabled }
         var result = source
         let hasLegacyTheme = try TOMLTable(string: source)["theme"] != nil
         let migrate = (appearance != nil || style != nil) && hasLegacyTheme
@@ -33,6 +34,7 @@ extension AppSettings {
             result.removeSubrange(assignment.content)
         }
         let updates: [(String, String, Bool)] = [
+            ("video.system_audio", expected.systemAudioEnabled ? "true" : "false", expected.systemAudioEnabled != current.systemAudioEnabled),
             ("video.microphone", expected.microphoneEnabled ? "true" : "false", expected.microphoneEnabled != current.microphoneEnabled),
             ("video.microphone_device", "\"" + expected.microphoneDevice.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"", expected.microphoneDevice != current.microphoneDevice),
             ("appearance", "\"\(expected.appearance.rawValue)\"", migrate || (appearance != nil && expected.appearance != current.appearance)),
@@ -105,6 +107,7 @@ extension AppSettings {
             if let video = table["video"]?.table {
                 video.remove(at: "microphone")
                 video.remove(at: "microphone_device")
+                video.remove(at: "system_audio")
                 if video.count == 0 { table.remove(at: "video") }
             }
             if let shortcutTable = table["shortcut"]?.table {

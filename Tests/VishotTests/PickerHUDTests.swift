@@ -5,6 +5,37 @@ import VishotConfiguration
 @testable import Vishot
 
 final class PickerHUDTests: XCTestCase {
+    func testSystemPopupCapturesWholeMacAcrossTargetsAndNeverDropsMic() throws {
+        let fixture = ControllerFixture()
+        defer { fixture.remove() }
+        let controller = fixture.controller
+        controller.microphoneDevices = { [] }
+        controller.handle(try key(kVK_ANSI_R))
+        controller.openCaptureOptions()
+        let popup = controller.captureOptions
+        popup.activate(try XCTUnwrap(popup.visibleRows.firstIndex { $0.id == "system-audio" }))
+        XCTAssertTrue(controller.systemAudioEnabled)
+        XCTAssertEqual(controller.audioSummary, "All system audio")
+        XCTAssertEqual(try XCTUnwrap(popup.visibleRows.first { $0.id == "system-audio" }).title, "System audio")
+        let explanation = "Captures audio from all apps and notifications, regardless of the picture target (excluding Vishot)."
+        XCTAssertTrue(popup.visibleRows.contains { $0.title == explanation })
+        XCTAssertEqual(popup.visibleRows.filter { !$0.choices.isEmpty }.count, 1, "Only the microphone device needs a chooser")
+        popup.activate(0)
+        XCTAssertTrue(controller.microphoneEnabled)
+        XCTAssertTrue(controller.systemAudioEnabled)
+        XCTAssertEqual(controller.audioSummary, "System + Mic")
+        XCTAssertFalse(popup.visibleRows.contains { $0.id == "mix-unavailable" || $0.title.localizedCaseInsensitiveContains("combined audio unavailable") })
+        popup.close()
+        controller.handle(try key(kVK_ANSI_G, flags: .shift))
+        XCTAssertEqual(controller.audioSummary, "System + Mic")
+        controller.openCaptureOptions()
+        XCTAssertTrue(popup.visibleRows.contains { $0.title == explanation })
+        popup.close()
+        controller.handle(try key(kVK_ANSI_V))
+        XCTAssertEqual(controller.audioSummary, "System + Mic")
+        controller.openCaptureOptions()
+        XCTAssertTrue(popup.visibleRows.contains { $0.title == explanation })
+    }
     func testNativeOptionsControlDismissesExistingPopupWithoutLosingTarget() throws {
         _ = NSApplication.shared
         let fixture = ControllerFixture()
@@ -179,7 +210,7 @@ final class PickerHUDTests: XCTestCase {
             let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
                 prepare: { _, _ in try await withCheckedThrowingContinuation { pending = $0 } },
                 resolve: { selection in try selection.resolve(displays: [VideoDisplay(id: 1, frame: fixture.display.frame, scale: 1)], windowFrame: nil) },
-                countdown: CaptureCountdown(schedule: clock.schedule), presentsControls: false, reportError: { _, _ in })
+                countdown: CaptureCountdown(schedule: clock.schedule), presentsControls: false, reportError: { _, _ in }, screenCaptureGranted: { true })
             controller.video = video
             // Same callback wiring as AppDelegate; keep the actual VideoSession.
             video.onCountdown = { [weak controller] in controller?.videoCountdownStatus($0) }

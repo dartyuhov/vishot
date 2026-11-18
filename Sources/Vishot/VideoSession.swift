@@ -45,10 +45,11 @@ final class VideoSession {
     private let history: HistoryLibrary
     private var state = VideoSessionState()
     private var recorder: VideoRecording?
-    private let prepare: (VideoRectangle, URL) async throws -> VideoRecording
-    private let prepareWithMicrophone: ((VideoRectangle, URL, MicrophoneDevice?) async throws -> VideoRecording)?
+    private let prepareWithAudio: (VideoRectangle, URL, RecordingAudioSnapshot) async throws -> VideoRecording
     private let microphonePreflight: MicrophonePreflight
+    private let screenCaptureGranted: () -> Bool
     var microphoneOptions: () -> (enabled: Bool, device: String) = { (false, "") }
+    var audioOptions: (() -> VideoAudioOptions)?
     var onMicrophonePrompt: ((Bool) -> Void)?
     private(set) var isCheckingMicrophone = false
     private let resolveSelection: ((VideoSelection) throws -> VideoRectangle)?
@@ -94,15 +95,32 @@ final class VideoSession {
          resolve: ((VideoSelection) throws -> VideoRectangle)? = nil,
          countdown: CaptureCountdown = CaptureCountdown(),
          presentsControls: Bool = true, reportError: ((String, Bool) -> Void)? = nil,
+         screenCaptureGranted: @escaping () -> Bool = { CGPreflightScreenCaptureAccess() },
          microphonePreflight: MicrophonePreflight = MicrophonePreflight(),
-         prepareWithMicrophone: ((VideoRectangle, URL, MicrophoneDevice?) async throws -> VideoRecording)? = nil) {
+         prepareWithMicrophone: ((VideoRectangle, URL, MicrophoneDevice?) async throws -> VideoRecording)? = nil,
+         prepareWithAudio: ((VideoRectangle, URL, RecordingAudioSnapshot) async throws -> VideoRecording)? = nil) {
         self.sessions = sessions
+        self.screenCaptureGranted = screenCaptureGranted
         self.history = history
-        self.prepare = prepare ?? { try await VideoRecorder.prepare(rectangle: $0, directory: $1) }
-        self.prepareWithMicrophone = prepareWithMicrophone ?? (prepare == nil ? {
-            try await VideoRecorder.prepare(rectangle: $0, directory: $1, microphone: $2)
-        } : nil)
         self.microphonePreflight = microphonePreflight
+        // Adapt legacy callers once; every session prepares the same frozen
+        // snapshot, and an older adapter can never silently drop a new source.
+        self.prepareWithAudio = prepareWithAudio ?? { rectangle, directory, audio in
+            if prepare != nil || prepareWithMicrophone != nil {
+                guard !audio.systemEnabled else {
+                    throw RecordingAudioOptionsError(message: "The requested system audio adapter is unavailable. Turn System audio off in Options.")
+                }
+                if let prepareWithMicrophone {
+                    return try await prepareWithMicrophone(rectangle, directory, audio.microphone)
+                }
+                if let prepare {
+                    guard audio.microphone == nil else { throw RecordingAudioOptionsError(message: "The requested microphone adapter is unavailable.") }
+                    return try await prepare(rectangle, directory)
+                }
+            }
+            return try await VideoRecorder.prepare(rectangle: rectangle, directory: directory,
+                microphone: audio.microphone, allSystemAudio: audio.systemEnabled)
+        }
         self.resolveSelection = resolve
         self.countdown = countdown
         self.reportError = reportError
@@ -141,25 +159,35 @@ final class VideoSession {
                             self.onMicrophonePrompt?(active)
                         }
                         self.isCheckingMicrophone = true
-                        self.onCountdown?("Checking microphone… · esc cancel")
+                        self.onCountdown?("Checking audio… · esc cancel")
                         var frozenMicrophone: MicrophoneDevice?
+                        var frozenAudio = RecordingAudioSnapshot(microphone: nil, systemEnabled: false)
                         while self.state.accepts(token) {
-                            let options = self.microphoneOptions()
-                            do { frozenMicrophone = try await self.microphonePreflight.resolve(enabled: options.enabled, device: options.device) }
+                            guard self.screenCaptureGranted() else { throw VideoPermissionError() }
+                            let options = self.currentAudioOptions()
+                            do {
+                                try options.validate()
+                                frozenMicrophone = try await self.microphonePreflight.resolve(enabled: options.microphoneEnabled, device: options.microphoneDevice)
+                            }
                             catch {
                                 guard self.state.accepts(token) else { throw error }
-                                if options != self.microphoneOptions() { continue }
+                                if options != self.currentAudioOptions() { continue }
                                 throw error
                             }
                             guard self.state.accepts(token) else { self.removeUnfinished(directory); return }
-                            let current = self.microphoneOptions()
-                            if options == current { break }
+                            guard self.screenCaptureGranted() else { throw VideoPermissionError() }
+                            if options == self.currentAudioOptions() {
+                                frozenAudio = RecordingAudioSnapshot(microphone: frozenMicrophone,
+                                    systemEnabled: options.systemEnabled)
+                                break
+                            }
                         }
                         guard self.state.accepts(token) else { self.removeUnfinished(directory); return }
                         self.isCheckingMicrophone = false
                         var rectangle = try self.resolve(selection)
                         var prepared: VideoRecording?
                         while self.state.accepts(token) {
+                            guard self.screenCaptureGranted() else { throw VideoPermissionError() }
                             _ = self.state.advance(token, to: .countdown)
                             self.onRectangle?(rectangle.rect)
                             self.onCountdown?("")
@@ -169,14 +197,13 @@ final class VideoSession {
                                 self.onCountdownFrame?(frame)
                             }
                             guard outcome == .completed, self.state.accepts(token) else { break }
+                            guard self.screenCaptureGranted() else { throw VideoPermissionError() }
                             let validated = try self.resolve(selection)
                             if validated != rectangle { rectangle = validated; continue }
                             _ = self.state.advance(token, to: .preparing)
                             self.onCountdown?("Preparing recording… · esc cancel")
                             guard self.state.accepts(token) else { break }
-                            let recorder: VideoRecording
-                            if let prepare = self.prepareWithMicrophone { recorder = try await prepare(rectangle, directory, frozenMicrophone) }
-                            else { recorder = try await self.prepare(rectangle, directory) }
+                            let recorder = try await self.prepareWithAudio(rectangle, directory, frozenAudio)
                             guard self.state.accepts(token) else {
                                 await recorder.cancelPreparation()
                                 break
@@ -184,7 +211,10 @@ final class VideoSession {
                             // Preparation can be slow. Resolve again, then freeze before
                             // dismissal; no window identity is consulted after this point.
                             let current: VideoRectangle
-                            do { current = try self.resolve(selection) }
+                            do {
+                                guard self.screenCaptureGranted() else { throw VideoPermissionError() }
+                                current = try self.resolve(selection)
+                            }
                             catch { await recorder.cancelPreparation(); throw error }
                             guard current == rectangle else {
                                 await recorder.cancelPreparation()
@@ -220,7 +250,7 @@ final class VideoSession {
                             return
                         }
                         self.isCheckingMicrophone = false
-                        if error is MicrophonePreflightError {
+                        if self.recorder == nil && (error is VideoPermissionError || error is MicrophonePreflightError || error is RecordingAudioOptionsError) {
                             self.removeUnfinished(directory)
                             self.state.finish()
                             self.sessionID = nil
@@ -233,6 +263,12 @@ final class VideoSession {
                 }
             }
         }
+    }
+
+    private func currentAudioOptions() -> VideoAudioOptions {
+        if let audioOptions { return audioOptions() }
+        let microphone = microphoneOptions()
+        return VideoAudioOptions(microphoneEnabled: microphone.enabled, microphoneDevice: microphone.device)
     }
 
     /// Startup-only desktop adapters. Preserve NSScreen ordering for intersection

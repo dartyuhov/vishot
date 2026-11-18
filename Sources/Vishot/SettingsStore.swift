@@ -163,13 +163,14 @@ final class SettingsStore {
                 watermark: Bool? = nil, shortcut: CaptureShortcut? = nil,
                 historyRetention: HistoryRetention? = nil, historyShortcut: CaptureShortcut? = nil,
                 clearHistoryShortcut: Bool = false, microphoneEnabled: Bool? = nil,
-                microphoneDevice: String? = nil) {
+                microphoneDevice: String? = nil, systemAudioEnabled: Bool? = nil) {
         do {
             let target = url.resolvingSymlinksInPath()
             let original = try String(contentsOf: target, encoding: .utf8)
             let edited = try AppSettings.edit(original, appearance: appearance, style: style, watermark: watermark, shortcut: shortcut,
                 historyRetention: historyRetention, historyShortcut: historyShortcut, clearHistoryShortcut: clearHistoryShortcut,
-                microphoneEnabled: microphoneEnabled, microphoneDevice: microphoneDevice)
+                microphoneEnabled: microphoneEnabled, microphoneDevice: microphoneDevice,
+                systemAudioEnabled: systemAudioEnabled)
             guard url.resolvingSymlinksInPath() == target,
                   try String(contentsOf: target, encoding: .utf8) == original else {
                 throw SettingsError(message: "Configuration changed while saving. Try again.")
