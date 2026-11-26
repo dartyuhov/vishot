@@ -6,6 +6,10 @@ final class PickerHUD {
     enum CaptureType: CaseIterable { case screenshot, video }
     enum Picker: String, CaseIterable { case window = "Window", element = "Element", hint = "Hint", screen = "Screen", region = "Region" }
     enum RegionState: CaseIterable { case empty, drawing, ready }
+    enum AudioControl: Int, CaseIterable {
+        case microphone, system
+        var title: String { self == .microphone ? "Microphone" : "System audio" }
+    }
     struct Choice: Equatable {
         let picker: Picker
         let key: HUDKey
@@ -21,6 +25,8 @@ final class PickerHUD {
         var historyAvailable = true
         var regionState: RegionState = .empty
         var isCountingDown = false
+        var microphoneEnabled = false
+        var systemAudioEnabled = false
         /// Physical keys only; the caller keeps its target and region untouched.
         mutating func handleCaptureTypeKey(_ code: Int) -> TypeKeyResult {
             guard picker != .hint, !isCountingDown, code == kVK_ANSI_R || code == kVK_ANSI_S else { return .unhandled }
@@ -135,6 +141,12 @@ final class PickerHUD {
                                             rowHeight: HUD.textSize(band.name, font: style.nameFont).height, scale: scale, style: style)))
                                     }
                                     for (index, key) in band.keys.enumerated() {
+                                        if AudioControl.allCases.contains(where: { $0.title == key.action }) {
+                                            let slot = CALayer()
+                                            slot.frame.size = CGSize(width: 32, height: 32)
+                                            items.append((key, slot))
+                                            continue
+                                        }
                                         let displayed = key.action == "Copy" ? HUDKey("↵", action: "Copy to clipboard") : key
                                         let entry = HUD.makeEntry(displayed, scale: scale, style: style)
                                         if band.active != nil && index < 4 { HUD.pad(entry, style: style) }
@@ -154,9 +166,12 @@ final class PickerHUD {
     }
 
     private func bandContent(_ content: Content) -> [Band] {
-        [Band(name: content.captureName, keys: content.navigation),
-         Band(keys: (content.typeSwitch.map { [$0] } ?? []) + content.actions,
-              actionsStart: content.typeSwitch == nil ? 0 : 1)]
+        let audio = content.captureType == .video && content.typeSwitch != nil
+            ? AudioControl.allCases.map { HUDKey(action: $0.title) } : []
+        let prefix = (content.typeSwitch.map { [$0] } ?? []) +
+            (audio.isEmpty ? [] : [HUDKey("o", action: "Options")]) + audio
+        return [Band(name: content.captureName, keys: content.navigation),
+         Band(keys: prefix + content.actions, actionsStart: prefix.count)]
     }
 
     func show(_ content: Content, status message: String, size: CGSize, visible: Bool) {
@@ -293,6 +308,25 @@ final class PickerHUD {
 
     func contains(_ point: CGPoint) -> Bool {
         !root.isHidden && root.frame.contains(point)
+    }
+
+    func optionsContains(_ point: CGPoint) -> Bool {
+        guard contains(point) else { return false }
+        let local = CGPoint(x: point.x - root.frame.minX, y: point.y - root.frame.minY)
+        return visibleItems.contains { item in
+            item.key?.action == "Options" && item.layer.bounds.contains(item.layer.convert(local, from: root))
+        }
+    }
+
+    var optionsFrame: CGRect? {
+        controlFrame(named: "Options")
+    }
+
+    func audioFrame(_ control: AudioControl) -> CGRect? { controlFrame(named: control.title) }
+
+    private func controlFrame(named name: String) -> CGRect? {
+        guard !root.isHidden, let item = visibleItems.first(where: { $0.key?.action == name }) else { return nil }
+        return root.convert(item.layer.bounds, from: item.layer).offsetBy(dx: root.frame.minX, dy: root.frame.minY)
     }
 
     /// Keep output actions on the right, wrapping whole entries on compact displays.

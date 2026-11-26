@@ -13,6 +13,7 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
     private let skipButton = NSButton(title: "Skip for now", target: nil, action: nil)
     private let guideButton = NSButton(title: "Continue to guide", target: nil, action: nil)
     private let permissions = CapturePermission.allCases.map { PermissionControlView(permission: $0) }
+    private let microphone: MicrophonePermissionView
     private let shortcutLabel = NSTextField(wrappingLabelWithString: "")
     private let heading = NSTextField(labelWithString: "Welcome to Vishot")
     private let subtitle = NSTextField(labelWithString: "Choose access for your screenshots.")
@@ -26,10 +27,12 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
     private var captureHandoffObserver: NSObjectProtocol?
 
     init(flow: SetupFlow, shortcut: @escaping () -> String, capture: @escaping () -> Void,
-         cliInstallation: CLIInstallation = CLIInstallation(), skillPasteboard: NSPasteboard = .general) {
+         cliInstallation: CLIInstallation = CLIInstallation(), skillPasteboard: NSPasteboard = .general,
+         microphonePermission: MicrophonePermission = .shared) {
         self.flow = flow
         self.shortcut = shortcut
         self.capture = capture
+        microphone = MicrophonePermissionView(permission: microphonePermission)
         cliControls = CLIInstallationView(installation: cliInstallation)
         skillInstallation = SkillInstallationView(pasteboard: skillPasteboard)
         let window = SetupPanel(contentRect: NSRect(x: 0, y: 0, width: 580, height: 510),
@@ -66,6 +69,8 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
             checklist.addArrangedSubview(permission)
             permission.onLayoutChange = { [weak self] in self?.refresh() }
         }
+        checklist.addArrangedSubview(microphone)
+        microphone.onLayoutChange = { [weak self] in self?.window?.contentView?.layoutSubtreeIfNeeded() }
         continueButton.target = self
         continueButton.action = #selector(continueSetup)
         continueButton.keyEquivalent = "\r"
@@ -214,6 +219,8 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
     func refresh() {
         flow.refresh()
         permissions.forEach { $0.refresh() }
+        if flow.step != .permissions { microphone.cancelPendingRequest() }
+        else { microphone.refresh() }
         cliControls.refresh()
         continueButton.isEnabled = flow.screenRecordingAllowed
         continueButton.title = flow.accessibilityAllowed ? "Continue" : "Continue without Accessibility"
@@ -221,7 +228,7 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
         switch flow.step {
         case .permissions:
             heading.stringValue = "Welcome to Vishot"
-            subtitle.stringValue = "Choose access for your screenshots."
+            subtitle.stringValue = "Choose required and optional capture access."
             stepLabel.stringValue = "STEP 1 OF 3 · PERMISSIONS"
         case .commandLine:
             heading.stringValue = "CLI for coding agents"
@@ -269,6 +276,7 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func finish() {
+        microphone.cancelPendingRequest()
         if flow.needsSetup { flow.finish(dismiss: { self.window?.orderOut(nil) }) }
         else { window?.orderOut(nil) }
         refresh()
@@ -278,6 +286,7 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
         guard captureHandoffObserver == nil else { return }
         flow.refresh()
         guard flow.isShowingGuide, flow.screenRecordingAllowed else { refresh(); return }
+        microphone.cancelPendingRequest()
         if flow.needsSetup { flow.finish(dismiss: {}) }
         refresh()
         window?.orderOut(nil)
@@ -300,6 +309,7 @@ final class SetupWindow: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        microphone.cancelPendingRequest()
         flow.dismissIncomplete { NSApp.terminate(nil) }
     }
 }

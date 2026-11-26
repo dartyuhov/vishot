@@ -46,7 +46,7 @@ with open(path, 'wb') as f:
 PY
 # Sign nested code first with the same stable identity, then seal the app.
 codesign --force --options runtime --sign "$IDENTITY" "$APP/Contents/Helpers/vishot"
-codesign --force --options runtime --sign "$IDENTITY" "$APP"
+codesign --force --options runtime --entitlements Resources/Vishot.entitlements --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
 echo "Built $APP"
 

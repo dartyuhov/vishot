@@ -5,6 +5,310 @@ import VishotConfiguration
 @testable import Vishot
 
 final class PickerHUDTests: XCTestCase {
+    func testScreenshotHasNoOptionsControlOrPopup() throws {
+        let fixture = ControllerFixture()
+        defer { fixture.remove() }
+        fixture.controller.microphoneDevices = { XCTFail("Screenshot must not enumerate microphones"); return [] }
+        fixture.controller.handle(try key(kVK_ANSI_O))
+        fixture.controller.openCaptureOptions()
+        XCTAssertFalse(fixture.controller.captureOptions.isOpen)
+        for visual in VisualStyle.allCases {
+            let theme = ThemeCatalog.resolve(style: visual, colorScheme: .dark)
+            let hud = PickerHUD(scale: 2, style: theme.hud)
+            hud.prepare(theme: theme)
+            hud.show(.init(), status: "", size: CGSize(width: 1200, height: 900), visible: true)
+            XCTAssertNil(hud.optionsFrame)
+            hud.show(.init(captureType: .video), status: "", size: CGSize(width: 1200, height: 900), visible: true)
+            XCTAssertNotNil(hud.optionsFrame)
+        }
+    }
+
+    func testPixelMicrophoneDrawsCapsuleAboveStand() throws {
+        _ = NSApplication.shared
+        let button = AudioHUDButton(control: .microphone)
+        button.frame = CGRect(x: 0, y: 0, width: 32, height: 32)
+        button.configure(theme: ThemeCatalog.pixel, enabled: true)
+        let bitmap = try XCTUnwrap(button.bitmapImageRepForCachingDisplay(in: button.bounds))
+        button.cacheDisplay(in: button.bounds, to: bitmap)
+        let scale = CGFloat(bitmap.pixelsWide) / 32
+        func brightness(_ x: CGFloat, _ y: CGFloat) throws -> CGFloat {
+            let color = try XCTUnwrap(bitmap.colorAt(x: Int(x * scale), y: Int(y * scale))?.usingColorSpace(.deviceRGB))
+            return color.redComponent + color.greenComponent + color.blueComponent
+        }
+        // Bitmap rows run from the visual top. The capsule is broad near its
+        // top; the stand has only a central stem at the matching bottom row.
+        XCTAssertGreaterThan(try brightness(12, 8), try brightness(12, 24))
+    }
+
+    func testWindowMouseDispatchDismissesOptionsBeforeHUDButtonTrackingAndConsumesRelease() throws {
+        _ = NSApplication.shared
+        for visual in VisualStyle.allCases {
+            let fixture = ControllerFixture()
+            defer { fixture.remove() }
+            let controller = fixture.controller
+            controller.microphoneDevices = { [] }
+            controller.handle(try key(kVK_ANSI_R))
+            let before = try XCTUnwrap(controller.selection)
+            var preferenceWrites = 0
+            controller.onMicrophoneOptions = { _, _ in preferenceWrites += 1 }
+            controller.onSystemAudioOptions = { _ in preferenceWrites += 1 }
+            let theme = ThemeCatalog.resolve(style: visual, colorScheme: .dark)
+            let panel = OverlayPanel(screen: try XCTUnwrap(NSScreen.main), theme: theme)
+            defer { panel.close() }
+            panel.prepare(theme: theme)
+            panel.showHUD(controller.pickerHUDContent, status: "", visible: true)
+            panel.orderFrontRegardless()
+            panel.makeKey()
+            panel.onAudioToggle = { controller.toggleAudio($0) }
+            panel.onOptions = { controller.openCaptureOptions() }
+            panel.onDismissOptions = { controller.captureOptions.outsideClick() }
+            panel.onMouseUp = { controller.mouseUp(at: $0) }
+            let buttons = try XCTUnwrap(panel.contentView).subviews.compactMap { $0 as? NSButton }
+            for name in ["Microphone", "System audio", "Capture options"] {
+                let button = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == name })
+                controller.openCaptureOptions()
+                XCTAssertTrue(controller.captureOptions.isOpen)
+                try dispatchOutsideClick(on: button, in: panel)
+                XCTAssertFalse(controller.captureOptions.isOpen, "\(name) must dismiss the popup")
+                XCTAssertFalse(controller.microphoneEnabled)
+                XCTAssertFalse(controller.systemAudioEnabled)
+                XCTAssertEqual(preferenceWrites, 0, "Outside clicks must not write remembered preferences")
+                XCTAssertFalse(controller.pickerHUDContent.isCountingDown)
+                assertTarget(controller.selection, matches: before)
+            }
+            // Normal activation is covered separately without an event-tracking loop.
+            let mic = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Microphone" })
+            mic.performClick(nil)
+            XCTAssertTrue(controller.microphoneEnabled)
+            XCTAssertEqual(preferenceWrites, 1)
+            let options = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Capture options" })
+            options.performClick(nil)
+            XCTAssertTrue(controller.captureOptions.isOpen)
+            try dispatchOutsideClick(on: options, in: panel)
+            XCTAssertFalse(controller.captureOptions.isOpen, "Second Options click dismisses without reopening")
+        }
+    }
+
+    private func dispatchOutsideClick(on button: NSButton, in panel: OverlayPanel) throws {
+        // The outside gesture must be intercepted before native tracking. Fail at
+        // that boundary rather than letting a regression block in AppKit's loop.
+        let originalCell = button.cell
+        button.cell = TrackingForbiddenCell(textCell: "")
+        defer { button.cell = originalCell }
+        let point = button.convert(CGPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
+        let time = ProcessInfo.processInfo.systemUptime
+        let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point,
+            modifierFlags: [], timestamp: time, windowNumber: panel.windowNumber, context: nil,
+            eventNumber: 1, clickCount: 1, pressure: 1))
+        let up = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp, location: point,
+            modifierFlags: [], timestamp: time + 0.1, windowNumber: panel.windowNumber, context: nil,
+            eventNumber: 2, clickCount: 1, pressure: 0))
+        panel.sendEvent(down)
+        panel.sendEvent(up)
+    }
+
+    private final class TrackingForbiddenCell: NSButtonCell {
+        override func trackMouse(with event: NSEvent, in cellFrame: NSRect,
+                                 of controlView: NSView, untilMouseUp flag: Bool) -> Bool {
+            XCTFail("Popup outside click reached native button tracking")
+            return false
+        }
+    }
+
+    func testAudioHitboxesFollowOptionsWithoutOverlapAcrossThemesScalesAndCompactDisplays() throws {
+        for visual in VisualStyle.allCases {
+            let theme = ThemeCatalog.resolve(style: visual, colorScheme: .dark)
+            for scale: CGFloat in [1, 2] {
+                let hud = PickerHUD(scale: scale, style: theme.hud)
+                hud.prepare(theme: theme)
+                for width: CGFloat in [320, 800, 2000] {
+                    var content = PickerHUD.Content(captureType: .video)
+                    hud.show(content, status: "", size: CGSize(width: width, height: 900), visible: true)
+                    let options = try XCTUnwrap(hud.optionsFrame)
+                    let mic = try XCTUnwrap(hud.audioFrame(.microphone))
+                    let system = try XCTUnwrap(hud.audioFrame(.system))
+                    for frame in [mic, system] {
+                        XCTAssertTrue(hud.root.frame.contains(frame))
+                        XCTAssertGreaterThanOrEqual(frame.width, 32)
+                        XCTAssertGreaterThanOrEqual(frame.height, 32)
+                        XCTAssertFalse(frame.intersects(options))
+                    }
+                    XCTAssertFalse(mic.intersects(system))
+                    XCTAssertTrue(mic.minY < options.minY || mic.minX > options.maxX)
+                    XCTAssertTrue(system.minY < mic.minY || system.minX > mic.maxX)
+                    content.microphoneEnabled = true
+                    content.systemAudioEnabled = true
+                    hud.show(content, status: "", size: CGSize(width: width, height: 900), visible: true)
+                    XCTAssertEqual(hud.audioFrame(.microphone), mic)
+                    XCTAssertEqual(hud.audioFrame(.system), system)
+                    for state in [PickerHUD.Content(), .init(captureType: .video, picker: .hint), .init(captureType: .video, isCountingDown: true)] {
+                        hud.show(state, status: "", size: CGSize(width: width, height: 900), visible: true)
+                        XCTAssertNil(hud.audioFrame(.microphone))
+                        XCTAssertNil(hud.audioFrame(.system))
+                    }
+                }
+            }
+        }
+    }
+
+    func testNativeAudioControlsToggleSharedRememberedOptionsWithoutSelectingOrCapturing() throws {
+        _ = NSApplication.shared
+        let fixture = ControllerFixture()
+        defer { fixture.remove() }
+        let controller = fixture.controller
+        controller.microphoneDevices = { XCTFail("HUD toggles must not discover audio devices"); return [] }
+        let before = try XCTUnwrap(controller.selection)
+        let panel = OverlayPanel(screen: try XCTUnwrap(NSScreen.main), theme: ThemeCatalog.pixel)
+        defer { panel.close() }
+        panel.prepare(theme: ThemeCatalog.pixel)
+        panel.onAudioToggle = { controller.toggleAudio($0) }
+        let url = fixture.root.appendingPathComponent("settings.toml")
+        try FileManager.default.createDirectory(at: fixture.root, withIntermediateDirectories: true)
+        let store = SettingsStore(url: url, register: { _ in NSObject() })
+        store.start(watching: false)
+        controller.onMicrophoneOptions = { store.update(microphoneEnabled: $0, microphoneDevice: $1) }
+        controller.onSystemAudioOptions = { store.update(systemAudioEnabled: $0) }
+        panel.showHUD(controller.pickerHUDContent, status: "", visible: true)
+        let controls = panel.contentView!.subviews.compactMap { $0 as? NSButton }
+        let mic = try XCTUnwrap(controls.first { $0.accessibilityLabel() == "Microphone" })
+        let system = try XCTUnwrap(controls.first { $0.accessibilityLabel() == "System audio" })
+        XCTAssertTrue(mic.isHidden)
+        XCTAssertTrue(system.isHidden)
+        controller.handle(try key(kVK_ANSI_R))
+        panel.showHUD(controller.pickerHUDContent, status: "", visible: true)
+        XCTAssertFalse(mic.isHidden)
+        XCTAssertFalse(system.isHidden)
+        XCTAssertEqual(mic.accessibilityValue() as? String, "Off")
+        XCTAssertEqual(mic.toolTip, "Microphone off — click to turn on")
+        mic.performClick(nil)
+        controller.mouseUp(at: before.anchor)
+        XCTAssertTrue(controller.microphoneEnabled)
+        XCTAssertFalse(controller.systemAudioEnabled)
+        system.performClick(nil)
+        controller.mouseUp(at: before.anchor)
+        XCTAssertTrue(controller.systemAudioEnabled)
+        panel.showHUD(controller.pickerHUDContent, status: "", visible: true)
+        XCTAssertEqual(system.accessibilityValue() as? String, "On")
+        XCTAssertEqual(system.toolTip, "System audio on — click to turn off")
+        XCTAssertTrue(try AppSettings.read(url: url).microphoneEnabled)
+        XCTAssertTrue(try AppSettings.read(url: url).systemAudioEnabled)
+        XCTAssertFalse(controller.pickerHUDContent.isCountingDown)
+        assertTarget(controller.selection, matches: before)
+        controller.microphoneDevices = { [] }
+        controller.openCaptureOptions()
+        XCTAssertEqual(controller.captureOptions.visibleRows.first { $0.id == "microphone" }?.value, "On")
+        controller.captureOptions.activate(0)
+        controller.captureOptions.close()
+        panel.showHUD(controller.pickerHUDContent, status: "", visible: true)
+        XCTAssertEqual(mic.accessibilityValue() as? String, "Off")
+        XCTAssertFalse(try AppSettings.read(url: url).microphoneEnabled)
+        XCTAssertTrue(try AppSettings.read(url: url).systemAudioEnabled)
+    }
+
+    func testSystemPopupCapturesWholeMacAcrossTargetsAndNeverDropsMic() throws {
+        let fixture = ControllerFixture()
+        defer { fixture.remove() }
+        let controller = fixture.controller
+        controller.microphoneDevices = { [] }
+        controller.handle(try key(kVK_ANSI_R))
+        controller.openCaptureOptions()
+        let popup = controller.captureOptions
+        popup.activate(try XCTUnwrap(popup.visibleRows.firstIndex { $0.id == "system-audio" }))
+        XCTAssertTrue(controller.systemAudioEnabled)
+        XCTAssertEqual(controller.audioSummary, "All system audio")
+        XCTAssertEqual(try XCTUnwrap(popup.visibleRows.first { $0.id == "system-audio" }).title, "System audio")
+        let explanation = "Captures audio from all apps and notifications, regardless of the picture target (excluding Vishot)."
+        XCTAssertTrue(popup.visibleRows.contains { $0.title == explanation })
+        XCTAssertEqual(popup.visibleRows.filter { !$0.choices.isEmpty }.count, 1, "Only the microphone device needs a chooser")
+        popup.activate(0)
+        XCTAssertTrue(controller.microphoneEnabled)
+        XCTAssertTrue(controller.systemAudioEnabled)
+        XCTAssertEqual(controller.audioSummary, "System + Mic")
+        XCTAssertFalse(popup.visibleRows.contains { $0.id == "mix-unavailable" || $0.title.localizedCaseInsensitiveContains("combined audio unavailable") })
+        popup.close()
+        controller.handle(try key(kVK_ANSI_G, flags: .shift))
+        XCTAssertEqual(controller.audioSummary, "System + Mic")
+        controller.openCaptureOptions()
+        XCTAssertTrue(popup.visibleRows.contains { $0.title == explanation })
+        popup.close()
+        controller.handle(try key(kVK_ANSI_V))
+        XCTAssertEqual(controller.audioSummary, "System + Mic")
+        controller.openCaptureOptions()
+        XCTAssertTrue(popup.visibleRows.contains { $0.title == explanation })
+    }
+    func testNativeOptionsControlDismissesExistingPopupWithoutLosingTarget() throws {
+        _ = NSApplication.shared
+        let fixture = ControllerFixture()
+        defer { fixture.remove() }
+        let controller = fixture.controller
+        controller.handle(try key(kVK_ANSI_R))
+        let before = try XCTUnwrap(controller.selection)
+        let panel = OverlayPanel(screen: try XCTUnwrap(NSScreen.main), theme: ThemeCatalog.pixel)
+        defer { panel.close() }
+        panel.prepare(theme: ThemeCatalog.pixel)
+        panel.showHUD(controller.pickerHUDContent, status: "", visible: true)
+        panel.onOptions = { controller.openCaptureOptions() }
+        let button = try XCTUnwrap(panel.contentView?.subviews.compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == "Capture options" })
+        button.performClick(nil)
+        XCTAssertTrue(controller.captureOptions.isOpen)
+        button.performClick(nil)
+        XCTAssertFalse(controller.captureOptions.isOpen, "Native HUD invocation dismisses rather than replaces an open popup")
+        controller.mouseUp(at: before.anchor)
+        XCTAssertFalse(controller.pickerHUDContent.isCountingDown)
+        assertTarget(controller.selection, matches: before)
+    }
+
+    func testKeyboardOptionsDismissalImmediatelyRestoresPointerNavigation() throws {
+        for code in [kVK_Escape, kVK_ANSI_O] {
+            let fixture = ControllerFixture()
+            defer { fixture.remove() }
+            let controller = fixture.controller
+            controller.handle(try key(kVK_ANSI_R))
+            controller.handle(try key(kVK_ANSI_V))
+            controller.handle(try key(kVK_ANSI_V)) // Anchor a region at the cursor.
+            controller.handle(try key(kVK_ANSI_O))
+            controller.handle(try key(code))
+            XCTAssertFalse(controller.captureOptions.isOpen)
+            controller.mouseMoved(to: CGPoint(x: 500, y: 450))
+            XCTAssertEqual(controller.selection?.frame.maxX, 500)
+            XCTAssertEqual(controller.selection?.frame.maxY, 450)
+        }
+    }
+    func testPhysicalOptionsInputPreservesTargetAndOutsideGestureIsConsumed() throws {
+        let fixture = ControllerFixture()
+        defer { fixture.remove() }
+        let controller = fixture.controller
+        controller.microphoneDevices = { [.init(id: "usb", name: "USB")] }
+        let before = try XCTUnwrap(controller.selection)
+        controller.handle(try key(kVK_ANSI_R))
+        controller.handle(try key(kVK_ANSI_O, characters: "я"))
+        XCTAssertTrue(controller.captureOptions.isOpen)
+        controller.handle(try key(kVK_Space))
+        XCTAssertTrue(controller.microphoneEnabled)
+        controller.handle(try key(kVK_ANSI_J))
+        controller.handle(try key(kVK_ANSI_J))
+        controller.handle(try key(kVK_Return))
+        XCTAssertTrue(controller.captureOptions.isChoosing)
+        controller.handle(try key(kVK_Escape))
+        XCTAssertTrue(controller.captureOptions.isOpen)
+        controller.mouseDown(at: before.anchor)
+        controller.mouseUp(at: before.anchor)
+        XCTAssertFalse(controller.captureOptions.isOpen)
+        XCTAssertFalse(controller.pickerHUDContent.isCountingDown)
+        assertTarget(controller.selection, matches: before)
+        controller.handle(try key(kVK_ANSI_O))
+        controller.handle(try key(kVK_ANSI_O))
+        XCTAssertFalse(controller.captureOptions.isOpen)
+        controller.handle(try key(kVK_ANSI_S))
+        controller.handle(try key(kVK_ANSI_O))
+        XCTAssertFalse(controller.captureOptions.isOpen, "Screenshot has no options popup")
+        controller.captureOptions.close()
+        controller.handle(try key(kVK_ANSI_F))
+        controller.handle(try key(kVK_ANSI_O))
+        XCTAssertFalse(controller.captureOptions.isOpen)
+        XCTAssertEqual(controller.pickerHUDContent.picker, .element)
+    }
     func testCaptureTypeSwitchKeepsHUDWidthAndPickerColumnsStable() throws {
         for visual in VisualStyle.allCases {
             let theme = ThemeCatalog.resolve(style: visual, colorScheme: .dark)
@@ -109,7 +413,7 @@ final class PickerHUDTests: XCTestCase {
             let video = VideoSession(sessions: fixture.sessions, history: fixture.history,
                 prepare: { _, _ in try await withCheckedThrowingContinuation { pending = $0 } },
                 resolve: { selection in try selection.resolve(displays: [VideoDisplay(id: 1, frame: fixture.display.frame, scale: 1)], windowFrame: nil) },
-                countdown: CaptureCountdown(schedule: clock.schedule), presentsControls: false, reportError: { _, _ in })
+                countdown: CaptureCountdown(schedule: clock.schedule), presentsControls: false, reportError: { _, _ in }, screenCaptureGranted: { true })
             controller.video = video
             // Same callback wiring as AppDelegate; keep the actual VideoSession.
             video.onCountdown = { [weak controller] in controller?.videoCountdownStatus($0) }

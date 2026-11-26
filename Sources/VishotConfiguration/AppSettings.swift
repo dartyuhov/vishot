@@ -21,6 +21,10 @@ public struct AppSettings: Equatable {
     public var shortcut: CaptureShortcut
     public var historyRetention: HistoryRetention
     public var historyShortcut: CaptureShortcut?
+    public var microphoneEnabled = false
+    /// Empty means System default; any other value is an opaque stable input UID.
+    public var microphoneDevice = ""
+    public var systemAudioEnabled = false
 
     public init(appearance: AppearancePreference = .system, style: VisualStyle = .pixel,
                 watermark: Bool = true, shortcut: CaptureShortcut = .defaults,
@@ -118,6 +122,24 @@ public struct AppSettings: Equatable {
             }
         }
         settings.shortcut = try settings.shortcut.validated()
+        if let value = table["video"] {
+            guard let video = value.table else { throw SettingsError(message: "video must be a TOML table.") }
+            if let value = video["system_audio"] {
+                guard let enabled = value.bool else { throw SettingsError(message: "video.system_audio must be true or false.") }
+                settings.systemAudioEnabled = enabled
+            }
+            if let value = video["microphone"] {
+                guard let enabled = value.bool else { throw SettingsError(message: "video.microphone must be true or false.") }
+                settings.microphoneEnabled = enabled
+            }
+            if let value = video["microphone_device"] {
+                guard let uid = value.string, uid.utf8.count <= 1024,
+                      !uid.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+                    throw SettingsError(message: "video.microphone_device must be a stable input UID or an empty string for System default.")
+                }
+                settings.microphoneDevice = uid
+            }
+        }
         if let value = table["history"] {
             guard let history = value.table else { throw SettingsError(message: "history must be a TOML table.") }
             if let value = history["retention_days"] {

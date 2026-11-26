@@ -62,7 +62,7 @@ final class CaptureCountdown {
         completion(outcome)
     }
 
-    func run(present: @escaping (CountdownFrame?) -> Void) async -> Outcome {
+    @MainActor func run(present: @escaping (CountdownFrame?) -> Void) async -> Outcome {
         await withCheckedContinuation { continuation in
             start(present: present) { continuation.resume(returning: $0) }
         }

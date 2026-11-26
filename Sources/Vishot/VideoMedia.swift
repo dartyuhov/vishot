@@ -120,6 +120,9 @@ struct VideoTimeline {
         // A bounded 1ms early allowance never accumulates into a faster cadence.
         let interval = CMTime(value: 1, timescale: 30)
         let tolerance = CMTime(value: 1, timescale: 1000)
+        // A late sample can satisfy the old deadline and leave the next one
+        // only a 60Hz update away. Never spend that deadline debt as a burst.
+        if let last, host - last + tolerance < interval { return nil }
         if let nextFrame {
             guard host + tolerance >= nextFrame else { return nil }
             // Rebase after a gap; idle time cannot bank catch-up frames.
@@ -143,6 +146,8 @@ final class VideoIntake {
     private var pending = 0
     private var cutoff: CMTime?
     var isClosed: Bool { lock.lock(); defer { lock.unlock() }; return cutoff != nil }
+    var endpoint: CMTime? { lock.lock(); defer { lock.unlock() }; return cutoff }
+    var pendingCount: Int { lock.lock(); defer { lock.unlock() }; return pending }
     func admit(_ time: CMTime) -> Bool {
         lock.lock(); defer { lock.unlock() }
         guard cutoff == nil, pending < 3, time.isNumeric else { return false }

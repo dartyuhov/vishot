@@ -22,5 +22,7 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Vishot uses your microphone to include narration in screen recordings when you enable microphone audio.</string>
 </dict>
 </plist>
